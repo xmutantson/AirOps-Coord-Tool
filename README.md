@@ -2,7 +2,7 @@
 
 A lightweight Flask-based web application for tracking inbound and outbound aircraft operations during emergency events or deployments. 
 
-This was optimized for DART usage (https://clallamdart.com/ is one team, this page contains a good explaantion of what DART is)
+This was optimized for DART usage. https://clallamdart.com/ is one team, this page contains a good explaantion of what DART is.
 
 Originally designed to run on a Raspberry Pi or minimal server, now fully dockerized and portable.
 
