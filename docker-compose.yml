@@ -1,0 +1,10 @@
+version: '3.8'
+
+services:
+  aircraft_ops_tool:
+    image: ghcr.io/xmutantson/aircraft_ops_tool:latest
+    ports:
+      - "8080:5150"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

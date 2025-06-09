@@ -1,0 +1,334 @@
+/* ===============================================================
+   Variables & Reset
+   =============================================================== */
+:root {
+  --brand: #000;             /* black text and accents     */
+  --accent: #F29F05;         /* warm amber for buttons     */
+  --bg: #F5F7FA;             /* light background           */
+  --fg: #333;                /* main text                  */
+  --muted: #666;             /* secondary text             */
+  --table-head-bg: #2A2A2A;  /* table header background    */
+  --table-head-fg: #F5F5F5;  /* table header text          */
+  --radius: 6px;             /* border-radius everywhere   */
+  --spacing: 1rem;           /* global spacing unit        */
+  --font-sans: 'Segoe UI', Roboto, Arial, sans-serif;
+  --highlight-yellow: #FFF9C4;  /* pale yellow */
+}
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+body {
+  font-family: var(--font-sans);
+  background: var(--bg);
+  color: var(--fg);
+  line-height: 1.6;
+}
+
+/* ===============================================================
+   Sticky Header & Nav
+   =============================================================== */
+header {
+  background: var(--table-head-bg);
+  padding: 0.5rem 0;
+  position: fixed;
+  top:      0;
+  left:     0;
+  right:    0;
+  z-index: 1000;
+}
+main.container {
+  /* leave room for header + footer */
+  padding-top:    3.5rem;  /* adjust to your header’s height */
+  padding-bottom: 2.5rem;  /* adjust to your footer’s height */
+}
+.main-nav {
+  display: flex;
+  justify-content: center;
+  gap: 0.75rem;
+  font-size: 0.9rem;
+}
+.main-nav a {
+  color: var(--table-head-fg);
+  text-decoration: none;
+  padding: 0.4em 0.8em;
+  border-radius: var(--radius);
+  transition: background 0.15s, color 0.15s;
+}
+.main-nav a:hover,
+.main-nav a.active {
+  background: rgba(255,255,255,0.1);
+  color: #fff;
+}
+
+/* ===============================================================
+   Layout Container
+   =============================================================== */
+.container {
+  max-width: 1200px;
+  margin: var(--spacing) auto;
+  padding: 0 var(--spacing);
+}
+
+/* ===============================================================
+   Tables
+   =============================================================== */
+table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: white;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-top: var(--spacing);
+}
+th, td {
+  padding: 0.75em 1em;
+  text-align: left;
+  border-bottom: 1px solid #eee;
+}
+thead {
+  background: var(--table-head-bg);
+  color: var(--table-head-fg);
+}
+tbody tr:hover {
+  background: rgba(30,144,255,0.05);
+}
+/* turn the “yellow-border” marker class into a full-row highlight */
+tr.yellow-border {
+  background-color: var(--highlight-yellow);
+}
+/* pale green highlight for feedback rows */
+tr.green-border {
+  background-color: #81C784;
+}
+
+/* ===============================================================
+   Forms & Buttons (global)
+   =============================================================== */
+input, select, textarea, button {
+  font-family: var(--font-sans);
+  font-size: 1em;
+  margin-top: 0.5em;
+}
+input, select, textarea {
+  width: 100%;
+  padding: 0.6em;
+  border: 1px solid #ccc;
+  border-radius: var(--radius);
+  transition: border-color 0.2s, background 0.2s;
+}
+input:focus, select:focus, textarea:focus {
+  border-color: var(--accent);
+  background: #fff;
+  outline: none;
+}
+button {
+  background: var(--accent);
+  border: none;
+  color: var(--brand);
+  padding: 0.6em 1.2em;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.2s;
+}
+button:hover {
+  background: #d68504;
+}
+
+/* ===============================================================
+   
+Sticky Footer
+   =============================================================== */
+footer {
+  text-align: center;
+  padding: calc(var(--spacing) / 2);
+  color: var(--muted);
+  font-size: 0.9em;
+  margin-top: var(--spacing);
+  position: fixed;
+  bottom: 0;
+  left:   0;
+  right:  0;
+  background: var(--bg);
+  z-index: 1000;
+}
+
+/* ===============================================================
+   Ramp Boss Form Styles
+   =============================================================== */
+.ramp-form-container {
+  max-width: 600px;
+  margin: 2rem auto;
+  padding: 0 1rem;
+}
+.ramp-form-container form {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 1.5rem;
+  row-gap: 1rem;
+  align-items: center;
+}
+.ramp-form-container form > label {
+  grid-column: 1;
+  justify-self: end;
+  margin: 0;
+  font-weight: bold;
+}
+.ramp-form-container form > 
+  input,
+.ramp-form-container form > 
+  select,
+.ramp-form-container form > 
+  textarea,
+.ramp-form-container form > 
+  .radio-toggle,
+.ramp-form-container form > 
+  .lookup-row,
+.ramp-form-container form > 
+  button[type="button"] {
+  grid-column: 2;
+  width: 100%;
+}
+.ramp-form-container button[type="submit"] {
+  grid-column: 1 / -1;
+  justify-self: stretch;
+  margin-top: 1rem;
+}
+/* ensure Cargo Weight field can fit at least 6 digits */
+.ramp-form-container .lookup-row input[name="cargo_weight"] {
+  min-width: 12ch;
+}
+
+/* Radio-toggle */
+.ramp-form-container .radio-toggle {
+  display: inline-flex;
+  border: 1px solid #888;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.ramp-form-container .radio-toggle input {
+  display: none;
+}
+.ramp-form-container .radio-toggle label {
+  padding: 6px 12px;
+  cursor: pointer;
+  background: #f0f0f0;
+  color: #333;
+  user-select: none;
+  transition: background 0.15s, color 0.15s;
+}
+.ramp-form-container .radio-toggle label:hover {
+  background: #e0e0e0;
+}
+.ramp-form-container .radio-toggle input:checked + label {
+  background: var(--table-head-bg);
+  color: var(--table-head-fg);
+}
+
+/* Lookup row helper */
+.ramp-form-container .lookup-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+.ramp-form-container .lookup-row input {
+  flex: 1;
+}
+.ramp-form-container .lookup-row button {
+  flex: 0 0 auto;
+}
+
+/* Error highlight */
+.ramp-form-container .error {
+  border: 2px solid #d33;
+}
+/* unwrap the ETA wrapper so its children slot into the grid */
+.ramp-form-container form > #eta_block {
+  display: contents;
+}
+
+/* target the ETA label inside that now-hidden wrapper */
+/* force it into the label-column (right justified + bold) */
+.ramp-form-container form > #eta_block > label {
+  justify-self: end;
+  font-weight: bold;
+  text-align: right;
+}
+
+/* ===============================================================
+   Preferences Form Styles
+   =============================================================== */
+.container.preferences {
+  max-width: 600px;
+  margin: 2rem auto;
+  padding: 0 1rem;
+}
+.container.preferences form {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 1.5rem;
+  row-gap: 1rem;
+  align-items: center;
+}
+.container.preferences form > label {
+  grid-column: 1;
+  justify-self: end;
+  margin: 0;
+  font-weight: bold;
+}
+.container.preferences form > input,
+.container.preferences form > select,
+.container.preferences form > textarea,
+.container.preferences form > button[type="button"] {
+  grid-column: 2;
+  width: 100%;
+}
+/* Export/Import/Reset buttons row still center under controls */
+.container.preferences form + form button,
+.container.preferences form + form + form button {
+  justify-self: start;
+  margin-top: 0.5rem;
+}
+/* full-bleed tables on Dashboard & Radio, even when wrapped in a div */
+body.dashboard .container #dashboard-table > table,
+body.radio     .container #radio-table     > table {
+  position: relative;
+  left: 50%;
+  width: 100vw;
+  margin-left: -50vw;
+  margin-right: -50vw;
+  padding: 0 1rem;   /* optional gutter */
+  box-sizing: border-box;
+}
+
+/* full-width “break-out” for feedback tables */
+.full-bleed {
+  position: relative;
+  left:  50%;
+  right: 50%;
+  width: 100vw;
+  margin-left:  -50vw;
+  margin-right: -50vw;
+  box-sizing: border-box;
+  padding: 0 1rem; /* optional gutter */
+}
+
+/* green highlight for successful entries */
+.green-border {
+  background-color: #C8E6C9;  /* light green */
+}
+/* break out the radio incoming-feedback table */
+#incoming-feedback,
+#rb-feedback-container > table {
+  position: relative;
+  left:  50%;
+  right: 50%;
+  width: 100vw;
+  margin-left:  -50vw;
+  margin-right: -50vw;
+  box-sizing: border-box;
+  padding: 0 1rem; /* optional gutter */
+}

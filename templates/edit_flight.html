@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Edit Flight {{ flight['id'] }}</title>
+</head>
+<body class="edit_flight">
+
+{% extends "base.html" %}
+{% block title %}Edit Flight {{ flight['id'] }} – Aircraft Ops{% endblock %}
+
+{% block content %}
+  <button onclick="location.href='{{ url_for('dashboard') }}'" style="margin-bottom:1rem">
+    ← Back to Dashboard
+  </button>
+
+  <h2>Edit Flight {{ flight['tail_number'] }}</h2>
+
+  <div class="ramp-form-container">
+    <form method="POST">
+      {% for field,label in [
+            ('direction','Direction'),
+            ('pilot_name','Pilot Name'),
+            ('pax_count','PAX #'),
+            ('airfield_takeoff','Origin'),
+            ('takeoff_time','Departure HHMM'),
+            ('airfield_landing','Destination'),
+            ('eta','ETA / ARR HHMM'),
+            ('cargo_type','Cargo Type'),
+            ('cargo_weight','Cargo Weight'),
+            ('remarks','Remarks')
+        ] %}
+        {# Direction switch uses radio-toggle, others are straight inputs #}
+        {% if field=='direction' %}
+          <label>{{ label }}</label>
+          <div class="radio-toggle">
+            <input type="radio" id="dir-out-{{flight.id}}" name="direction" value="outbound"
+                   {% if flight['direction']=='outbound' %}checked{% endif %}>
+            <label for="dir-out-{{flight.id}}">Outbound</label>
+            <input type="radio" id="dir-in-{{flight.id}}" name="direction" value="inbound"
+                   {% if flight['direction']=='inbound' %}checked{% endif %}>
+            <label for="dir-in-{{flight.id}}">Inbound</label>
+          </div>
+        {% else %}
+          <label for="{{ field }}">{{ label }}</label>
+          <input id="{{ field }}" name="{{ field }}"
+                 {% if field=='cargo_weight' %}style="min-width:12ch"{% endif %}
+                 value="{{ flight.get(field,'') }}">
+        {% endif %}
+      {% endfor %}
+
+      <label><input type="checkbox" name="complete"
+             {% if flight.get('complete') %}checked{% endif %}> Mark Complete</label>
+
+      <button type="submit">Save Changes</button>
+    </form>
+
+    <form method="POST"
+          action="{{ url_for('delete_flight', fid=flight['id']) }}"
+          onsubmit="return confirm('Really delete flight {{flight.id}}?');"
+          style="margin-top:1rem">
+      <button type="submit" class="danger">Delete Flight</button>
+    </form>
+  </div>
+{% endblock %}
+</body>
+</html>

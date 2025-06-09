@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>{% block title %}{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="{{ active }}">
+
+  <header>
+    <nav class="main-nav">
+      <a href="{{ url_for('dashboard') }}"       class="{% if active=='dashboard' %}active{% endif %}">Dashboard</a>
+      <a href="{{ url_for('radio') }}"           class="{% if active=='radio' %}active{% endif %}">Radio</a>
+      <a href="{{ url_for('ramp_boss') }}"       class="{% if active=='ramp_boss' %}active{% endif %}">Ramp Boss</a>
+      <a href="{{ url_for('preferences') }}"     class="{% if active=='preferences' %}active{% endif %}">Preferences</a>
+    </nav>
+  </header>
+
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer>
+    © {{ current_year }} Kameron Markham (KG7VSN)
+  </footer>
+
+</body>
+</html>

@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Radio Operator Out-box</title>
+</head>
+<body>
+
+{% extends "base.html" %}
+{% block title %}Radio Operator Out-box – Aircraft Ops{% endblock %}
+
+{% block content %}
+  <h2>Radio Operator Out-box</h2>
+
+  <div id="radio-table">
+    {# initial table render #}
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th class="status">Status</th>
+          <th>Tail #</th>
+          <th>Pilot</th>
+          <th>PAX #</th>
+          <th>Origin</th>
+          <th>Departure<br>HHMM</th>
+          <th>Destination</th>
+          <th>ETA* / Arr HHMM</th>
+          <th>Cargo Type</th>
+          <th>Cargo Wt</th>
+          <th>Remarks</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in flights %}
+        <tr class="clickable {% if f.sent==0 %}yellow-border{% endif %}"
+            onclick="location.href='{{ url_for('radio_detail', fid=f.id) }}'">
+          <td>{{ f.id }}</td>
+          <td class="status">{% if f.complete==1 %}🛬{% else %}✈️{% endif %}</td>
+          <td>{{ f.tail_number or 'TBD' }}</td>
+          <td>{{ f.pilot_name or 'TBD' }}</td>
+          <td>{{ f.pax_count or 'TBD' }}</td>
+          <td>{{ f.origin_view or 'TBD' }}</td>
+          <td>{{ f.takeoff_time or 'TBD' }}</td>
+          <td>{{ f.dest_view or 'TBD' }}</td>
+          <td>{{ f.eta_view }}</td>
+          <td>{{ f.cargo_type or 'TBD' }}</td>
+          <td>{{ f.cargo_view }}</td>
+          <td>{{ f.remarks or '' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <p style="margin-top:12px; font-size:0.9em;">
+    <small>* ETA (open outbound)</small>
+  </p>
+
+  <h3>Log Incoming Winlink Message</h3>
+  <form method="POST" id="incoming-form">
+    <label>Subject Line:</label>
+    <input type="text"
+           name="subject"
+           style="width:100%;"
+           placeholder="Paste subject here…"
+           required>
+
+    <label style="margin-top:12px">Message Body:</label>
+    <textarea name="body"
+              style="width:100%;"
+              placeholder="Paste full message body here…"
+              required></textarea>
+
+    <button type="submit" style="margin-top:8px">Submit Incoming</button>
+  </form>
+
+  <!-- just-injected feedback row will appear here -->
+  <div id="incoming-feedback-container"></div>
+
+  <script>
+    // 1) Every 30 s, re-fetch only the radio table (won't touch the form)
+    setInterval(async () => {
+      const resp = await fetch('{{ url_for("radio_table_partial") }}');
+      if (!resp.ok) return;
+      document.getElementById('radio-table').innerHTML = await resp.text();
+    }, 30000);
+
+    // 2) Incoming-form handling (preserves your existing logic)
+    const incomingForm = document.getElementById('incoming-form');
+    const feedbackBox  = document.getElementById('incoming-feedback-container');
+
+    incomingForm.addEventListener('submit', async e => {
+      e.preventDefault();
+      const formData = new FormData(incomingForm);
+
+      // POST to server
+      const resp = await fetch(window.location.href, {
+        method: incomingForm.method,
+        body: formData
+      });
+      if (!resp.ok) return alert('Failed to log incoming.');
+
+      // locally parse subject/body
+      const subj = formData.get('subject').trim();
+      const sm   = /Air Ops:\s*([^|]+?)\s*\|\s*([^|]+?)\s*to\s*([^|]+?)\s*\|\s*took off\s*(\d{1,2}:?\d{2})\s*\|\s*ETA\s*(\d{1,2}:?\d{2})/i.exec(subj);
+      const bare = /Air Ops:\s*(\S+)\s*\|\s*landed\b/i.exec(subj);
+      const body = formData.get('body');
+      const ct   = /Cargo Type\(s\).*?\.{3,}\s*(.*)/i.exec(body);
+      const cw   = /Total Weight of the Cargo.*?\.{3,}\s*(.*)/i.exec(body);
+
+      const p = {
+        tail_number:      sm?.[1]?.trim() || bare?.[1] || 'TBD',
+        airfield_takeoff: sm?.[2]?.trim() || 'TBD',
+        airfield_landing: sm?.[3]?.trim() || 'TBD',
+        takeoff_time:     sm?.[4]?.trim().padStart(4,'0') || 'TBD',
+        eta:              sm?.[5]?.trim().padStart(4,'0') || 'TBD',
+        cargo_type:       ct?.[1]?.trim() || 'TBD',
+        cargo_weight:     cw?.[1]?.trim() || 'TBD'
+      };
+
+      // lookup existing flight for id/pilot/pax/remarks
+      let id    = '—', pilot = '—', pax = '—', rem = '';
+      try {
+        const lookup = await fetch(`/api/lookup_tail/${encodeURIComponent(p.tail_number)}`);
+        if (lookup.ok) {
+          const fjson = await lookup.json();
+          id    = fjson.id           ?? id;
+          pilot = fjson.pilot_name   || pilot;
+          pax   = fjson.pax_count    || pax;
+          rem   = fjson.remarks      || '';
+        }
+      } catch {}
+
+      // detect landing vs in-flight
+      const isLanding     = /\blanded\b/i.test(subj);
+      const landMatch     = /\blanded\s*(\d{3,4})/i.exec(subj);
+      const displayStatus = isLanding ? '🛬 Landed' : '✈️ In-Flight';
+      const displayEta    = isLanding
+                           ? (landMatch?.[1].padStart(4,'0') || 'TBD')
+                           : (p.eta + '*');
+
+      // inject the feedback table
+      feedbackBox.innerHTML = `
+        <table id="incoming-feedback">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th class="status">Status</th>
+              <th>Tail #</th>
+              <th>Pilot</th>
+              <th>PAX #</th>
+              <th>Origin</th>
+              <th>Departure<br>HHMM</th>
+              <th>Destination</th>
+              <th>ETA* / Arr HHMM</th>
+              <th>Cargo Type</th>
+              <th>Cargo Wt</th>
+              <th>Remarks</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="green-border">
+              <td>${id}</td>
+              <td class="status">${displayStatus}</td>
+              <td>${p.tail_number}</td>
+              <td>${pilot}</td>
+              <td>${pax}</td>
+              <td>${p.airfield_takeoff}</td>
+              <td>${p.takeoff_time}</td>
+              <td>${p.airfield_landing}</td>
+              <td>${displayEta}</td>
+              <td>${p.cargo_type}</td>
+              <td>${p.cargo_weight}</td>
+              <td>${rem}</td>
+            </tr>
+          </tbody>
+        </table>
+      `;
+      const fb = document.getElementById('incoming-feedback');
+      setTimeout(() => fb.classList.add('show'),   20);
+      setTimeout(() => fb.classList.remove('show'),30200);
+      setTimeout(() => feedbackBox.innerHTML = '',  30600);
+
+      incomingForm.reset();
+    });
+  </script>
+
+{% endblock %}
+</body>
+</html>

@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Ramp Boss Intake</title>
+</head>
+<body class="ramp_boss">
+
+
+{% extends "base.html" %}
+{% block title %}Ramp Boss Intake – Aircraft Ops{% endblock %}
+
+{% block content %}
+  <h2>Ramp Boss – New Flight</h2>
+
+  <div class="ramp-form-container">
+    <form id="rb-form">
+      <!-- direction -->
+      <label for="dir-out">Aircraft Direction*</label>
+      <div class="radio-toggle">
+        <input type="radio" id="dir-out" name="direction" value="outbound" required checked>
+        <label for="dir-out">Outbound</label>
+        <input type="radio" id="dir-in"  name="direction" value="inbound">
+        <label for="dir-in">Inbound</label>
+      </div>
+
+      <!-- tail number + lookup -->
+      <label for="tail">Tail Number*</label>
+      <div class="lookup-row">
+        <input id="tail" name="tail_number" required>
+        <button type="button" id="lookup">Lookup Tail</button>
+      </div>
+
+      <label for="pilot">Pilot Name</label>
+      <input id="pilot" name="pilot_name">
+
+      <label for="pax">PAX #</label>
+      <input id="pax" name="pax_count" placeholder="e.g. 3">
+
+      <label for="origin">Origin* (ALW or KALW)</label>
+      <input id="origin" name="origin" required>
+
+      <label id="time-label" for="dep_time">Departure Time (HHMM)*</label>
+      <input id="dep_time" name="dep_time" required>
+
+      <label for="destination">Destination* (BFI or KBFI)</label>
+      <input id="destination" name="destination" required>
+
+      <div id="eta_block">
+        <label for="eta_input">ETA (HHMM)</label>
+        <input id="eta_input" name="eta">
+      </div>
+
+      <label for="cargo_type">Cargo Type</label>
+      <input id="cargo_type" name="cargo_type">
+
+      <label for="cargo_weight">Cargo Weight</label>
+      <div class="lookup-row">
+        <input id="cargo_weight" name="cargo_weight" placeholder="e.g. 300" style="flex:1;min-width:12ch">
+        <select name="weight_unit">
+          <option value="lbs" selected>lbs</option>
+          <option value="kg">kg</option>
+        </select>
+      </div>
+
+      <label for="remarks">Remarks</label>
+      <input id="remarks" name="remarks">
+
+      <button type="submit">Save Flight</button>
+    </form>
+
+    <div id="rb-feedback-container"></div>
+  </div>
+
+  <script>
+    /* Ramp-Boss AJAX & UI logic */
+    const form         = document.getElementById('rb-form');
+    const feedbackBox  = document.getElementById('rb-feedback-container');
+    const defaultOrigin= "{{ default_origin }}";
+
+    const depField     = document.getElementById('dep_time');
+    const originField  = document.getElementById('origin');
+    const destField    = document.getElementById('destination');
+    const dirRadios    = [...document.querySelectorAll('input[name="direction"]')];
+    const labelTime    = document.getElementById('time-label');
+    const etaBlock     = document.getElementById('eta_block');
+    const etaInput     = document.getElementById('eta_input');
+
+    function applyDirUI() {
+      const dir = dirRadios.find(r=>r.checked).value;
+      const now = new Date(),
+            hh  = now.getHours().toString().padStart(2,'0'),
+            mm  = now.getMinutes().toString().padStart(2,'0');
+
+      if (dir === 'outbound') {
+        labelTime.textContent = 'Departure Time (HHMM)*';
+        depField.value        = hh + mm;
+        etaBlock.style.display= '';
+        etaInput.value        = '';
+        if (!originField.value && defaultOrigin) originField.value = defaultOrigin;
+        destField.value = '';
+      } else {
+        labelTime.textContent = 'Arrival Time (HHMM)*';
+        depField.value        = hh + mm;
+        etaBlock.style.display= 'none';
+        etaInput.value        = '';
+        if (!destField.value && defaultOrigin) destField.value = defaultOrigin;
+        originField.value = '';
+      }
+    }
+    dirRadios.forEach(r=>r.addEventListener('change',applyDirUI));
+    applyDirUI();
+
+    // Tail-lookup
+    document.getElementById('lookup').addEventListener('click', async ()=>{
+      const tail = form.tail_number.value.trim().toUpperCase();
+      if (!tail) return alert('Enter tail number first!');
+      const res = await fetch(`/api/lookup_tail/${encodeURIComponent(tail)}`);
+      if (!res.ok)    return alert('Lookup failed');
+      const d = await res.json();
+      if (!Object.keys(d).length) return alert('No prior record for that tail.');
+      if (d.airfield_takeoff) originField.value = d.airfield_takeoff;
+      if (d.airfield_landing) destField.value   = d.airfield_landing;
+      if (d.pilot_name)       form.pilot_name.value   = d.pilot_name;
+      if (d.pax_count)        form.pax_count.value    = d.pax_count;
+      if (d.cargo_type)       form.cargo_type.value   = d.cargo_type;
+      if (d.cargo_weight)     form.cargo_weight.value = d.cargo_weight;
+    });
+
+    // AJAX submit + green full-bleed feedback
+    form.addEventListener('submit', async e=>{
+      e.preventDefault();
+      const t = depField.value.trim();
+      if (t.length<3||t.length>4||isNaN(t)) {
+        depField.classList.add('error');
+        return alert('Time must be 3–4 digits');
+      }
+      depField.classList.remove('error');
+
+      const resp = await fetch(window.location.href, {
+        method: 'POST',
+        headers: { 'X-Requested-With':'XMLHttpRequest' },
+        body:    new FormData(form)
+      });
+      if (!resp.ok) return alert('Save failed');
+      const f = await resp.json();
+
+      feedbackBox.innerHTML = `
+        <table class="full-bleed">
+          <thead>
+            <tr>
+              <th>#</th><th>Dir</th><th>Tail #</th><th>Pilot</th><th>PAX #</th>
+              <th>Origin</th><th>${f.direction==='outbound'?'Dep':'Arr'} HHMM</th>
+              <th>Dest</th><th>ETA</th><th>Cargo Type</th><th>Cargo Wt</th><th>Remarks</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="green-border">
+              <td>${f.id}</td>
+              <td>${f.direction}</td>
+              <td>${f.tail_number}</td>
+              <td>${f.pilot_name||'TBD'}</td>
+              <td>${f.pax_count||'TBD'}</td>
+              <td>${f.airfield_takeoff||'TBD'}</td>
+              <td>${f.takeoff_time||''}</td>
+              <td>${f.airfield_landing||'TBD'}</td>
+              <td>${f.eta||'TBD'}</td>
+              <td>${f.cargo_type||'TBD'}</td>
+              <td>${f.cargo_weight||'TBD'}</td>
+              <td>${f.remarks||''}</td>
+            </tr>
+          </tbody>
+        </table>
+      `;
+
+      form.reset();
+      applyDirUI();
+    });
+  </script>
+
+{% endblock %}
+</body>
+</html>

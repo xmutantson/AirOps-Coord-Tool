@@ -1,0 +1,38 @@
+{# partials/_radio_table.html #}
+<table>
+  <thead>
+    <tr>
+      <th>#</th>
+      <th class="status">Status</th>
+      <th>Tail #</th>
+      <th>Pilot</th>
+      <th>PAX #</th>
+      <th>Origin</th>
+      <th>Departure<br>HHMM</th>
+      <th>Destination</th>
+      <th>ETA* / Arr HHMM</th>
+      <th>Cargo Type</th>
+      <th>Cargo Wt</th>
+      <th>Remarks</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for f in flights %}
+    <tr class="clickable {% if f.sent==0 %}yellow-border{% endif %}"
+        onclick="location.href='{{ url_for('radio_detail', fid=f.id) }}'">
+      <td>{{ f.id }}</td>
+      <td class="status">{% if f.complete %}🛬{% else %}✈️{% endif %}</td>
+      <td>{{ f.tail_number or 'TBD' }}</td>
+      <td>{{ f.pilot_name or 'TBD' }}</td>
+      <td>{{ f.pax_count or 'TBD' }}</td>
+      <td>{{ f.origin_view or 'TBD' }}</td>
+      <td>{{ f.takeoff_time or 'TBD' }}</td>
+      <td>{{ f.dest_view or 'TBD' }}</td>
+      <td>{{ f.eta_view }}</td>
+      <td>{{ f.cargo_type or 'TBD' }}</td>
+      <td>{{ f.cargo_view }}</td>
+      <td>{{ f.remarks or '' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>

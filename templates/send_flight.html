@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Send Flight {{ flight['id'] }}</title>
+  <style>
+    body{font-family:sans-serif;margin:20px}
+    button{margin-right:8px;padding:6px 12px}
+    pre{background:#f4f4f4;padding:10px;border:1px solid #ccc;white-space:pre-wrap}
+    .copy-feedback {
+      margin-left: 8px;
+      color: green;
+      font-weight: bold;
+      opacity: 0;
+      transition: opacity 0.2s ease-in-out;
+    }
+    .copy-feedback.visible {
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+
+{% extends "base.html" %}
+{% block title %}Send Flight {{ flight['id'] }} – Aircraft Ops{% endblock %}
+{% block content %}
+  <div style="margin-bottom:20px">
+    <button onclick="location.href='{{ url_for('radio') }}'">↩️ Out-box</button>
+    <button onclick="location.href='{{ url_for('dashboard') }}'">Dashboard</button>
+  </div>
+
+<h2>Flight {{ flight['tail_number'] }} (ID {{ flight['id'] }})</h2>
+
+<h3>Subject</h3>
+<pre id="subj">{{ subject_text }}</pre>
+<button type="button" onclick="copyText('subj','feedback-subj')">
+  Copy Subject
+</button>
+<span id="feedback-subj" class="copy-feedback"></span>
+
+<h3>Body</h3>
+<pre id="body">{{ body_text }}</pre>
+<button type="button" onclick="copyText('body','feedback-body')">
+  Copy Body
+</button>
+<span id="feedback-body" class="copy-feedback"></span>
+
+<form method="POST" action="{{ url_for('mark_sent', fid=flight['id']) }}">
+  <button type="submit" onclick="return confirm('Mark this message as SENT?')">
+    ✅ Mark Sent
+  </button>
+</form>
+
+<script>
+function copyText(srcId, feedbackId) {
+  const txt = document.getElementById(srcId).innerText;
+  const fb  = document.getElementById(feedbackId);
+
+  const showCheck = () => {
+    fb.textContent = '✔ Copied!';
+    fb.classList.add('visible');
+    setTimeout(() => fb.classList.remove('visible'), 2000);
+  };
+
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(txt)
+      .then(showCheck)
+      .catch(() => fallbackCopy(txt, showCheck));
+  } else {
+    fallbackCopy(txt, showCheck);
+  }
+}
+
+function fallbackCopy(text, cb) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); }
+  catch (err) { /* swallow */ }
+  document.body.removeChild(ta);
+  cb();
+}
+</script>
+
+{% endblock %}
+</body>
+</html>

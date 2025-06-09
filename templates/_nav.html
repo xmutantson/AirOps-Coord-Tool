@@ -1,0 +1,47 @@
+<!-- templates/_nav.html -->
+<div class="top-nav">
+  <button class="{% if active=='dashboard'  %}active{% endif %}"
+          onclick="location.href='{{ url_for('dashboard')    }}'">
+    Dashboard
+  </button>
+  <button class="{% if active=='radio'      %}active{% endif %}"
+          onclick="location.href='{{ url_for('radio')        }}'">
+    Radio
+  </button>
+  <button class="{% if active=='preferences'%}active{% endif %}"
+          onclick="location.href='{{ url_for('preferences')  }}'">
+    Preferences
+  </button>
+  <button class="{% if active=='ramp_boss'  %}active{% endif %}"
+          onclick="location.href='{{ url_for('ramp_boss')    }}'">
+    Ramp Boss
+  </button>
+
+{% if show_debug=='yes' %}
+  {% set msgs = get_flashed_messages() %}
+  {% if msgs %}
+    <div class="debug-flashes" style="margin-top:12px;padding:8px;border:1px solid #c33;background:#fee;color:#800;">
+      {% for m in msgs %}
+        <div>{{ m }}</div>
+      {% endfor %}
+    </div>
+  {% endif %}
+{% endif %}
+
+</div>
+<style>
+  .top-nav { margin-bottom:20px }
+  .top-nav button {
+    margin-right:6px;
+    padding:6px 12px;
+    background:transparent;
+    border:1px solid #888;
+    border-radius:4px;
+    cursor:pointer;
+  }
+  .top-nav button.active {
+    background:#444;
+    color:#fff;
+    border-color:#222;
+  }
+</style>

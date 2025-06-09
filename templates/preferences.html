@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Preferences</title>
+  <style>
+    body{font-family:sans-serif;margin:20px}
+    h3{margin-top:32px}
+    label{display:block;margin-top:12px;font-weight:bold}
+    select,input{padding:6px;font-size:14px;width:200px}
+    button{margin-right:6px;padding:6px 12px}
+    .danger{background:#c33;color:#fff}
+    .flashes { list-style:none; padding:0; margin:12px 0; }
+    .flashes li {
+      margin: 4px 0;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-weight: bold;
+    }
+    .flashes li.error   { background: #ffe5e5; border: 1px solid #cc3333; color: #800; }
+    .flashes li.import  { background: #e5ffe5; border: 1px solid #33aa33; color: #060; }
+    .flashes li.db_reset{ background: #fff0e5; border: 1px solid #ff8800; color: #663300; }
+    @keyframes fadeRed {
+      from { background-color: #ff9999; } to { background-color: white; }
+    }
+    input.fade-red { animation: fadeRed 4s ease-in-out; }
+  </style>
+</head>
+<body>
+
+{% extends "base.html" %}
+{% block title %}Preferences – Aircraft Ops{% endblock %}
+{% block content %}
+
+<h2>Preferences</h2>
+
+<div class="container preferences">
+  <form method="POST">
+    <!-- ── Ops / Display prefs (DB + cookie) ───────────────── -->
+    <h3>Display / Operational Prefs</h3>
+
+    <label>Default Origin (ICAO or FAA):</label>
+    <input
+      id="default-origin"
+      name="default_origin"
+      value="{{ default_origin }}"
+      class="{% if 'db_reset' in get_flashed_messages(with_categories=true)|map(attribute=0) %}fade-red{% endif %}"
+      onchange="this.form.submit()">
+
+    <label>Airport Code Format:</label>
+    <select name="code_format" onchange="this.form.submit()">
+      <option value="icao4" {% if current_code=='icao4' %}selected{% endif %}>
+        ICAO (4-letter)
+      </option>
+      <option value="iata" {% if current_code=='iata' %}selected{% endif %}>
+        IATA (3-letter)
+      </option>
+      <option value="local" {% if current_code=='local' %}selected{% endif %}>
+        FAA/GPS/Local
+      </option>
+    </select>
+
+    <label style="margin-top:18px">Mass Unit:</label>
+    <select name="mass_unit" onchange="this.form.submit()">
+      <option value="lbs" {% if current_mass=='lbs' %}selected{% endif %}>lbs</option>
+      <option value="kg"  {% if current_mass=='kg'  %}selected{% endif %}>kg</option>
+    </select>
+
+    <!-- ── Radio-operator prefs (cookie only) ───────────────── -->
+    <h3>Radio Operator Prefs (per-browser)</h3>
+
+    <label>Your Callsign:</label>
+    <input
+      id="cs"
+      name="operator_call"
+      value="{{ operator_call }}"
+      oninput="this.value=this.value.toUpperCase()">
+    <script>
+      document.getElementById('cs')
+              .addEventListener('blur', ()=>document.forms[0].submit());
+    </script>
+
+    <label style="margin-top:18px">Include test line in outgoing Winlink?</label>
+    <select name="include_test" onchange="this.form.submit()">
+      <option value="yes" {% if include_test=='yes' %}selected{% endif %}>Yes</option>
+      <option value="no"  {% if include_test=='no'  %}selected{% endif %}>No</option>
+    </select>
+
+    <label style="margin-top:18px">Only show unsent Ramp-Boss flights?</label>
+    <select name="radio_show_unsent_only" onchange="this.form.submit()">
+      <option value="no"  {% if current_radio_unsent=='no'  %}selected{% endif %}>No, show all</option>
+      <option value="yes" {% if current_radio_unsent=='yes' %}selected{% endif %}>Yes, only unsent</option>
+    </select>
+
+    <!-- ── Developer Options ─────────────────────────────────── -->
+    <h3>Developer Options</h3>
+    <label>Show flash debug logs:</label>
+    <select name="show_debug_logs" onchange="this.form.submit()">
+      <option value="no"  {% if current_debug=='no'  %}selected{% endif %}>No</option>
+      <option value="yes" {% if current_debug=='yes' %}selected{% endif %}>Yes</option>
+    </select>
+  </form>
+
+  <!-- ── Incoming‐Messages CSV & DB reset ─────────────────────────── -->
+  <h3 style="margin-top:32px">Incoming-Messages CSV</h3>
+  <form style="display:inline" action="{{ url_for('export_csv') }}" method="GET">
+    <button>Export CSV</button>
+  </form>
+  <form style="display:inline" action="{{ url_for('import_csv') }}" method="POST" enctype="multipart/form-data">
+    <input type="file" name="csv_file" accept=".csv" required>
+    <button>Import CSV</button>
+  </form>
+  <form method="POST"
+        action="{{ url_for('reset_db') }}"
+        onsubmit="return confirm('This wipes ALL flight data – continue?')">
+    <button class="danger" style="margin-top:40px">Reset Database</button>
+  </form>
+</div>
+
+{% endblock %}
+</body>
+</html>

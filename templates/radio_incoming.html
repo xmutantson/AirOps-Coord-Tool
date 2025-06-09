@@ -1,0 +1,34 @@
+<!-- templates/radio_incoming.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Log Incoming Winlink Message</title>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: sans-serif; margin: 20px; }
+        button { margin-right: 8px; padding: 6px 12px; font-size: 14px; cursor: pointer; }
+        textarea { width: 100%; height: 120px; margin-bottom: 10px; font-family: monospace; }
+        label { font-weight: bold; display: block; margin-top: 12px; }
+    </style>
+</head>
+<body>
+
+{% extends "base.html" %}
+{% block title %}Log Incoming Winlink Message – Aircraft Ops{% endblock %}
+{% block content %}
+
+<h1>Log Incoming Winlink Message</h1>
+
+<form method="POST">
+    <label for="subject">Subject Line:</label>
+    <textarea name="subject" id="subject" required></textarea>
+
+    <label for="body">Message Body:</label>
+    <textarea name="body" id="body" required></textarea>
+
+    <button type="submit">Submit</button>
+</form>
+
+{% endblock %}
+</body>
+</html>
