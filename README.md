@@ -1,10 +1,8 @@
 # ✈️ Aircraft Ops Coordination Tool
 
-A lightweight Flask-based web application for tracking inbound and outbound aircraft operations during emergency events or deployments. 
+A lightweight Flask-based web application for tracking inbound and outbound aircraft operations during emergency events or deployments.
 
-This was optimized for DART usage. https://clallamdart.com/ is one team, this page contains a good explaantion of what DART is.
-
-Originally designed to run on a Raspberry Pi or minimal server, now fully dockerized and portable.
+Optimized for DART usage (see [https://clallamdart.com/](https://clallamdart.com/) for background). Originally designed to run on a Raspberry Pi or minimal server, it’s now fully dockerized and portable.
 
 ---
 
@@ -17,12 +15,14 @@ Originally designed to run on a Raspberry Pi or minimal server, now fully docker
 * **Persistent History**: Tracks changes via flight history log
 * **CSV Import/Export**: Syncs with external flight manifests or logs
 * **ICAO/IATA Lookup**: Integrated database of US airfields
+* **Security Hardened**: CSRF, XSS protection, rate limiting, upload limits, secret management
+* **Production WSGI**: Uses Waitress for robust serving
 
 ---
 
 ## 🐳 Run via Docker
 
-### 🚀 Quick Start (`docker-compose`)
+### 🚀 Quick Start with `docker-compose`
 
 Create a directory and save this `docker-compose.yml`:
 
@@ -33,10 +33,14 @@ services:
   aircraft_ops_tool:
     image: ghcr.io/xmutantson/aircraft_ops_tool:latest
     ports:
-      - "8080:5150"  # Visit http://localhost:8080
+      - "8086:5150"  # Visit http://localhost:8086
     volumes:
-      - ./data:/app/data  # Stores aircraft_ops.db here
+      - ./data:/app/data       # Persists the SQLite database
+      - flask_secret:/run/secrets  # Auto-generated Flask secret
     restart: unless-stopped
+
+volumes:
+  flask_secret:
 ```
 
 Then run:
@@ -50,8 +54,9 @@ docker compose up -d
 ```bash
 docker run -d \
   --name aircraft_ops_tool \
-  -p 8080:5150 \
+  -p 8086:5150 \
   -v $(pwd)/data:/app/data \
+  --mount type=volume,source=flask_secret,target=/run/secrets \
   ghcr.io/xmutantson/aircraft_ops_tool:latest
 ```
 
@@ -59,13 +64,13 @@ docker run -d \
 
 ## 📂 Persistent Storage
 
-The app writes its database to `/app/data/aircraft_ops.db`. Both examples above mount a host directory (`./data`) so that data is **retained across container restarts**.
+The app writes its database to `/app/data/aircraft_ops.db`. Both examples above mount a host directory (`./data`) so that data is **retained across container restarts**. The `flask_secret` volume auto-generates a stable secret on first run and persists it across `docker compose down && up`.
 
 ---
 
 ## 🧪 Development
 
-To run it manually (outside Docker):
+To run it manually outside Docker:
 
 ```bash
 python3 -m venv venv
@@ -74,7 +79,7 @@ pip install -r requirements.txt
 python app.py
 ```
 
-Default port: `http://localhost:5150`
+Then visit: `http://localhost:5150`
 
 ---
 
@@ -84,13 +89,7 @@ MIT License
 
 ---
 
-## Todo
-
-Security?
-
-
----
-
 ## 👤 Maintainer
 
 Built and maintained by [@xmutantson](https://github.com/xmutantson)
+
