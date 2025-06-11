@@ -46,6 +46,7 @@
 <span id="feedback-body" class="copy-feedback"></span>
 
 <form method="POST" action="{{ url_for('mark_sent', fid=flight['id']) }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <button type="submit" onclick="return confirm('Mark this message as SENT?')">
     ✅ Mark Sent
   </button>

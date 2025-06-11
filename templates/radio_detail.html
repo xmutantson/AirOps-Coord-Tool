@@ -25,7 +25,8 @@
 <button onclick="copyText('body')">Copy Body</button>
 
 <form method="POST" action="{{ url_for('mark_sent', flight_id=flight['id']) }}">
-    <button type="submit" onclick="return confirm('Mark as sent?')">Mark as Sent</button>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <button type="submit" onclick="return confirm('Mark as sent?')">Mark as Sent</button>
 </form>
 
 <script>

@@ -1,0 +1,6 @@
+venv/
+data/
+docker-compose.yml
+flask_secret.txt
+LICENSE
+README.md

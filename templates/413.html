@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Upload Too Large</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      text-align: center;
+      margin: 2rem;
+    }
+    .ascii-art {
+      font-family: monospace;
+      white-space: pre;
+      width: 22ch;
+      height: 12em;
+      overflow: auto;
+      margin: 1rem auto;
+      background: #f4f4f4;
+      padding: 1rem;
+      border: 1px solid #ccc;
+    }
+    h1 { margin-bottom: 0.5rem; }
+    p  { margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+  <h1>Upload Too Large</h1>
+  <div class="ascii-art">
+░░░░░░░░░░░░░░░░░░░░
+░▄▀▄▀▀▀▀▄▀▄░░░░░░░░░
+░█░░░░░░░░▀▄░░░░░░▄░
+█░░▀░░▀░░░░░▀▄▄░░█░█
+█░▄░█▀░▄░░░░░░░▀▀░░█
+█░░▀▀▀▀░░░░░░░░░░░░█
+█░░░░░░░░░░░░░░░░░░█
+█░░░░░░░░░░░░░░░░░░█
+░█░░▄▄░░▄▄▄▄░░▄▄░░█░
+░█░▄▀█░▄▀░░█░▄▀█░▄▀░
+░░▀░░░▀░░░░░▀░░░▀░░░
+  </div>
+  <p>
+    The file you tried to upload exceeds <strong>{{ max_mb }} MB</strong>.<br>
+    The dog has absorbed it.
+  </p>
+</body>
+</html>

@@ -5,17 +5,59 @@
 #  • flight_history JSON-safe; CSV export; DB auto-migrate
 #  • LAN-only Flask server on :5150
 
+import flask
+from markupsafe import Markup as _Markup
+
+# restore flask.Markup so Flask-WTF’s recaptcha.widgets can import it
+flask.Markup = _Markup
+
+# restore werkzeug.urls.url_encode for Flask-WTF recaptcha.widgets
+import werkzeug.urls
+werkzeug.urls.url_encode = werkzeug.urls.urlencode
+
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
 from flask import (
     Flask, render_template, request, redirect,
     url_for, send_file, flash, make_response,
     jsonify
 )
+
+from flask_wtf import CSRFProtect
+from markupsafe import escape
+
 import sqlite3, csv, io, re, os, json
 from datetime import datetime
 
+# 1) Try Docker secret file (if you mount one)
+secret = None
+secret_file = '/run/secrets/flask_secret'
+if os.path.exists(secret_file):
+    with open(secret_file) as f:
+        secret = f.read().strip()
+
+# 2) Fallback to env var
+if not secret:
+    secret = os.environ.get('FLASK_SECRET')
+
+# 3) Final fallback for local dev only
+if not secret:
+    secret = 'dev-secret-please-change'
+
 app = Flask(__name__)
-app.secret_key = "sdf42saa"
+app.config['DEBUG'] = False
+app.config['ENV']   = 'production'
+app.secret_key = secret
+CSRFProtect(app)
 DB_FILE = os.path.join(os.path.dirname(__file__), "data", "aircraft_ops.db")
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024
+limiter = Limiter(
+    app,
+    key_func=get_remote_address,
+    default_limits=["1000 per hour"]
+)
 
 @app.context_processor
 def inject_debug_pref():
@@ -225,31 +267,37 @@ def parse_winlink(subj:str, body:str):
           airfield_landing = m['to'].strip().upper(),
           takeoff_time     = hhmm_norm(m['tko']),
           eta              = hhmm_norm(m['eta']) )
-    if (m:=cargo_type_re.search(body)):   d['cargo_type']=m['ct'].strip()
-    if (m:=cargo_weight_re.search(body)): d['cargo_weight']=parse_weight_str(m['wgt'])
+    if (m:=cargo_type_re.search(body)):
+        d['cargo_type']=escape(m['ct'].strip())
+
+    if (m:=cargo_weight_re.search(body)):
+        d['cargo_weight']=escape(parse_weight_str(m['wgt']))
+
     if (m := remarks_re.search(body)):
         # collapse any run of whitespace (including newlines) into a single space
         remark_text = m.group('rm')
         remark_text = re.sub(r'\s+', ' ', remark_text).strip()
-        d['remarks'] = remark_text
+        d['remarks'] = escape(remark_text)
 
     return d
 
 def parse_csv_record(rec: dict) -> dict:
-    tail   = rec['Tail#'].strip().upper()
-    frm    = rec['From'].strip().upper()
-    to_    = rec['To'].strip().upper()
-    tko    = hhmm_norm(rec['T/O'].replace(':','').strip())
-    eta    = hhmm_norm(rec['ETA'].replace(':','').strip())
-    cargo  = rec['Cargo'].strip()
-    weight = parse_weight_str(rec['Weight'].strip())
-    remarks= rec.get('Remarks','').strip()
+    # normalize & escape every field coming from the CSV
+    tail       = escape(rec['Tail#'].strip().upper())
+    frm        = escape(rec['From'].strip().upper())
+    to_        = escape(rec['To'].strip().upper())
+    tko        = hhmm_norm(rec['T/O'].replace(':','').strip())
+    eta        = hhmm_norm(rec['ETA'].replace(':','').strip())
+    cargo      = escape(rec['Cargo'].strip())
+    weight_raw = rec['Weight'].strip()
+    weight     = escape(parse_weight_str(weight_raw))
+    remarks    = escape(rec.get('Remarks','').strip())
 
     return {
-      'sender'           : rec['Sender'].strip(),
-      'subject'          : rec['Subject'].strip(),
-      'body'             : rec['Body'].strip(),
-      'timestamp'        : rec['Timestamp'].strip(),
+      'sender'           : escape(rec['Sender'].strip()),
+      'subject'          : escape(rec['Subject'].strip()),
+      'body'             : escape(rec['Body'].strip()),
+      'timestamp'        : escape(rec['Timestamp'].strip()),
       'tail_number'      : tail,
       'airfield_takeoff' : frm,
       'airfield_landing' : to_,
@@ -319,15 +367,26 @@ def apply_incoming_parsed(p: dict) -> tuple[int,str]:
               INSERT INTO flight_history(flight_id,timestamp,data)
               VALUES (?,?,?)
             """, (f['id'], datetime.utcnow().isoformat(), json.dumps(before)))
-            c.execute("""
-              UPDATE flights
-                 SET airfield_takeoff=?, airfield_landing=?,
-                     eta=?, cargo_type=?, cargo_weight=?, remarks=?
-               WHERE id=?
+
+            # Only overwrite when parser actually returned non-empty values:
+            c.execute(f"""
+              UPDATE flights SET
+                airfield_takeoff = ?,
+                airfield_landing = ?,
+                eta              = ?,
+                cargo_type       = CASE WHEN ?<>'' THEN ? ELSE cargo_type   END,
+                cargo_weight     = CASE WHEN ?<>'' THEN ? ELSE cargo_weight END,
+                remarks          = CASE WHEN ?<>'' THEN ? ELSE remarks      END
+              WHERE id=?
             """, (
-              p['airfield_takeoff'], p['airfield_landing'],
-              p['eta'], p['cargo_type'], p['cargo_weight'],
-              p.get('remarks',''),
+              p['airfield_takeoff'],    # always overwrite these three
+              p['airfield_landing'],
+              p['eta'],
+
+              p['cargo_type'], p['cargo_type'],
+              p['cargo_weight'], p['cargo_weight'],
+              p.get('remarks',''), p.get('remarks',''),
+
               f['id']
             ))
             return f['id'], 'updated'
@@ -347,22 +406,42 @@ def apply_incoming_parsed(p: dict) -> tuple[int,str]:
 
 @app.after_request
 def refresh_user_cookies(response):
+    # only replay prefs on GET responses so POST-set cookies aren't stomped
+    if request.method != 'GET':
+        return response
+
     ONE_YEAR = 31_536_000  # seconds
     pref_cookies = [
-        'code_format',
-        'mass_unit',
-        'operator_call',
-        'include_test',
-        'radio_show_unsent_only',
-        'show_debug_logs'
+        'code_format', 'mass_unit', 'operator_call',
+        'include_test', 'radio_show_unsent_only', 'show_debug_logs'
     ]
     for name in pref_cookies:
         val = request.cookies.get(name)
         if val is not None:
-            response.set_cookie(name, val, max_age=ONE_YEAR)
+            response.set_cookie(
+                name,
+                val,
+                max_age=ONE_YEAR,
+                samesite='Lax'
+            )
     return response
 
 # ───────────────── routes ─────────────────────────────────
+
+@app.route('/trigger-500')
+def trigger_500():
+    # this will always throw, producing a 500
+    raise RuntimeError("💥 Test internal server error")
+
+@app.errorhandler(413)
+def too_large(e):
+    return (
+        render_template(
+            '413.html',
+            max_mb=app.config['MAX_CONTENT_LENGTH'] // (1024*1024)
+        ),
+        413
+    )
 
 @app.route('/api/lookup_tail/<tail>')
 def lookup_tail(tail):
@@ -437,9 +516,9 @@ def dashboard():
 @app.route('/radio', methods=['GET','POST'])
 def radio():
     if request.method == 'POST':
-        subj   = request.form['subject'].strip()
-        body   = request.form['body'].strip()
-        sender = request.form.get('sender','').strip()
+        subj   = escape(request.form['subject'].strip())
+        body   = escape(request.form['body'].strip())
+        sender = escape(request.form.get('sender','').strip())
         ts     = datetime.utcnow().isoformat()
 
         # --- override parse_winlink tail on bare “landed” notices ---
@@ -548,30 +627,28 @@ def radio():
                   VALUES (?,?,?)
                 """, (f['id'], datetime.utcnow().isoformat(), json.dumps(before)))
 
-                # only overwrite remarks when parsed remarks non-empty
-                new_rem = p.get('remarks','').strip()
-                if not new_rem:
-                    c.execute("SELECT remarks FROM flights WHERE id=?", (f['id'],))
-                    new_rem = c.fetchone()[0] or ''
-
-                c.execute("""
-                  UPDATE flights
-                     SET airfield_takeoff=?,
-                         airfield_landing=?,
-                         eta=?,
-                         cargo_type=?,
-                         cargo_weight=?,
-                         remarks=?
-                   WHERE id=?
+                # conditional-field update so blanks don’t overwrite
+                c.execute(f"""
+                  UPDATE flights SET
+                    airfield_takeoff = ?,
+                    airfield_landing = ?,
+                    eta              = ?,
+                    cargo_type       = CASE WHEN ?<>'' THEN ? ELSE cargo_type   END,
+                    cargo_weight     = CASE WHEN ?<>'' THEN ? ELSE cargo_weight END,
+                    remarks          = CASE WHEN ?<>'' THEN ? ELSE remarks      END
+                  WHERE id=?
                 """, (
                   p['airfield_takeoff'],
                   p['airfield_landing'],
                   p['eta'],
-                  p['cargo_type'],
-                  p['cargo_weight'],
-                  new_rem,
+
+                  p['cargo_type'],   p['cargo_type'],
+                  p['cargo_weight'], p['cargo_weight'],
+                  p.get('remarks',''), p.get('remarks',''),
+
                   f['id']
                 ))
+
                 flash(f"Flight {f['id']} updated from incoming message.")
             else:
                 # ── NEW NON-RAMP ENTRY ────────────────────────────
@@ -846,15 +923,15 @@ def ramp_boss():
 
         # ---------- common field collection ----------
         data = {
-            'direction'        : direction,
-            'pilot_name'       : request.form.get('pilot_name','').strip(),
-            'pax_count'        : request.form.get('pax_count','').strip(),
-            'tail_number'      : request.form['tail_number'].strip().upper(),
-            'airfield_takeoff' : request.form['origin'].strip().upper(),
-            'airfield_landing' : request.form['destination'].strip().upper(),
-            'cargo_type'       : request.form['cargo_type'].strip(),
-            'cargo_weight'     : norm_weight(request.form['cargo_weight'], unit),
-            'remarks'          : request.form.get('remarks','').strip()
+            'direction'        : escape(direction),
+            'pilot_name'       : escape(request.form.get('pilot_name','').strip()),
+            'pax_count'        : escape(request.form.get('pax_count','').strip()),
+            'tail_number'      : escape(request.form['tail_number'].strip().upper()),
+            'airfield_takeoff' : escape(request.form['origin'].strip().upper()),
+            'airfield_landing' : escape(request.form['destination'].strip().upper()),
+            'cargo_type'       : escape(request.form['cargo_type'].strip()),
+            'cargo_weight'     : escape(norm_weight(request.form['cargo_weight'], unit)),
+            'remarks'          : escape(request.form.get('remarks','').strip())
         }
 
         # ---------- out-bound ----------
@@ -943,9 +1020,11 @@ def ramp_boss():
 @app.route('/edit_flight/<int:fid>', methods=['GET','POST'])
 def edit_flight(fid):
     if request.method=='POST':
-        fields=['direction','pilot_name','pax_count','airfield_takeoff','takeoff_time',
-                'airfield_landing','eta','cargo_type','cargo_weight','remarks']
-        data={f:request.form.get(f,'').strip() for f in fields}
+        # sanitize all editable fields
+        fields=['direction','pilot_name','pax_count','airfield_takeoff',
+                'takeoff_time','airfield_landing','eta','cargo_type',
+                'cargo_weight','remarks']
+        data={f: escape(request.form.get(f,'').strip()) for f in fields}
         data['airfield_takeoff']=data['airfield_takeoff'].strip().upper()
         data['airfield_landing']=data['airfield_landing'].strip().upper()
         data['takeoff_time']=hhmm_norm(data['takeoff_time'])
@@ -1088,45 +1167,67 @@ def preferences():
 
         # ----- DB-backed preference --------------------------------------
         if 'default_origin' in request.form:
+            val = escape(request.form['default_origin'].strip().upper())
             with sqlite3.connect(DB_FILE) as c:
                 c.execute("""
                     INSERT INTO preferences(name,value)
                     VALUES('default_origin',?)
                     ON CONFLICT(name) DO UPDATE
                     SET value = excluded.value
-                """, (request.form['default_origin'].strip().upper(),))
+                """, (val,))
 
         # ----- cookie-backed prefs ---------------------------------------
         resp = make_response(redirect(url_for('preferences')))
 
         # existing cookie-backed prefs...
         if 'code_format' in request.form:
-            resp.set_cookie('code_format',
-                            request.form['code_format'],
-                            max_age=ONE_YEAR)
-        if 'mass_unit' in request.form:
-            resp.set_cookie('mass_unit',
-                            request.form['mass_unit'],
-                            max_age=ONE_YEAR)
-        if 'operator_call' in request.form:
-            resp.set_cookie('operator_call',
-                            request.form['operator_call'].upper(),
-                            max_age=ONE_YEAR)
-        if 'include_test' in request.form:
-            resp.set_cookie('include_test',
-                            request.form['include_test'],
-                            max_age=ONE_YEAR)
+            resp.set_cookie(
+                'code_format',
+                request.form['code_format'],
+                max_age=ONE_YEAR,
+                samesite='Lax'
+            )
 
-        # ← NEW: radio-show-unsent-only toggle
+        if 'mass_unit' in request.form:
+            resp.set_cookie(
+                'mass_unit',
+                request.form['mass_unit'],
+                max_age=ONE_YEAR,
+                samesite='Lax'
+            )
+
+        if 'operator_call' in request.form:  # protect from arbitrary text XSS
+            oc = escape(request.form['operator_call'].upper())
+            resp.set_cookie(
+                'operator_call',
+                oc,
+                max_age=ONE_YEAR,
+                samesite='Lax'
+            )
+
+        if 'include_test' in request.form:
+            resp.set_cookie(
+                'include_test',
+                request.form['include_test'],
+                max_age=ONE_YEAR,
+                samesite='Lax'
+            )
+
         if 'radio_show_unsent_only' in request.form:
-            resp.set_cookie('radio_show_unsent_only',
-                            request.form['radio_show_unsent_only'],
-                            max_age=ONE_YEAR)
+            resp.set_cookie(
+                'radio_show_unsent_only',
+                request.form['radio_show_unsent_only'],
+                max_age=ONE_YEAR,
+                samesite='Lax'
+            )
 
         if 'show_debug_logs' in request.form:
-            resp.set_cookie('show_debug_logs',
-                            request.form['show_debug_logs'],
-                            max_age=ONE_YEAR)
+            resp.set_cookie(
+                'show_debug_logs',
+                request.form['show_debug_logs'],
+                max_age=ONE_YEAR,
+                samesite='Lax'
+            )
 
         return resp
 
@@ -1158,4 +1259,4 @@ def preferences():
 
 # ───────────────────────────────────────────────────────────
 if __name__=="__main__":
-    app.run(host='0.0.0.0', port=5150, debug=True)
+    app.run(host='0.0.0.0', port=5150)

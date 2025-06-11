@@ -36,6 +36,7 @@
 
 <div class="container preferences">
   <form method="POST">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <!-- ── Ops / Display prefs (DB + cookie) ───────────────── -->
     <h3>Display / Operational Prefs</h3>
 
@@ -107,12 +108,14 @@
     <button>Export CSV</button>
   </form>
   <form style="display:inline" action="{{ url_for('import_csv') }}" method="POST" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="file" name="csv_file" accept=".csv" required>
     <button>Import CSV</button>
   </form>
   <form method="POST"
         action="{{ url_for('reset_db') }}"
         onsubmit="return confirm('This wipes ALL flight data – continue?')">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button class="danger" style="margin-top:40px">Reset Database</button>
   </form>
 </div>

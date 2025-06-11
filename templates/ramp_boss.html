@@ -14,7 +14,8 @@
   <h2>Ramp Boss – New Flight</h2>
 
   <div class="ramp-form-container">
-    <form id="rb-form">
+    <form id="rb-form" method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <!-- direction -->
       <label for="dir-out">Aircraft Direction*</label>
       <div class="radio-toggle">
