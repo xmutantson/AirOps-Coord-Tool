@@ -4,8 +4,6 @@ A lightweight Flask-based web application for tracking inbound and outbound airc
 
 Optimized for DART usage (see [https://clallamdart.com/](https://clallamdart.com/) for background). Originally designed to run on a Raspberry Pi or minimal server, it’s now fully dockerized and portable.
 
----
-
 ## 🛠 Features
 
 * **Ramp Boss Mode**: Fast entry of outbound/inbound flight details
@@ -17,8 +15,7 @@ Optimized for DART usage (see [https://clallamdart.com/](https://clallamdart.com
 * **ICAO/IATA Lookup**: Integrated database of US airfields
 * **Security Hardened**: CSRF, XSS protection, rate limiting, upload limits, secret management
 * **Production WSGI**: Uses Waitress for robust serving
-
----
+* **mDNS Auto-Discovery**: Uses mDNS to advertise as RampOps.local
 
 ## 🐳 Run via Docker
 
@@ -27,16 +24,14 @@ Optimized for DART usage (see [https://clallamdart.com/](https://clallamdart.com
 Create a directory and save this `docker-compose.yml`:
 
 ```yaml
-version: '3.8'
-
 services:
   aircraft_ops_tool:
     image: ghcr.io/xmutantson/aircraft_ops_tool:latest
-    ports:
-      - "8086:5150"  # Visit http://localhost:8086
+    # host networking so we can advertise rampops.local via mDNS
+    network_mode: host
     volumes:
-      - ./data:/app/data       # Persists the SQLite database
-      - flask_secret:/run/secrets  # Auto-generated Flask secret
+      - ./data:/app/data         # Persists the SQLite database
+      - flask_secret:/run/secrets  # Auto-generated, stable Flask secret
     restart: unless-stopped
 
 volumes:
@@ -54,19 +49,15 @@ docker compose up -d
 ```bash
 docker run -d \
   --name aircraft_ops_tool \
-  -p 8086:5150 \
+  --network host \
   -v $(pwd)/data:/app/data \
   --mount type=volume,source=flask_secret,target=/run/secrets \
   ghcr.io/xmutantson/aircraft_ops_tool:latest
 ```
 
----
-
 ## 📂 Persistent Storage
 
-The app writes its database to `/app/data/aircraft_ops.db`. Both examples above mount a host directory (`./data`) so that data is **retained across container restarts**. The `flask_secret` volume auto-generates a stable secret on first run and persists it across `docker compose down && up`.
-
----
+The app writes its database to `/app/data/aircraft_ops.db`. Both examples above mount a host directory (`./data`) so that data is retained across container restarts. The `flask_secret` volume auto-generates a stable secret on first run and persists it across `docker compose down && docker compose up`.
 
 ## 🧪 Development
 
@@ -76,17 +67,18 @@ To run it manually outside Docker:
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-python app.py
+./entrypoint.sh
 ```
 
 Then visit: `http://localhost:5150`
-
----
 
 ## 📝 License
 
 MIT License
 
+## 👤 Maintainer
+
+Built and maintained by [@xmutantson](https://github.com/xmutantson)
 ---
 
 ## 👤 Maintainer
