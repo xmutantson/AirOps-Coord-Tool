@@ -1,10 +1,9 @@
 services:
   aircraft_ops_tool:
     image: ghcr.io/xmutantson/aircraft_ops_tool:latest
-    ports:
-      - "5150:5150"       # Expose your app on host port 8080 → container 5150
+    network_mode: host    # expose container directly on host LAN
     volumes:
-      - ./data:/app/data  # Persist the SQLite DB on the host
+      - ./data:/app/data  # persist SQLite DB
       - flask_secret:/run/secrets
     restart: unless-stopped
 
