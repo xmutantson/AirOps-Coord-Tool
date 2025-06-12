@@ -10,7 +10,11 @@
 {% block title %}Dashboard – Aircraft Ops{% endblock %}
 {% block content %}
 
-<h2>Aircraft Ops Dashboard</h2>
+<div class="page-header-bar">
+  <span class="page-title">Aircraft Ops Dashboard (Hosted at: {{ mdns_name or '---' }}:5150 -or- {{ host_ip or '---' }}:5150 )</span>
+  <span id="clock" class="clock">00:00:00</span>
+</div>
+
   <div id="dashboard-table">
     {% include 'partials/_dashboard_table.html' %}
   </div>
@@ -27,6 +31,18 @@
   }
   // Refresh every 30 seconds:
   setInterval(refreshDashboard, 30_000);
+</script>
+
+<script>
+  function updateClock(){
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2,'0');
+    const mm = String(now.getMinutes()).padStart(2,'0');
+    const ss = String(now.getSeconds()).padStart(2,'0');
+    document.getElementById('clock').textContent = `${hh}:${mm}:${ss}`;
+  }
+  setInterval(updateClock, 1000);
+  updateClock();
 </script>
 
 {% endblock %}

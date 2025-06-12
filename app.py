@@ -30,6 +30,68 @@ from markupsafe import escape
 import sqlite3, csv, io, re, os, json
 from datetime import datetime
 
+from zeroconf import Zeroconf, ServiceInfo
+import fcntl
+import struct
+import socket
+
+#-----------mDNS section--------------
+# ─── low-level: ask the kernel for an iface’s IPv4 ─────────────────
+def _ip_for_iface(iface: str) -> str:
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    packed = struct.pack('256s', iface.encode()[:15])
+    addr = fcntl.ioctl(s.fileno(), 0x8915, packed)[20:24]  # SIOCGIFADDR
+    return socket.inet_ntoa(addr)
+
+# ─── pick your LAN IP ────────────────────────────────────────────
+def get_lan_ip() -> str:
+    # 0) explicit IP override:
+    if ip := os.environ.get('HOST_LAN_IP'):
+        return ip
+
+    # 1) explicit interface override:
+    if iface := os.environ.get('HOST_LAN_IFACE'):
+        try:
+            return _ip_for_iface(iface)
+        except Exception:
+            pass
+
+    # 2) default‐route interface (skip tun*, docker*, br-*, lo):
+    try:
+        with open('/proc/net/route') as f:
+            for line in f.readlines()[1:]:
+                iface, dest, flags = line.split()[:3]
+                if dest=='00000000' and int(flags,16)&2:
+                    if not iface.startswith(('tun','tap','wg','docker','br-','lo')):
+                        return _ip_for_iface(iface)
+    except Exception:
+        pass
+
+    # 3) last-ditch UDP trick:
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect(("8.8.8.8", 80))
+    ip = s.getsockname()[0]
+    s.close()
+    return ip
+
+# ─── mDNS registration & context injection ──────────────────────
+_zeroconf = Zeroconf()
+
+def register_mdns(name: str, port: int):
+    host_ip   = get_lan_ip()
+    mdns_name = f"{name}.local"
+
+    info = ServiceInfo(
+      type_     = "_http._tcp.local.",
+      name      = f"{name}._http._tcp.local.",
+      addresses = [socket.inet_aton(host_ip)],
+      port      = port,
+      server    = f"{name}.local.",
+      properties= {}
+    )
+    _zeroconf.register_service(info)
+    return mdns_name, host_ip
+
 # 1) Try Docker secret file (if you mount one)
 secret = None
 secret_file = '/run/secrets/flask_secret'
@@ -59,16 +121,27 @@ limiter = Limiter(
     default_limits=["1000 per hour"]
 )
 
+# advertise our webapp on mDNS:
+MDNS_NAME, HOST_IP = register_mdns("rampops", 5150)
+
 @app.context_processor
 def inject_debug_pref():
     # expose as `show_debug` in **all** Jinja templates
     return {
         'show_debug': request.cookies.get('show_debug_logs','no')
     }
+
 @app.context_processor
 def inject_now():
     from datetime import datetime
     return {'now': datetime.utcnow}
+
+@app.context_processor
+def inject_network_info():
+    return {
+        'mdns_name': MDNS_NAME,
+        'host_ip'  : HOST_IP,
+    }
 
 # ───────────────── DB init & migrations ──────────────────
 def init_db():

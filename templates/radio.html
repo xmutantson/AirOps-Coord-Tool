@@ -10,7 +10,11 @@
 {% block title %}Radio Operator Out-box – Aircraft Ops{% endblock %}
 
 {% block content %}
-  <h2>Radio Operator Out-box</h2>
+
+<div class="page-header-bar">
+  <span class="page-title">Radio Operator Outbox (Hosted at: {{ mdns_name or '---' }}:5150 -or- {{ host_ip or '---' }}:5150 )</span>
+  <span id="clock" class="clock">00:00:00</span>
+</div>
 
   <div id="radio-table">
     {# initial table render #}
@@ -185,6 +189,18 @@
       incomingForm.reset();
     });
   </script>
+
+<script>
+  function updateClock(){
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2,'0');
+    const mm = String(now.getMinutes()).padStart(2,'0');
+    const ss = String(now.getSeconds()).padStart(2,'0');
+    document.getElementById('clock').textContent = `${hh}:${mm}:${ss}`;
+  }
+  setInterval(updateClock, 1000);
+  updateClock();
+</script>
 
 {% endblock %}
 </body>
