@@ -1219,6 +1219,10 @@ def reset_db():
     init_db()          # recreate empty tables
     run_migrations()   # add all current columns
 
+    # ─── rebuild & reload our airports lookup ────────────────
+    ensure_airports_table()
+    load_airports_from_csv()
+
     flash("Database reset and re-initialised.", "db_reset")
     return redirect(url_for('preferences'))
 
