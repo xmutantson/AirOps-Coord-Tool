@@ -445,7 +445,8 @@ def apply_incoming_parsed(p: dict) -> tuple[int,str]:
         ))
 
         # 2) landing?
-        lm = re.search(r'\blanded\s*(\d{3,4})\b', p['subject'], re.I)
+        # detect “landed HHMM” too (e.g. “landed 09:53” or “landed 0953”)
+        lm = re.search(r'\blanded\s*(\d{1,2}:?\d{2})\b', p['subject'], re.I)
         if lm:
             arrival = hhmm_norm(lm.group(1))
             match = c.execute("""
@@ -660,7 +661,8 @@ def radio():
             ))
 
             # 2) landing-report?
-            lm = re.search(r'\blanded\s*(\d{3,4})\b', subj, re.I)
+            # look for “landed HHMM” (allow “09:53” or “0953”)
+            lm = re.search(r'\blanded\s*(\d{1,2}:?\d{2})\b', subj, re.I)
             if lm:
                 arrival = hhmm_norm(lm.group(1))
 
