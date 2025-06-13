@@ -314,11 +314,20 @@ air_ops_re = re.compile(r"""
     (?:ETA|landed)\s*(?P<eta>\d{1,2}:?\d{2})
     """, re.IGNORECASE | re.VERBOSE)
 
-# capture exactly the rest of that one line after the dots
-cargo_type_re   = re.compile(r"Cargo Type\(s\)\s*\.{3,}\s*(?P<ct>[^\r\n]+)", re.I)
-cargo_weight_re = re.compile(r"Total Weight of the Cargo.*?\.{3,}\s*(?P<wgt>[^\r\n]+)", re.I)
-# capture multiline remarks up to the DART footer (or end of body)
-remarks_re      = re.compile(r"Additional notes/comments:\s*(?P<rm>.*?)(?=\{DART|$)", re.I|re.S)
+# more permissive parsing for Cargo Type, Cargo Weight and Remarks
+cargo_type_re = re.compile(
+    r"Cargo\s*Type(?:\(\s*s\)|s)?\s*[:\.\s-]*?(?P<ct>[^\r\n]+)",
+    re.I
+)
+cargo_weight_re = re.compile(
+    r"Total\s*Weight(?:\s*of\s*the\s*Cargo)?\s*[:\.\s-]*?(?P<wgt>[^\r\n]+)",
+    re.I
+)
+# capture anything after “Additional notes/comments” (or variants) up to “DART”
+remarks_re = re.compile(
+    r"Additional\s*notes(?:/comments| comments)?\s*[:\.\s]*?(?P<rm>.*?)(?=\bDART|\Z)",
+    re.I | re.S
+)
 
 def parse_weight_str(w):
     w=w.strip()
