@@ -306,13 +306,16 @@ def format_airport(raw_code: str, pref: str) -> str:
 # ── Winlink parser with conversions ──────────────────────
 # allow either “ETA” or “landed” before the time, so that
 # subjects like “| landed 1840” still parse tail/from/to/tko
+# allow the “took off … | ” segment to be skipped for pure-landed notices
 air_ops_re = re.compile(r"""
     Air\ Ops:\s*
     (?P<tail>[^|]+?)\s*\|\s*
     (?P<from>[^|]+?)\s*to\s*(?P<to>[^|]+?)\s*\|\s*
-    took\ off\s*(?P<tko>\d{1,2}:?\d{2})\s*\|\s*
+    (?:                            # optional “took off XXYY | ”
+       took\ off\s*(?P<tko>\d{1,2}:?\d{2})\s*\|\s*
+    )?
     (?:ETA|landed)\s*(?P<eta>\d{1,2}:?\d{2})
-    """, re.IGNORECASE | re.VERBOSE)
+""", re.IGNORECASE | re.VERBOSE)
 
 # more permissive parsing for Cargo Type, Cargo Weight and Remarks
 cargo_type_re = re.compile(
@@ -349,13 +352,20 @@ def parse_winlink(subj:str, body:str):
         'takeoff_time','eta','cargo_type','cargo_weight','remarks'
     ), '')
 
-    if (m:=air_ops_re.search(subj)):
+    if (m := air_ops_re.search(subj)):
+        tail_raw = m.group('tail').strip().upper()
+        from_raw = m.group('from').strip().upper()
+        to_raw   = m.group('to').strip().upper()
+        tko_raw  = m.group('tko') or ''       # None if skipped → ''
+        eta_raw  = m.group('eta') or ''
+
         d.update(
-          tail_number      = m['tail'].strip().upper(),
-          airfield_takeoff = m['from'].strip().upper(),
-          airfield_landing = m['to'].strip().upper(),
-          takeoff_time     = hhmm_norm(m['tko']),
-          eta              = hhmm_norm(m['eta']) )
+          tail_number      = tail_raw,
+          airfield_takeoff = from_raw,
+          airfield_landing = to_raw,
+          takeoff_time     = hhmm_norm(tko_raw),
+          eta              = hhmm_norm(eta_raw)
+        )
 
     # 1) strict dotted match first…
     if (m := cargo_type_re.search(body)):
