@@ -654,16 +654,15 @@ def radio():
             if lm:
                 arrival = hhmm_norm(lm.group(1))
 
-                # try updating an existing outbound ramp entry
+                # try updating the matching “in-flight” entry (by tail & takeoff_time)
+                # don't self-limit to outbound ramp boss flights, update regardless
                 match = c.execute("""
                   SELECT id, remarks
                     FROM flights
-                   WHERE tail_number=?
-                     AND direction='outbound'
-                     AND complete=0
+                   WHERE tail_number=? AND takeoff_time=? AND complete=0
                 ORDER BY id DESC
                    LIMIT 1
-                """, (p['tail_number'],)).fetchone()
+                """, (p['tail_number'], p['takeoff_time'])).fetchone()
 
                 if match:
                     # snapshot & update it
