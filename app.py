@@ -307,15 +307,24 @@ def format_airport(raw_code: str, pref: str) -> str:
 # allow either “ETA” or “landed” before the time, so that
 # subjects like “| landed 1840” still parse tail/from/to/tko
 # allow the “took off … | ” segment to be skipped for pure-landed notices
+# ── Winlink parser with conversions ──────────────────────
+# allow subjects with or without “took off … | ”,
+# and with “ETA”, “ETA hhmm”, “landed hhmm”, or no time
 air_ops_re = re.compile(r"""
     Air\ Ops:\s*
-    (?P<tail>[^|]+?)\s*\|\s*
-    (?P<from>[^|]+?)\s*to\s*(?P<to>[^|]+?)\s*\|\s*
-    (?:                            # optional “took off XXYY | ”
+    (?P<tail>[^|]+?)\s*\|\s*               # tail number
+    (?P<from>[^|]+?)\s*to\s*(?P<to>[^|]+?) # from → to
+    \s*\|\s*
+    (?:                                    # optional “took off HHMM | ”
        took\ off\s*(?P<tko>\d{1,2}:?\d{2})\s*\|\s*
     )?
-    (?:ETA|landed)\s*(?P<eta>\d{1,2}:?\d{2})
+    (?:                                    # optional ETA or landed segment
+       (?:ETA(?:\s*(?P<eta>\d{1,2}:?\d{2}))?)?   # “ETA” or “ETA hhmm”
+       |
+       (?:landed\s*(?P<landed>\d{1,2}:?\d{2}))?  # “landed hhmm”
+    )
 """, re.IGNORECASE | re.VERBOSE)
+
 
 # more permissive parsing for Cargo Type, Cargo Weight and Remarks
 cargo_type_re = re.compile(
@@ -482,21 +491,22 @@ def apply_incoming_parsed(p: dict) -> tuple[int,str]:
             """, (f['id'], datetime.utcnow().isoformat(), json.dumps(before)))
 
             # Only overwrite when parser actually returned non-empty values:
+            # only overwrite ETA when present in parsed message
             c.execute(f"""
               UPDATE flights SET
                 airfield_takeoff = ?,
                 airfield_landing = ?,
-                eta              = ?,
+                eta              = CASE WHEN ?<>'' THEN ? ELSE eta END,
                 cargo_type       = CASE WHEN ?<>'' THEN ? ELSE cargo_type   END,
                 cargo_weight     = CASE WHEN ?<>'' THEN ? ELSE cargo_weight END,
                 remarks          = CASE WHEN ?<>'' THEN ? ELSE remarks      END
               WHERE id=?
             """, (
-              p['airfield_takeoff'],    # always overwrite these three
+              p['airfield_takeoff'],
               p['airfield_landing'],
-              p['eta'],
+              p['eta'], p['eta'],
 
-              p['cargo_type'], p['cargo_type'],
+              p['cargo_type'],   p['cargo_type'],
               p['cargo_weight'], p['cargo_weight'],
               p.get('remarks',''), p.get('remarks',''),
 
@@ -726,6 +736,21 @@ def radio():
                 flash(f"Landed notice logged as new inbound entry #{fid}.")
                 return redirect(url_for('radio'))
 
+            # ── fallback: pure “landed” with no time given ──
+            elif re.search(r'\blanded\b', subj, re.I):
+                # find the most‐recent open flight
+                match = c.execute(
+                    "SELECT id FROM flights WHERE tail_number=? AND complete=0 ORDER BY id DESC LIMIT 1",
+                    (p['tail_number'],)
+                ).fetchone()
+                if match:
+                    c.execute(
+                        "UPDATE flights SET complete=1, sent=0 WHERE id=?",
+                        (match['id'],)
+                    )
+                    flash(f"Flight {match['id']} marked as landed (no time given).")
+                return redirect(url_for('radio'))
+
             # 3) not a landing → match by tail & takeoff_time?
             f = c.execute(
                 "SELECT id FROM flights WHERE tail_number=? AND takeoff_time=?",
@@ -741,11 +766,12 @@ def radio():
                 """, (f['id'], datetime.utcnow().isoformat(), json.dumps(before)))
 
                 # conditional-field update so blanks don’t overwrite
+                # only overwrite ETA if we actually parsed one
                 c.execute(f"""
                   UPDATE flights SET
                     airfield_takeoff = ?,
                     airfield_landing = ?,
-                    eta              = ?,
+                    eta              = CASE WHEN ?<>'' THEN ? ELSE eta END,
                     cargo_type       = CASE WHEN ?<>'' THEN ? ELSE cargo_type   END,
                     cargo_weight     = CASE WHEN ?<>'' THEN ? ELSE cargo_weight END,
                     remarks          = CASE WHEN ?<>'' THEN ? ELSE remarks      END
@@ -753,7 +779,7 @@ def radio():
                 """, (
                   p['airfield_takeoff'],
                   p['airfield_landing'],
-                  p['eta'],
+                  p['eta'], p['eta'],
 
                   p['cargo_type'],   p['cargo_type'],
                   p['cargo_weight'], p['cargo_weight'],
