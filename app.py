@@ -319,6 +319,13 @@ cargo_type_re = re.compile(
     r"Cargo\s*Type(?:\(\s*s\)|s)?\s*[:\.\s-]*?(?P<ct>[^\r\n]+)",
     re.I
 )
+
+# ── fall‐back “any Cargo Type” matcher ──────────────────────────────
+simple_ct_re = re.compile(
+    r"Cargo\s*Type(?:\(s\))?\s*[^\S\r\n]*(?P<ct>[^\r\n]+)",
+    re.IGNORECASE
+)
+
 cargo_weight_re = re.compile(
     r"Total\s*Weight(?:\s*of\s*the\s*Cargo)?\s*[:\.\s-]*?(?P<wgt>[^\r\n]+)",
     re.I
@@ -349,8 +356,21 @@ def parse_winlink(subj:str, body:str):
           airfield_landing = m['to'].strip().upper(),
           takeoff_time     = hhmm_norm(m['tko']),
           eta              = hhmm_norm(m['eta']) )
-    if (m:=cargo_type_re.search(body)):
-        d['cargo_type']=escape(m['ct'].strip())
+
+    # 1) strict dotted match first…
+    if (m := cargo_type_re.search(body)):
+        raw = m['ct'].strip()
+
+    # 2) …else try the lenient fallback
+    else:
+        m2 = simple_ct_re.search(body)
+        raw = m2['ct'].strip() if m2 else ''
+
+    # 3) strip stray leading “s ” (e.g. “s food” → “food”)
+    if raw.lower().startswith('s '):
+        raw = raw[2:].lstrip()
+
+    d['cargo_type'] = escape(raw)
 
     if (m:=cargo_weight_re.search(body)):
         d['cargo_weight']=escape(parse_weight_str(m['wgt']))
