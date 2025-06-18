@@ -394,10 +394,10 @@ def parse_winlink(subj:str, body:str):
 
     d['cargo_type'] = escape(raw)
 
-    if (m:=cargo_weight_re.search(body)):
+    if (m := cargo_weight_re.search(body)):
         # strip punctuation
-        wgt_raw = m['wgt'].strip().strip(" .:-*")
-        d['cargo_weight']=escape(parse_weight_str(m['wgt_raw']))
+        wgt_raw = m.group('wgt').strip().strip(" .:-*")
+        d['cargo_weight'] = escape(parse_weight_str(wgt_raw))
 
     if (m := remarks_re.search(body)):
         # collapse any run of whitespace (including newlines) into a single space
