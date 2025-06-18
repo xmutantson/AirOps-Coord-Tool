@@ -1118,16 +1118,21 @@ def ramp_boss():
 
                 if match:
                     # ----- update the existing outbound row -----
+                    # -- When UPDATING entries, we have to clear the sent flag
+                    # -- and set the flag indicating this update came from the ramp boss
                     c.execute("""
                         UPDATE flights SET
-                          eta        = ?,
-                          complete   = 1,
-                          remarks    = CASE WHEN LENGTH(remarks)
-                                           THEN remarks || ' / Arrived ' || ?
-                                           ELSE 'Arrived ' || ? END
+                          eta            = ?,
+                          complete       = 1,
+                          sent           = 0,
+                          is_ramp_entry  = 1,
+                          remarks        = CASE
+                                             WHEN LENGTH(remarks)
+                                               THEN remarks || ' / Arrived ' || ?
+                                             ELSE 'Arrived ' || ?
+                                          END
                         WHERE id=?
                     """, (arrival, arrival, arrival, match['id']))
-
                     # add history snapshot
                     c.execute("""INSERT INTO flight_history(flight_id,timestamp,data)
                                  VALUES (?,?,?)""",
