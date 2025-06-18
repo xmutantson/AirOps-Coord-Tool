@@ -385,6 +385,9 @@ def parse_winlink(subj:str, body:str):
         m2 = simple_ct_re.search(body)
         raw = m2['ct'].strip() if m2 else ''
 
+    # strip any leading/trailing punctuation or whitespace
+    raw = raw.strip(" .:-*")
+
     # 3) strip stray leading “s ” (e.g. “s food” → “food”)
     if raw.lower().startswith('s '):
         raw = raw[2:].lstrip()
@@ -392,12 +395,16 @@ def parse_winlink(subj:str, body:str):
     d['cargo_type'] = escape(raw)
 
     if (m:=cargo_weight_re.search(body)):
-        d['cargo_weight']=escape(parse_weight_str(m['wgt']))
+        # strip punctuation
+        wgt_raw = m['wgt'].strip().strip(" .:-*")
+        d['cargo_weight']=escape(parse_weight_str(m['wgt_raw']))
 
     if (m := remarks_re.search(body)):
         # collapse any run of whitespace (including newlines) into a single space
         remark_text = m.group('rm')
         remark_text = re.sub(r'\s+', ' ', remark_text).strip()
+        # strip leading/trailing punctuation, colons or braces
+        remark_text = remark_text.strip(" .:-*{}")
         d['remarks'] = escape(remark_text)
 
     return d
