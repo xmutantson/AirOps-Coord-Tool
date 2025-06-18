@@ -1018,12 +1018,20 @@ def radio_detail(fid):
 
     body = "\n".join(lines)
 
-    subject = (
-        f"Air Ops: {flight['tail_number']} | "
-        f"{flight['airfield_takeoff']} to {flight['airfield_landing']} | "
-        f"took off {flight['takeoff_time'] or '----'} | "
-        f"ETA {flight['eta'] or '----'}"
-    )
+    # For inbound flights, use “Landed” instead of “ETA”
+    if flight.get('direction') == 'inbound':
+        subject = (
+            f"Air Ops: {flight['tail_number']} | "
+            f"{flight['airfield_takeoff']} to {flight['airfield_landing']} | "
+            f"Landed {flight['eta'] or '----'}"
+        )
+    else:
+        subject = (
+            f"Air Ops: {flight['tail_number']} | "
+            f"{flight['airfield_takeoff']} to {flight['airfield_landing']} | "
+            f"took off {flight['takeoff_time'] or '----'} | "
+            f"ETA {flight['eta'] or '----'}"
+        )
 
     return render_template(
         'send_flight.html',
