@@ -138,6 +138,21 @@ button:hover {
   background: #d68504;
 }
 
+/* ──────────────────────────────────────────────────────────────
+   Prevent iOS auto-zoom on focus (inputs ≥16px) & full-width
+────────────────────────────────────────────────────────────── */
+input, textarea, select {
+  font-size: 16px;
+}
+.ramp-form-container,
+.container {
+  width: 100%;
+  max-width: 800px;    /* matching what you had inline */
+  margin: 0 auto;
+  padding: 0 1rem;
+  box-sizing: border-box;
+}
+
 /* ===============================================================
    
 Sticky Footer
@@ -354,4 +369,54 @@ body.radio     .container #radio-table     > table {
   font-weight: normal;      /* but not bold */
   color: var(--muted);      /* a subtler shade */
   margin: 0;
+}
+
+/* ───────────────────────────────────────────────────────────────
+   Mobile optimization: Ramp Boss & Nav for narrow screens (≤600px)
+   ─────────────────────────────────────────────────────────────── */
+@media (max-width: 600px) {
+  /* ramp boss container fills the screen */
+  .ramp-form-container {
+    max-width: 100%;
+    margin: 0.5rem auto;
+    padding: 0.5rem;
+  }
+
+  /* switch to one‐column form */
+  .ramp-form-container form {
+    display: block;
+  }
+  .ramp-form-container form > label {
+    display: block;
+    margin: 0.5rem 0 0.25rem;
+    font-weight: bold;
+  }
+
+  /* stack controls full-width */
+  .ramp-form-container form input,
+  .ramp-form-container form select,
+  .ramp-form-container form textarea,
+  .ramp-form-container form .radio-toggle,
+  .ramp-form-container form .lookup-row,
+  .ramp-form-container form button[type="button"] {
+    display: block;
+    width: 100%;
+    margin-bottom: 0.75rem;
+  }
+
+  /* lookup‐row wraps neatly */
+  .ramp-form-container .lookup-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .ramp-form-container .lookup-row button {
+    flex: 0 0 auto;
+  }
+
+  /* nav wraps onto multiple lines */
+  .main-nav {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
 }
