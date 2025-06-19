@@ -2,8 +2,29 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <!-- prevent mobile auto-zoom & make layout responsive -->
+  <meta name="viewport"
+        content="width=device-width,
+                 initial-scale=1,
+                 maximum-scale=1,
+                 user-scalable=no">
   <title>{% block title %}{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <style>
+    /* bump form font to ≥16px so iOS won’t zoom on focus */
+    input, textarea, select {
+      font-size: 16px;
+    }
+    /* ensure our container always fills the viewport on mobile */
+    .container,
+    .ramp-form-container {
+      width: 100%;
+      max-width: 800px;    /* or whatever your desktop max is */
+      margin: 0 auto;
+      padding: 0 1rem;
+      box-sizing: border-box;
+    }
+  </style>
 </head>
 <body class="{{ active }}">
 
