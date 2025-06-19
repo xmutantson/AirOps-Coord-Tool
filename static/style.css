@@ -66,7 +66,7 @@ main.container {
    Layout Container
    =============================================================== */
 .container {
-  max-width: 1200px;
+  max-width: 1600px;
   margin: var(--spacing) auto;
   padding: 0 var(--spacing);
 }
@@ -144,11 +144,11 @@ button:hover {
 input, textarea, select {
   font-size: 16px;
 }
-.ramp-form-container,
-.container {
+
+/* Only the ramp-boss container gets the 100%/padding treatment here —
+   leave the global .container alone */
+.ramp-form-container {
   width: 100%;
-  max-width: 800px;    /* matching what you had inline */
-  margin: 0 auto;
   padding: 0 1rem;
   box-sizing: border-box;
 }
