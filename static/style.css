@@ -307,6 +307,87 @@ footer {
   justify-self: start;
   margin-top: 0.5rem;
 }
+
+/* ===============================================================
+   Preferences page overrides (moved from inline <style> in preferences.html)
+   =============================================================== */
+
+/* target only the Preferences screen */
+body.preferences {
+  font-family: sans-serif;
+  margin: 20px;  /* replaced the inline body{…} */
+}
+
+/* section headings */
+body.preferences h3 {
+  margin-top: 32px;
+}
+
+/* labels in the Preferences form */
+body.preferences label {
+  display: block;
+  margin-top: 12px;
+  font-weight: bold;
+}
+
+/* inputs and selects in Preferences */
+body.preferences select,
+body.preferences input {
+  padding: 6px;
+  font-size: 14px;
+  width: 200px;
+}
+
+/* buttons in Preferences */
+body.preferences button {
+  margin-right: 6px;
+  padding: 6px 12px;
+}
+
+/* danger‐style Reset button */
+body.preferences .danger {
+  background: #c33;
+  color: #fff;
+}
+
+/* flash message list styling */
+body.preferences .flashes {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+}
+
+body.preferences .flashes li {
+  margin: 4px 0;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-weight: bold;
+}
+body.preferences .flashes li.error {
+  background: #ffe5e5;
+  border: 1px solid #cc3333;
+  color: #800;
+}
+body.preferences .flashes li.import {
+  background: #e5ffe5;
+  border: 1px solid #33aa33;
+  color: #060;
+}
+body.preferences .flashes li.db_reset {
+  background: #fff0e5;
+  border: 1px solid #ff8800;
+  color: #663300;
+}
+
+/* fade‐to‐white animation for db_reset field highlight */
+@keyframes fadeRed {
+  from { background-color: #ff9999; }
+  to   { background-color: white; }
+}
+body.preferences input.fade-red {
+  animation: fadeRed 4s ease-in-out;
+}
+
 /* full-bleed tables on Dashboard & Radio, even when wrapped in a div */
 body.dashboard .container #dashboard-table > table,
 body.radio     .container #radio-table     > table {
@@ -419,4 +500,46 @@ body.radio     .container #radio-table     > table {
     flex-wrap: wrap;
     gap: 0.5rem;
   }
+}
+/* ──────────────────────────────────────────────────────────────
+   Radio page: larger Winlink-body textarea + allow vertical resize
+────────────────────────────────────────────────────────────── */
+#incoming-form textarea[name="body"] {
+  /* start out taller (6× a normal line) */
+  min-height: 8rem;
+  /* but never exceed half the viewport */
+  max-height: 50vh;
+  /* still let the user drag it if they want */
+  resize: vertical;
+  overflow: auto;
+}
+
+/* ──────────────────────────────────────────────────────────────
+    Preferences page: kill its top margin & pull it up under the header
+ ─────────────────────────────────────────────────────────────── */
+body.preferences {
+  margin: 0 !important;
+}
+
+/* less “buffer” under the sticky header on prefs */
+body.preferences main.container {
+  padding-top: 1rem;  /* instead of 3.5rem */
+}
+
+/* ──────────────────────────────────────────────────────────────
+    Ramp Boss page: improvements for missing required fields
+ ─────────────────────────────────────────────────────────────── */
+
+/* turn any required-but-empty field red */
+.ramp-form-container input:required:invalid,
+.ramp-form-container select:required:invalid {
+  border-color: #d33;
+  background: #ffecec;
+}
+
+/* the little error message under the submit button */
+#rb-form .form-error {
+  color: #d33;
+  margin-top: 0.5rem;
+  font-size: 0.9rem;
 }

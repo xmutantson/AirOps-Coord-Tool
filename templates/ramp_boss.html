@@ -5,6 +5,7 @@
   <div class="ramp-form-container">
     <form id="rb-form" method="POST">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
       <!-- direction -->
       <label for="dir-out">Aircraft Direction*</label>
       <div class="radio-toggle">
@@ -63,6 +64,38 @@
   </div>
 
   <script>
+    // ───────────────────────────────────────────────────────────────
+    // Ramp-Boss form validation
+    function validateRampBoss() {
+      // remove any previous error messages
+      document.querySelectorAll('#rb-form .form-error')
+              .forEach(el => el.remove());
+      // find required fields that are empty
+      const invalid = Array.from(
+        document.querySelectorAll('#rb-form [required]')
+      ).filter(f => !f.value.trim());
+      if (invalid.length) {
+        // highlight each missing field
+        invalid.forEach(f => f.classList.add('error'));
+        // inject one error message under the submit button
+        const submitBtn = document.querySelector('#rb-form button[type="submit"]');
+        const msg = document.createElement('div');
+        msg.className = 'form-error';
+        msg.textContent = 'Please fill in all required fields.';
+        submitBtn.parentNode.insertBefore(msg, submitBtn.nextSibling);
+        // focus the first missing field
+        invalid[0].focus();
+        return false;
+      }
+      return true;
+    }
+
+    // clear red border as soon as they start typing
+    document.querySelectorAll('#rb-form [required]').forEach(field => {
+      field.addEventListener('input', () => field.classList.remove('error'));
+    });
+
+    // ───────────────────────────────────────────────────────────────
     /* Ramp-Boss AJAX & UI logic */
     const form         = document.getElementById('rb-form');
     const feedbackBox  = document.getElementById('rb-feedback-container');
@@ -101,7 +134,7 @@
     dirRadios.forEach(r=>r.addEventListener('change',applyDirUI));
     applyDirUI();
 
-    // Tail-lookup
+    // Tail-lookup helper
     document.getElementById('lookup').addEventListener('click', async ()=>{
       const tail = form.tail_number.value.trim().toUpperCase();
       if (!tail) return alert('Enter tail number first!');
@@ -117,11 +150,14 @@
       if (d.cargo_weight)     form.cargo_weight.value = d.cargo_weight;
     });
 
-    // AJAX submit + green full-bleed feedback
-    form.addEventListener('submit', async e=>{
+    // Wrapped submit handler: validate → then AJAX
+    form.addEventListener('submit', async e => {
       e.preventDefault();
+      if (!validateRampBoss()) return;    // abort if missing fields
+
+      // simple HHMM sanity check
       const t = depField.value.trim();
-      if (t.length<3||t.length>4||isNaN(t)) {
+      if (t.length<3 || t.length>4 || isNaN(t)) {
         depField.classList.add('error');
         return alert('Time must be 3–4 digits');
       }
@@ -135,6 +171,7 @@
       if (!resp.ok) return alert('Save failed');
       const f = await resp.json();
 
+      // render feedback table
       feedbackBox.innerHTML = `
         <table class="full-bleed">
           <thead>
@@ -167,5 +204,4 @@
       applyDirUI();
     });
   </script>
-
 {% endblock %}

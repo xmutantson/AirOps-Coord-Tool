@@ -202,6 +202,21 @@
   updateClock();
 </script>
 
+<script>
+  (()=>{
+    const ta = document.querySelector('#incoming-form textarea[name="body"]');
+    if(!ta) return;
+    const autoResize = e => {
+      e.target.style.height = 'auto';
+      e.target.style.height = e.target.scrollHeight + 'px';
+    };
+    ta.addEventListener('input', autoResize);
+    // initialize on load
+    autoResize({ target: ta });
+  })();
+</script>
+
+
 {% endblock %}
 </body>
 </html>
