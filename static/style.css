@@ -500,6 +500,30 @@ body.radio     .container #radio-table     > table {
     flex-wrap: wrap;
     gap: 0.5rem;
   }
+
+  /* Preferences form → single‐column on mobile */
+  .container.preferences {
+    max-width: 100%;
+    margin: 0.5rem auto;
+    padding: 0.5rem;
+  }
+  .container.preferences form {
+    display: block;
+  }
+  .container.preferences form > label {
+    display: block;
+    margin: 0.5rem 0 0.25rem;
+    font-weight: bold;
+  }
+  .container.preferences form input,
+  .container.preferences form select,
+  .container.preferences form textarea,
+  .container.preferences form button {
+    display: block;
+    width: 100%;
+    margin-bottom: 0.75rem;
+  }
+
 }
 /* ──────────────────────────────────────────────────────────────
    Radio page: larger Winlink-body textarea + allow vertical resize
