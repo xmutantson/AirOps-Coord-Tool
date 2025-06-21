@@ -312,14 +312,14 @@ def format_airport(raw_code: str, pref: str) -> str:
 # and with “ETA”, “ETA hhmm”, “landed hhmm”, or no time
 air_ops_re = re.compile(r"""
     Air\ Ops:\s*
-    (?P<tail>[^|]+?)\s*\|\s*               # tail number
-    (?P<from>[^|]+?)\s*to\s*(?P<to>[^|]+?) # from → to
-    \s*\|\s*
-    (?:                                    # optional “took off HHMM | ”
-       took\ off\s*(?P<tko>\d{1,2}:?\d{2})\s*\|\s*
+    (?P<tail>[^|]+?)\s*\|\s*
+    (?P<from>[^|]+?)\s*to\s*(?P<to>[^|]+?)\s*\|\s*
+    (?:                                    # optional “took off HHMM”
+       took\ off\s*(?P<tko>\d{1,2}:?\d{2})
+       (?:\s*\|\s*|\s+)                   # allow “|” *or* just space before next
     )?
     (?:                                    # optional ETA or landed segment
-       (?:ETA(?:\s*(?P<eta>\d{1,2}:?\d{2}))?)?   # “ETA” or “ETA hhmm”
+       (?:ETA(?:\s*(?P<eta>\d{1,2}:?\d{2}))?)?   # “ETA” or “ETA hhmm” or bare “ETA”
        |
        (?:landed\s*(?P<landed>\d{1,2}:?\d{2}))?  # “landed hhmm”
     )
