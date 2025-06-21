@@ -466,18 +466,32 @@ def apply_incoming_parsed(p: dict) -> tuple[int,str]:
         if lm:
             arrival = hhmm_norm(lm.group(1))
             match = c.execute("""
-              SELECT id, remarks FROM flights
+              SELECT id, remarks
+                FROM flights
                WHERE tail_number=? AND complete=0
-            ORDER BY id DESC LIMIT 1
-            """,(p['tail_number'],)).fetchone()
+            ORDER BY id DESC
+               LIMIT 1
+            """, (p['tail_number'],)).fetchone()
+
             if match:
-                before = dict_rows("SELECT * FROM flights WHERE id=?", (match['id'],))[0]
+                before = dict_rows(
+                    "SELECT * FROM flights WHERE id=?", 
+                    (match['id'],)
+                )[0]
                 c.execute("""
-                  INSERT INTO flight_history(flight_id,timestamp,data)
+                  INSERT INTO flight_history(flight_id, timestamp, data)
                   VALUES (?,?,?)
-                """, (match['id'], datetime.utcnow().isoformat(), json.dumps(before)))
+                """, (
+                  match['id'],
+                  datetime.utcnow().isoformat(),
+                  json.dumps(before)
+                ))
                 old_rem = match['remarks'] or ''
-                new_rem = f"{old_rem} / Arrived {arrival}" if old_rem else f"Arrived {arrival}"
+                new_rem = (
+                    f"{old_rem} / Arrived {arrival}"
+                    if old_rem else
+                    f"Arrived {arrival}"
+                )
                 c.execute("""
                   UPDATE flights
                      SET eta=?, complete=1, sent=0, remarks=?
@@ -485,20 +499,42 @@ def apply_incoming_parsed(p: dict) -> tuple[int,str]:
                 """, (arrival, new_rem, match['id']))
                 return match['id'], 'landed'
 
-        # 3) match by tail+takeoff
+        # 3) not a landing → match by tail & takeoff_time
         f = c.execute(
-          "SELECT id FROM flights WHERE tail_number=? AND takeoff_time=?",
-          (p['tail_number'],p['takeoff_time'])
+            "SELECT id FROM flights WHERE tail_number=? AND takeoff_time=?",
+            (p['tail_number'], p['takeoff_time'])
         ).fetchone()
-        if f:
-            before = dict_rows("SELECT * FROM flights WHERE id=?", (f['id'],))[0]
-            c.execute("""
-              INSERT INTO flight_history(flight_id,timestamp,data)
-              VALUES (?,?,?)
-            """, (f['id'], datetime.utcnow().isoformat(), json.dumps(before)))
 
-            # Only overwrite when parser actually returned non-empty values:
-            # only overwrite ETA when present in parsed message
+        # fallback: same tail + same origin, still-open
+        if not f and p['airfield_takeoff']:
+            f = c.execute("""
+                SELECT id
+                  FROM flights
+                 WHERE tail_number=?
+                   AND airfield_takeoff=?
+                   AND complete=0
+                 ORDER BY id DESC
+                 LIMIT 1
+            """, (
+                p['tail_number'],
+                p['airfield_takeoff']
+            )).fetchone()
+
+        if f:
+            before = dict_rows(
+                "SELECT * FROM flights WHERE id=?", 
+                (f['id'],)
+            )[0]
+            c.execute("""
+              INSERT INTO flight_history(flight_id, timestamp, data)
+              VALUES (?,?,?)
+            """, (
+              f['id'],
+              datetime.utcnow().isoformat(),
+              json.dumps(before)
+            ))
+
+            # Only overwrite when parser actually returned non-empty values
             c.execute(f"""
               UPDATE flights SET
                 airfield_takeoff = ?,
@@ -511,12 +547,10 @@ def apply_incoming_parsed(p: dict) -> tuple[int,str]:
             """, (
               p['airfield_takeoff'],
               p['airfield_landing'],
-              p['eta'], p['eta'],
-
-              p['cargo_type'],   p['cargo_type'],
-              p['cargo_weight'], p['cargo_weight'],
+              p['eta'],            p['eta'],
+              p['cargo_type'],     p['cargo_type'],
+              p['cargo_weight'],   p['cargo_weight'],
               p.get('remarks',''), p.get('remarks',''),
-
               f['id']
             ))
             return f['id'], 'updated'
@@ -527,10 +561,15 @@ def apply_incoming_parsed(p: dict) -> tuple[int,str]:
             is_ramp_entry, tail_number, airfield_takeoff, takeoff_time,
             airfield_landing, eta, cargo_type, cargo_weight, remarks
           ) VALUES (0,?,?,?,?,?,?,?,?)
-        """,(
-          p['tail_number'], p['airfield_takeoff'], p['takeoff_time'],
-          p['airfield_landing'], p['eta'], p['cargo_type'],
-          p['cargo_weight'], p.get('remarks','')
+        """, (
+          p['tail_number'],
+          p['airfield_takeoff'],
+          p['takeoff_time'],
+          p['airfield_landing'],
+          p['eta'],
+          p['cargo_type'],
+          p['cargo_weight'],
+          p.get('remarks','')
         )).lastrowid
         return fid, 'new'
 
