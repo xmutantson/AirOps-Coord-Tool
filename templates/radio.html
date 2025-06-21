@@ -121,7 +121,13 @@
     const subj    = subjRaw
                       .replace(/^(?:\s*(?:RE|ACK)\s*:?\s*)+/i, '')   // strip once or many
                       .trim();
-    const sm   = /Air Ops:\s*([^|]+?)\s*\|\s*([^|]+?)\s*to\s*([^|]+?)\s*\|\s*took off\s*(\d{1,2}:?\d{2})\s*\|\s*ETA\s*(\d{1,2}:?\d{2})/i.exec(subj);
+    const sm = new RegExp(
+      String.raw`Air Ops:\s*([^|]+?)\s*\|\s*([^|]+?)\s*to\s*([^|]+?)\s*\|\s*` +
+      String.raw`(?:took off\s*(\d{1,2}:?\d{2})\s*\|\s*ETA\s*(\d{1,2}:?\d{2})` +
+      String.raw`|took off\s*(\d{1,2}:?\d{2})\s*\|\s*landed\s*(\d{1,2}:?\d{2})` +
+      String.raw`|landed\s*(\d{1,2}:?\d{2}))`,
+      'i'
+    );
     const bare = /Air Ops:\s*(\S+)\s*\|\s*landed\b/i.exec(subj);
     const body = formData.get('body');
     const ct   = /Cargo Type\(s\).*?\.{3,}\s*(.*)/i.exec(body);
