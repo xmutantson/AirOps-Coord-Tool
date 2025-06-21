@@ -587,6 +587,6 @@ body.preferences main.container {
 
 /* ── heartbeat: tint whole UI red while offline ───────────── */
 body.offline {
-  background: #ffecec !important;
+  background: #ff4242 !important;
   transition: background 0.3s;
 }
