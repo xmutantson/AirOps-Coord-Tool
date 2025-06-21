@@ -344,10 +344,17 @@ body.preferences button {
   padding: 6px 12px;
 }
 
-/* danger‐style Reset button */
-body.preferences .danger {
-  background: #c33;
-  color: #fff;
+/* force the red even after the generic “button” rule */
+body.preferences .danger,
+body.preferences button.danger {
+  background: #c33 !important;
+  color: #fff !important;
+}
+
+/* slightly darker on hover / focus */
+body.preferences .danger:hover,
+body.preferences button.danger:hover {
+  background: #a92222 !important;
 }
 
 /* flash message list styling */
@@ -384,8 +391,11 @@ body.preferences .flashes li.db_reset {
   from { background-color: #ff9999; }
   to   { background-color: white; }
 }
+
+/* start bright red, then fade to white */
 body.preferences input.fade-red {
-  animation: fadeRed 4s ease-in-out;
+  background-color: #ff9999;          /* <── initial tint  */
+  animation: fadeRed 4s ease-in-out;  /* then dissolve     */
 }
 
 /* full-bleed tables on Dashboard & Radio, even when wrapped in a div */

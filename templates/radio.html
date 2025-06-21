@@ -128,14 +128,15 @@
 
     // lookup existing flight for id/pilot/pax/remarks
     let id    = '—', pilot = '—', pax = '—', rem = '';
+        prior = null;   // ← will hold the JSON row if it exists
     try {
       const lookup = await fetch(`/api/lookup_tail/${encodeURIComponent(p.tail_number)}`);
       if (lookup.ok) {
-        const fjson = await lookup.json();
-        id    = fjson.id         ?? id;
-        pilot = fjson.pilot_name || pilot;
-        pax   = fjson.pax_count  || pax;
-        rem   = fjson.remarks    || '';
+        prior = await lookup.json();
+        id    = prior.id           ?? id;
+        pilot = prior.pilot_name   || pilot;
+        pax   = prior.pax_count    || pax;
+        rem   = prior.remarks      || '';
       }
     } catch {}
 
@@ -152,7 +153,15 @@
       p.tail_number, p.airfield_takeoff, p.airfield_landing,
       p.takeoff_time, p.eta, p.cargo_type, p.cargo_weight
     ].every(v => !v || v === 'TBD');
-    const isUpdate = id !== '—';
+    /* Smarter “update?” test – only blue if REAL changes detected */
+    const isUpdate =
+          prior !== null &&                            // row exists
+          (
+            prior.takeoff_time      !== p.takeoff_time      ||
+            prior.airfield_takeoff  !== p.airfield_takeoff  ||
+            prior.airfield_landing  !== p.airfield_landing  ||
+            prior.eta               !== p.eta
+          );
     let rowClass = 'green-border';
     if (allTbd)        rowClass = 'red-border';
     else if (isUpdate) rowClass = 'blue-border';
