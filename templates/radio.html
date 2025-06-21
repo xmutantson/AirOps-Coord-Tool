@@ -110,8 +110,17 @@
     if (!resp.ok) return alert('Failed to log incoming.');
     const srvJson = await resp.json();          // contains .action and .id
 
-    // locally parse subject/body
-    const subj = formData.get('subject').trim();
+    // --- locally parse subject/body -----------------------------------
+    /*--------------------------------------------------------------
+      Normalise subject line before regex parsing
+        • remove any number of leading
+            "RE", "Re", "ack", "ACK", … optionally followed by ":"
+          e.g.  "Re: RE ACK Air Ops: …"  →  "Air Ops: …"
+    --------------------------------------------------------------*/
+    const subjRaw = formData.get('subject').trim();
+    const subj    = subjRaw
+                      .replace(/^(?:\s*(?:RE|ACK)\s*:?\s*)+/i, '')   // strip once or many
+                      .trim();
     const sm   = /Air Ops:\s*([^|]+?)\s*\|\s*([^|]+?)\s*to\s*([^|]+?)\s*\|\s*took off\s*(\d{1,2}:?\d{2})\s*\|\s*ETA\s*(\d{1,2}:?\d{2})/i.exec(subj);
     const bare = /Air Ops:\s*(\S+)\s*\|\s*landed\b/i.exec(subj);
     const body = formData.get('body');
@@ -144,7 +153,7 @@
 
     // detect landing vs in-flight
     const isLanding     = /\blanded\b/i.test(subj);
-    const landMatch     = /\blanded\s*(\d{1,2}:?\d{2})/i.exec(subj);  // hmm, hhmm **or** hh:mm
+    const landMatch     = /\blanded\s*(\d{1,2}:?\d{2})/i.exec(subj);  // hhmm OR hh:mm
     const displayStatus = isLanding ? '🛬 Landed' : '✈️ In-Flight';
     const displayEta    = isLanding
                          ? (landMatch?.[1].padStart(4,'0') || 'TBD')
