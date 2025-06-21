@@ -40,7 +40,7 @@
     const ctrl = new AbortController();
     const tid  = setTimeout(()=>ctrl.abort(), TIMEOUT_MS);
     try{
-      const r = await fetch("{{ url_for('_ping') }}", { signal: ctrl.signal });
+      const r = await fetch("{{ url_for('ping') }}", { signal: ctrl.signal });
       document.body.classList.toggle('offline', !r.ok);
     }catch(_){
       document.body.classList.add('offline');
