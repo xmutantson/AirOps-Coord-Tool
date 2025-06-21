@@ -93,7 +93,7 @@
     document.getElementById('radio-table').innerHTML = await resp.text();
   }, 30000);
 
-  // 2) Incoming-form handling
+  // 2) Incoming-form handling (now colours by server-supplied “action”)
   const incomingForm = document.getElementById('incoming-form');
   const feedbackBox  = document.getElementById('incoming-feedback-container');
 
@@ -104,9 +104,11 @@
     // POST to server
     const resp = await fetch(window.location.href, {
       method: incomingForm.method,
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
       body: formData
     });
     if (!resp.ok) return alert('Failed to log incoming.');
+    const srvJson = await resp.json();          // contains .action and .id
 
     // locally parse subject/body
     const subj = formData.get('subject').trim();
@@ -153,18 +155,12 @@
       p.tail_number, p.airfield_takeoff, p.airfield_landing,
       p.takeoff_time, p.eta, p.cargo_type, p.cargo_weight
     ].every(v => !v || v === 'TBD');
+
     /* Smarter “update?” test – only blue if REAL changes detected */
-    const isUpdate =
-          prior !== null &&                            // row exists
-          (
-            prior.takeoff_time      !== p.takeoff_time      ||
-            prior.airfield_takeoff  !== p.airfield_takeoff  ||
-            prior.airfield_landing  !== p.airfield_landing  ||
-            prior.eta               !== p.eta
-          );
+    // use the server’s verdict
     let rowClass = 'green-border';
-    if (allTbd)        rowClass = 'red-border';
-    else if (isUpdate) rowClass = 'blue-border';
+    if (allTbd)                    rowClass = 'red-border';
+    else if (srvJson.action === 'updated') rowClass = 'blue-border';
 
     // inject feedback table
     feedbackBox.innerHTML = `
@@ -180,7 +176,7 @@
         </thead>
         <tbody>
           <tr class="${rowClass}">
-            <td>${id}</td>
+            <td>${srvJson.id ?? id}</td>
             <td class="status">${displayStatus}</td>
             <td>${p.tail_number}</td>
             <td>${pilot}</td>

@@ -344,9 +344,9 @@ body.preferences button {
   padding: 6px 12px;
 }
 
-/* force the red even after the generic “button” rule */
-body.preferences .danger,
-body.preferences button.danger {
+
+/* danger button (Preferences & elsewhere) */
+.danger {
   background: #c33 !important;
   color: #fff !important;
 }
@@ -386,7 +386,7 @@ body.preferences .flashes li.db_reset {
   color: #663300;
 }
 
-/* fade‐to‐white animation for db_reset field highlight */
+# default-origin “fade red” animation (Preferences only)
 @keyframes fadeRed {
   from { background-color: #ff9999; }
   to   { background-color: white; }

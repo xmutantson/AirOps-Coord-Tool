@@ -709,6 +709,7 @@ def dashboard():
 @app.route('/radio', methods=['GET','POST'])
 def radio():
     if request.method == 'POST':
+        is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
         subj   = escape(request.form['subject'].strip())
         body   = escape(request.form['body'].strip())
         sender = escape(request.form.get('sender','').strip())
@@ -858,7 +859,15 @@ def radio():
                   f['id']
                 ))
 
+                # ── build JSON for AJAX caller ---------------------------------
+                if is_ajax:
+                    row = dict_rows("SELECT * FROM flights WHERE id=?", (f['id'] if f else fid, ))[0]
+                    row['action'] = ('updated' if f else 'new')
+                    return jsonify(row)
+
+                # normal (form-submit) path
                 flash(f"Flight {f['id']} updated from incoming message.")
+
             else:
                 # ── NEW NON-RAMP ENTRY ────────────────────────────
                 fid = c.execute("""
@@ -884,8 +893,15 @@ def radio():
                   p.get('remarks','')
                 )).lastrowid
 
+                if is_ajax:          # ── JSON reply for AJAX caller (new) ──
+                    row = dict_rows("SELECT * FROM flights WHERE id=?", (fid,))[0]
+                    row['action'] = 'new'
+                    return jsonify(row)
+
+                # normal (form-submit) path
                 flash(f"Incoming flight logged as new entry #{fid}.")
 
+        # normal (non-AJAX) POST → redirect back to Radio screen
         return redirect(url_for('radio'))
 
     # ─── GET: fetch & order ramp entries ────────────────────────────────
