@@ -859,13 +859,19 @@ def radio():
                   f['id']
                 ))
 
-                # ── build JSON for AJAX caller ---------------------------------
+                # ── commit now so another connection can see the change ──
+                c.commit()
+
+                # ── JSON reply for AJAX caller ───────────────────────────
                 if is_ajax:
-                    row = dict_rows("SELECT * FROM flights WHERE id=?", (f['id'] if f else fid, ))[0]
-                    row['action'] = ('updated' if f else 'new')
+                    row = dict_rows(
+                            "SELECT * FROM flights WHERE id=?",
+                            (f['id'],)
+                          )[0]
+                    row['action'] = 'updated'
                     return jsonify(row)
 
-                # normal (form-submit) path
+                # ── normal (form-submit) path ────────────────────────────
                 flash(f"Flight {f['id']} updated from incoming message.")
 
             else:
@@ -893,8 +899,14 @@ def radio():
                   p.get('remarks','')
                 )).lastrowid
 
+                # ensure INSERT is visible to the next SELECT
+                c.commit()
+
                 if is_ajax:          # ── JSON reply for AJAX caller (new) ──
-                    row = dict_rows("SELECT * FROM flights WHERE id=?", (fid,))[0]
+                    row = dict_rows(
+                            "SELECT * FROM flights WHERE id=?",
+                            (fid,)
+                          )[0]
                     row['action'] = 'new'
                     return jsonify(row)
 
