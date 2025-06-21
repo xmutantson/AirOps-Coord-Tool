@@ -583,3 +583,10 @@ body.preferences main.container {
   margin-top: 0.5rem;
   font-size: 0.9rem;
 }
+
+
+/* ── heartbeat: tint whole UI red while offline ───────────── */
+body.offline {
+  background: #ffecec !important;
+  transition: background 0.3s;
+}

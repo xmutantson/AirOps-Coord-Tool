@@ -612,6 +612,15 @@ def too_large(e):
         413
     )
 
+# ───────────────────────────────────────────────────────────
+#  ultra-light heartbeat so browsers can detect connectivity
+# ───────────────────────────────────────────────────────────
+@app.get("/_ping")
+def ping():
+    """Return 204 immediately – used by tiny JS heartbeat."""
+    return ("", 204)
+
+
 @app.route('/api/lookup_tail/<tail>')
 def lookup_tail(tail):
     """Return the newest flight row for a given tail number (JSON) or {}."""

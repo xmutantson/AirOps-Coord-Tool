@@ -30,5 +30,28 @@
     © {{ current_year }} Kameron Markham (KG7VSN)
   </footer>
 
+<!-- ── 30 s heartbeat: paint body.red when server unreachable ── -->
+<script>
+(()=>{               /* IIFE keeps global scope clean */
+  const CHECK_EVERY = 30_000;          // 30 s
+  const TIMEOUT_MS  = 5_000;           // abort after 5 s
+
+  async function beat(){
+    const ctrl = new AbortController();
+    const tid  = setTimeout(()=>ctrl.abort(), TIMEOUT_MS);
+    try{
+      const r = await fetch("{{ url_for('_ping') }}", { signal: ctrl.signal });
+      document.body.classList.toggle('offline', !r.ok);
+    }catch(_){
+      document.body.classList.add('offline');
+    }finally{
+      clearTimeout(tid);
+    }
+  }
+  beat();                              // run once at page-load
+  setInterval(beat, CHECK_EVERY);      // …then every 30 s
+})();
+</script>
+
 </body>
 </html>
