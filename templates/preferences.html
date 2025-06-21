@@ -43,6 +43,13 @@
       <option value="kg"  {% if current_mass=='kg'  %}selected{% endif %}>kg</option>
     </select>
 
+    <h3>Dashboard Preferences</h3>
+    <label>Sort by entry sequence:</label>
+    <select name="dashboard_sort_seq" onchange="this.form.submit()">
+      <option value="no" {% if not sort_seq %}selected{% endif %}>Default grouping</option>
+      <option value="yes" {% if sort_seq     %}selected{% endif %}>Newest first</option>
+    </select>
+
     <!-- ── Radio-operator prefs (cookie only) ───────────────── -->
     <h3>Radio Operator Prefs (per-browser)</h3>
 

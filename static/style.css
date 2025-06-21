@@ -412,10 +412,16 @@ body.radio     .container #radio-table     > table {
   padding: 0 1rem; /* optional gutter */
 }
 
+/* highlight parse‐failure rows (no real data) */
+.failure-border { background-color: #f8d7da; }
+
+/* highlight updated‐existing rows */
+.blue-border    { background-color: #bbdefb; }
+
 /* green highlight for successful entries */
-.green-border {
-  background-color: #C8E6C9;  /* light green */
-}
+.green-border   { background-color: #C8E6C9; }
+
+
 /* break out the radio incoming-feedback table */
 #incoming-feedback,
 #rb-feedback-container > table {

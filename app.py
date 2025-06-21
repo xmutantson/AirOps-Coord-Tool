@@ -595,20 +595,38 @@ def dashboard():
 
     mass_pref = request.cookies.get('mass_unit', 'lbs')
 
-    flights = dict_rows("""
-        SELECT *
-        FROM   flights
-        ORDER BY
-            /* 0 → UNSENT Ramp-Boss rows (sent = 0)     */
-            CASE
-              WHEN is_ramp_entry = 1 AND sent = 0 THEN 0
-              /* 1 → In-Flight rows (not complete)      */
-              WHEN complete = 0                       THEN 1
-              /* 2 → Landed rows (complete = 1)         */
-              ELSE 2
-            END,
-            id DESC          -- newest first inside each bucket
-    """)
+    # --- 1) Tail‐filter from queryparam
+    tail_filter = request.args.get('tail_filter','').strip().upper()
+
+    # --- 2) Sorting preference from cookie
+    sort_seq = request.cookies.get('dashboard_sort_seq','no') == 'yes'
+
+    # --- 3) Build SQL
+    sql = "SELECT * FROM flights"
+    params = ()
+    if tail_filter:
+        sql += " WHERE tail_number = ?"
+        params = (tail_filter,)
+    if sort_seq:
+        sql += " ORDER BY id DESC"
+    else:
+        sql += """
+         ORDER BY
+           CASE
+             WHEN is_ramp_entry = 1 AND sent = 0 THEN 0
+             WHEN complete = 0                       THEN 1
+             ELSE 2
+           END,
+           id DESC
+        """
+    flights = dict_rows(sql, params)
+
+    # --- 4) Auto‐remove completely blank/TBD rows
+    def is_blank_row(f):
+        keys = ['tail_number','origin_view','dest_view',
+                'takeoff_time','eta','cargo_type','cargo_weight','remarks']
+        return all((not f.get(k) or f.get(k)=='TBD') for k in keys)
+    flights = [f for f in flights if not is_blank_row(f)]
 
     for f in flights:
         # 3- vs 4-letter code
@@ -640,8 +658,14 @@ def dashboard():
 
         f['cargo_view'] = cw or 'TBD'
 
-    return render_template('dashboard.html', flights=flights, active='dashboard')
 
+    return render_template(
+        'dashboard.html',
+        flights=flights,
+        active='dashboard',
+        tail_filter=tail_filter,
+        sort_seq=sort_seq
+    )
 # ─── Radio Operator out-box (sortable, clickable table) ───
 @app.route('/radio', methods=['GET','POST'])
 def radio():
@@ -1392,6 +1416,12 @@ def preferences():
                 samesite='Lax'
             )
 
+        # Dashboard sort‐sequence pref → cookie
+        if 'dashboard_sort_seq' in request.form:
+            resp.set_cookie('dashboard_sort_seq',
+                            request.form['dashboard_sort_seq'],
+                            max_age=31_536_000, samesite='Lax')
+
         return resp
 
     # ── GET: read current settings ────────────────────────────────────────
@@ -1416,9 +1446,8 @@ def preferences():
         include_test=include_test,
         current_debug=current_debug,
         current_radio_unsent=current_radio_unsent,
-        active='preferences'
+        sort_seq=request.cookies.get('dashboard_sort_seq','no')=='yes'
     )
-
 
 # ───────────────────────────────────────────────────────────
 if __name__=="__main__":

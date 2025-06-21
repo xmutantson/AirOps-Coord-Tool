@@ -1,3 +1,4 @@
 venv/
 data/
 flask_secret.txt
+graph.json

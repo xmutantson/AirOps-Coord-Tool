@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>3D Graph of Aircraft Ops Tool</title>
+  <style>
+    body { margin: 0; }
+    #3d-graph { width: 100vw; height: 100vh; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <div id="3d-graph"></div>
+
+  <!-- UMD builds without version pinning, plus d3-octree to supply the missing octree function -->
+  <script src="https://unpkg.com/three"></script>
+  <script src="https://unpkg.com/d3-force-3d/dist/d3-force-3d.min.js"></script>
+  <script src="https://unpkg.com/d3-octree"></script>
+  <script src="https://unpkg.com/3d-force-graph/dist/3d-force-graph.min.js"></script>
+
+  <script>
+    console.log('Attempting to load graph.json from', window.location.origin + '/graph.json');
+    fetch('./graph.json')
+      .then(res => {
+        console.log('fetch response:', res);
+        if (!res.ok) throw new Error(`HTTP error ${res.status}: ${res.statusText}`);
+        return res.json();
+      })
+      .then(data => {
+        console.log(`Loaded graph: ${data.nodes.length} nodes, ${data.links.length} links`, data);
+        // filter out links to non-existent nodes
+        const nodeIds = new Set(data.nodes.map(n => n.id));
+        data.links = data.links.filter(l => nodeIds.has(l.source) && nodeIds.has(l.target));
+
+        // initialize the 3D force graph
+        const Graph = ForceGraph3D()(document.getElementById('3d-graph'))
+          .numDimensions(3)
+          .nodeLabel(d => `${d.group}: ${d.label}`)
+          .nodeAutoColorBy('group')
+          .linkDirectionalParticles(0)
+          .linkDirectionalParticleWidth(0)
+          // adjust forces to better cluster the nodes
+          .d3Force('charge', d3.forceManyBody().strength(-50))               // weaker repulsion
+          .d3Force('link', d3.forceLink().id(d => d.id).distance(80).strength(0.8))  // stronger, longer links
+          .d3Force('center', d3.forceCenter(0, 0, 0))                      // center at origin
+          .graphData(data)
+          .onNodeClick(node => {
+            Graph.centerAt(node.x, node.y, 1000);
+            Graph.zoom(4, 1000);
+          })
+          .cooldownTicks(200)
+          .onEngineStop(() => {
+            // automatically fit the graph to the viewport once simulation settles
+            Graph.zoomToFit(1000);
+          });
+      })
+      .catch(err => console.error('Error loading graph data:', err));
+  </script>
+</body>
+</html>
