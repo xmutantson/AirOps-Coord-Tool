@@ -172,7 +172,15 @@
       const f = await resp.json();
 
       // render feedback table
-      feedbackBox.innerHTML = `
+      // pick a border class: red if nothing parsed, blue if update, green otherwise
+      const allBlank = ['tail_number','airfield_takeoff','airfield_landing',
+                        'takeoff_time','eta','cargo_type','cargo_weight','remarks']
+                        .every(k => !f[k] || f[k]==='TBD');
+      const rowClass = allBlank
+        ? 'red-border'
+        : (f.action==='updated' ? 'blue-border' : 'green-border');
+
+      feedbackBox.innerHTML = `      
         <table class="full-bleed">
           <thead>
             <tr>
@@ -182,7 +190,7 @@
             </tr>
           </thead>
           <tbody>
-            <tr class="green-border">
+            <tr class="${rowClass}">
               <td>${f.id}</td>
               <td>${f.direction}</td>
               <td>${f.tail_number}</td>

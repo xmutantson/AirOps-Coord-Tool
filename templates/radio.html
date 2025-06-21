@@ -151,7 +151,7 @@
     const allTbd = [
       p.tail_number, p.airfield_takeoff, p.airfield_landing,
       p.takeoff_time, p.eta, p.cargo_type, p.cargo_weight
-    ].every(v => !v || v==='TBD');
+    ].every(v => !v || v === 'TBD');
     const isUpdate = id !== '—';
     let rowClass = 'green-border';
     if (allTbd)        rowClass = 'red-border';

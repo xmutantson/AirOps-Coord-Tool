@@ -413,7 +413,7 @@ body.radio     .container #radio-table     > table {
 }
 
 /* highlight parse‐failure rows (no real data) */
-.failure-border { background-color: #f8d7da; }
+.red-border { background-color: #f8d7da; }
 
 /* highlight updated‐existing rows */
 .blue-border    { background-color: #bbdefb; }

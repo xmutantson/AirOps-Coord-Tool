@@ -1182,6 +1182,8 @@ def ramp_boss():
                 c.execute("""INSERT INTO flight_history(flight_id,timestamp,data)
                              VALUES (?,?,?)""",
                           (fid, datetime.utcnow().isoformat(), json.dumps(data)))
+                # mark this as a NEW insert
+                action = 'new'
 
         # ---------- in-bound ----------
         else:  # direction == 'inbound'
@@ -1221,10 +1223,12 @@ def ramp_boss():
                                  VALUES (?,?,?)""",
                               (match['id'], datetime.utcnow().isoformat(),
                                json.dumps({'arrival_update': arrival})))
-                    fid = match['id']
+                    action = 'updated'
+                    fid    = match['id']
 
                 else:
                     # ----- no match → insert a standalone inbound row -----
+                    action = 'new'
                     fid = c.execute("""
                         INSERT INTO flights(
                            is_ramp_entry,direction,pilot_name,pax_count,tail_number,
@@ -1241,6 +1245,7 @@ def ramp_boss():
         # ── at this point we have `fid` of the row we inserted/updated ──
         # fetch it back in full
         row = dict_rows("SELECT * FROM flights WHERE id=?", (fid,))[0]
+        row['action'] = action
 
         # if this was XHR (our AJAX), return JSON instead of redirect:
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
