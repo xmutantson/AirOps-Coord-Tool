@@ -805,10 +805,38 @@ def radio():
                        WHERE id=?
                     """, (arrival, new_rem, match['id']))
 
+                    # ── make the change visible to the SELECT below
+                    c.commit()
+
+                    # ── JSON reply for XHR caller (blue success row) ──
+                    if is_ajax:
+                        row = dict_rows(
+                                "SELECT * FROM flights WHERE id=?",
+                                (match['id'],)
+                              )[0]
+                        row['action'] = 'updated'
+                        return jsonify(row)
+
+                    # normal (form-submit) path
                     flash(f"Flight {match['id']} marked as landed at {arrival}.")
                     return redirect(url_for('radio'))
 
-                # ── no existing outbound → insert standalone inbound row ──
+                # ── no matching outbound.  Do we already have this landing? ──
+                dup = c.execute("""
+                   SELECT id FROM flights
+                    WHERE tail_number=? AND eta=? AND complete=1
+                 ORDER BY id DESC LIMIT 1
+                """, (p['tail_number'], arrival)).fetchone()
+
+                if dup:
+                    if is_ajax:
+                        row = dict_rows("SELECT * FROM flights WHERE id=?", (dup['id'],))[0]
+                        row['action'] = 'update_ignored'
+                        return jsonify(row)
+                    flash(f"Landed notice ignored – flight #{dup['id']} already recorded.")
+                    return redirect(url_for('radio'))
+
+                # ── genuinely new inbound landing ──────────────────────────
                 fid = c.execute("""
                   INSERT INTO flights(
                     is_ramp_entry, direction, tail_number,

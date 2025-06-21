@@ -104,7 +104,7 @@
     // POST to server
     const resp = await fetch(window.location.href, {
       method: incomingForm.method,
-      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      headers: { 'X-Requested-With':'XMLHttpRequest' },
       body: formData
     });
     if (!resp.ok) return alert('Failed to log incoming.');
@@ -144,7 +144,7 @@
 
     // detect landing vs in-flight
     const isLanding     = /\blanded\b/i.test(subj);
-    const landMatch     = /\blanded\s*(\d{3,4})/i.exec(subj);
+    const landMatch     = /\blanded\s*(\d{1,2}:?\d{2})/i.exec(subj);  // hmm, hhmm **or** hh:mm
     const displayStatus = isLanding ? '🛬 Landed' : '✈️ In-Flight';
     const displayEta    = isLanding
                          ? (landMatch?.[1].padStart(4,'0') || 'TBD')
