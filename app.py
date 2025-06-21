@@ -605,8 +605,8 @@ def dashboard():
     sql = "SELECT * FROM flights"
     params = ()
     if tail_filter:
-        sql += " WHERE tail_number = ?"
-        params = (tail_filter,)
+        sql += " WHERE tail_number LIKE ?"
+        params = (f"%{tail_filter}%",)
     if sort_seq:
         sql += " ORDER BY id DESC"
     else:
@@ -916,18 +916,30 @@ def dashboard_table_partial():
         code_pref = row[0]['value'] if row else 'icao4'
     mass_pref = request.cookies.get('mass_unit', 'lbs')
 
+    # Tail-filter & sort-order prefs
+    tail_filter = request.args.get('tail_filter','').strip().upper()
+    sort_seq    = request.cookies.get('dashboard_sort_seq','no') == 'yes'
+
     # 2) run the same SQL you use in dashboard()
-    flights = dict_rows("""
-        SELECT *
-        FROM   flights
+    # Build SQL (partial match & your sort sequence)
+    sql    = "SELECT * FROM flights"
+    params = ()
+    if tail_filter:
+        sql += " WHERE tail_number LIKE ?"
+        params = (f"%{tail_filter}%",)
+    if sort_seq:
+        sql += " ORDER BY id DESC"
+    else:
+        sql += """
         ORDER BY
-            CASE
-              WHEN is_ramp_entry = 1 AND sent = 0 THEN 0
-              WHEN complete = 0                       THEN 1
-              ELSE 2
-            END,
-            id DESC
-    """)
+          CASE
+            WHEN is_ramp_entry = 1 AND sent = 0 THEN 0
+            WHEN complete = 0                       THEN 1
+            ELSE 2
+          END,
+          id DESC
+        """
+    flights = dict_rows(sql, params)
 
     # 3) post-process each flight exactly as in dashboard()
     for f in flights:

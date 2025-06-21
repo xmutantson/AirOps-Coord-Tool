@@ -19,7 +19,7 @@
 <script>
   async function refreshDashboard(){
     try {
-      const resp = await fetch('{{ url_for("dashboard_table_partial") }}');
+      const resp = await fetch('{{ url_for("dashboard_table_partial") }}' + window.location.search);
       if (!resp.ok) throw new Error(resp.status);
       document.getElementById('dashboard-table').innerHTML = await resp.text();
     } catch(err){
@@ -43,17 +43,15 @@
 </script>
 
 <script>
-// tail‐filter box behavior
-document.getElementById('tail-filter').addEventListener('input', e => {
-  const v = e.target.value.trim().toUpperCase();
+// tail filter box behavior
+document.getElementById('tail-filter').addEventListener('keyup', e => {
+  if (e.key !== 'Enter') return;                   // only on Enter
+  const v  = e.target.value.trim().toUpperCase();
   const qs = new URLSearchParams(window.location.search);
   if (v) qs.set('tail_filter', v);
-  else    qs.delete('tail_filter');
-  // reload with new filter
+  else  qs.delete('tail_filter');
   window.location.search = qs.toString();
 });
-
-// -------------------------------------------------------------------
 </script>
 
 {% endblock %}
