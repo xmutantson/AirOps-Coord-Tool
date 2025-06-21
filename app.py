@@ -595,6 +595,26 @@ def refresh_user_cookies(response):
             )
     return response
 
+# ──────────────────────────────────────────────────────────
+#  Purge rows with **no meaningful data**
+# ──────────────────────────────────────────────────────────
+def purge_blank_flights() -> None:
+    """Remove flights where *every* user-facing field is blank or “TBD”."""
+    with sqlite3.connect(DB_FILE) as c:
+        c.execute(
+            """
+            DELETE FROM flights
+             WHERE (IFNULL(tail_number      ,'') IN ('','TBD'))
+               AND (IFNULL(airfield_takeoff ,'') IN ('','TBD'))
+               AND (IFNULL(airfield_landing ,'') IN ('','TBD'))
+               AND (IFNULL(takeoff_time     ,'') IN ('','TBD'))
+               AND (IFNULL(eta              ,'') IN ('','TBD'))
+               AND (IFNULL(cargo_type       ,'') IN ('','TBD'))
+               AND (IFNULL(cargo_weight     ,'') IN ('','TBD'))
+               AND (IFNULL(remarks          ,'') =  '')
+            """
+        )
+
 # ───────────────── routes ─────────────────────────────────
 
 @app.route('/trigger-500')
@@ -635,6 +655,7 @@ def lookup_tail(tail):
 # --- dashboard route --------------------------------------
 @app.route('/')
 def dashboard():
+    purge_blank_flights()
     # per-browser preferences
     cookie_code = request.cookies.get('code_format')
     if cookie_code:
@@ -985,6 +1006,7 @@ def radio():
 
 @app.route('/_dashboard_table')
 def dashboard_table_partial():
+    purge_blank_flights()
     # 1) figure out code_pref & mass_pref exactly as in dashboard()
     cookie_code = request.cookies.get('code_format')
     if cookie_code:
