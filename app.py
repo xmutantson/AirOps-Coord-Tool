@@ -21,7 +21,7 @@ from flask_limiter.util import get_remote_address
 from flask import (
     Flask, render_template, request, redirect,
     url_for, send_file, flash, make_response,
-    jsonify
+    jsonify, Response
 )
 
 from flask_wtf import CSRFProtect
@@ -1142,23 +1142,19 @@ def radio():
 @app.route('/_dashboard_table')
 def dashboard_table_partial():
     purge_blank_flights()
-    # 1) figure out code_pref & mass_pref exactly as in dashboard()
+    # compute code_pref, mass_pref, hide_tbd, tail_filter, sort_seq, sql, params...
     cookie_code = request.cookies.get('code_format')
-    if cookie_code:
-        code_pref = cookie_code
-    else:
-        row = dict_rows("SELECT value FROM preferences WHERE name='code_format'")
-        code_pref = row[0]['value'] if row else 'icao4'
-    mass_pref = request.cookies.get('mass_unit', 'lbs')
-    hide_tbd  = request.cookies.get('hide_tbd', 'yes') == 'yes'
+    code_pref   = cookie_code or (
+        dict_rows("SELECT value FROM preferences WHERE name='code_format'")
+        or [{'value':'icao4'}]
+    )[0]['value']
+    mass_pref = request.cookies.get('mass_unit','lbs')
+    hide_tbd  = request.cookies.get('hide_tbd','yes') == 'yes'
 
-    # Tail-filter & sort-order prefs
     tail_filter = request.args.get('tail_filter','').strip().upper()
     sort_seq    = request.cookies.get('dashboard_sort_seq','no') == 'yes'
 
-    # 2) run the same SQL you use in dashboard()
-    # Build SQL (partial match & your sort sequence)
-    sql    = "SELECT * FROM flights"
+    sql = "SELECT * FROM flights"
     params = ()
     if tail_filter:
         sql += " WHERE tail_number LIKE ?"
@@ -1167,45 +1163,26 @@ def dashboard_table_partial():
         sql += " ORDER BY id DESC"
     else:
         sql += """
-        ORDER BY
-          CASE
-            WHEN is_ramp_entry = 1 AND sent = 0 THEN 0
-            WHEN complete = 0                       THEN 1
-            ELSE 2
-          END,
-          id DESC
+          ORDER BY
+            CASE
+              WHEN is_ramp_entry = 1 AND sent = 0 THEN 0
+              WHEN complete = 0                       THEN 1
+              ELSE 2
+            END,
+            id DESC
         """
-    flights = dict_rows(sql, params)
 
-    # 3) post-process each flight exactly as in dashboard()
-    for f in flights:
-        f['origin_view'] = format_airport(f.get('airfield_takeoff',''), code_pref)
-        f['dest_view']   = format_airport(f.get('airfield_landing',''), code_pref)
-        if (f.get('direction')=='outbound'
-            and f.get('eta')
-            and not f.get('complete',0)):
-            f['eta_view'] = f['eta'] + '*'
-        else:
-            f['eta_view'] = f.get('eta','TBD')
+    # Open a DB cursor for streaming
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.execute(sql, params)
 
-        # mass conversion
-        cw = (f.get('cargo_weight') or '').strip()
-        m_lbs = re.match(r'([\d.]+)\s*lbs', cw, re.I)
-        m_kg  = re.match(r'([\d.]+)\s*kg',  cw, re.I)
-        if mass_pref=='kg' and m_lbs:
-            v  = round(float(m_lbs.group(1)) / 2.20462, 1)
-            cw = f'{v} kg'
-        elif mass_pref=='lbs' and m_kg:
-            v  = round(float(m_kg.group(1)) * 2.20462, 1)
-            cw = f'{v} lbs'
-        f['cargo_view'] = cw or 'TBD'
+    # Let Jinja stream the same partial, iterating over our cursor
+    tmpl   = app.jinja_env.get_template('partials/_dashboard_table.html')
+    stream = tmpl.stream(flights=cursor, hide_tbd=hide_tbd)
+    stream.enable_buffering(5)   # flush up to 5 rows at a time
 
-    # 4) render only the table partial
-    return render_template(
-        'partials/_dashboard_table.html',
-        flights=flights,
-        hide_tbd=hide_tbd
-    )
+    return Response(stream, mimetype='text/html')
 
 @app.route('/_radio_table')
 def radio_table_partial():
