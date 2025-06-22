@@ -143,6 +143,16 @@ def inject_network_info():
         'host_ip'  : HOST_IP,
     }
 
+@app.context_processor
+def inject_hide_pref():
+    """
+    Expose `hide_tbd` to all Jinja templates so
+    our macros can conditionally blank out TBD cells.
+    """
+    return {
+        'hide_tbd': request.cookies.get('hide_tbd','yes') == 'yes'
+    }
+
 # ───────────────── DB init & migrations ──────────────────
 def init_db():
     with sqlite3.connect(DB_FILE) as c:

@@ -44,6 +44,18 @@
     </select>
 
     <h3>Dashboard Preferences</h3>
+
+    <div class="form-group">
+      <label>
+        <input
+          type="checkbox"
+          name="hide_tbd"
+          onchange="this.form.submit()"
+          {% if hide_tbd %}checked{% endif %}>
+        Hide “TBD” / empty cells in tables
+      </label>
+    </div>
+
     <label>Sort by entry sequence:</label>
     <select name="dashboard_sort_seq" onchange="this.form.submit()">
       <option value="no" {% if not sort_seq %}selected{% endif %}>Default grouping</option>
