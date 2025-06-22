@@ -12,9 +12,7 @@
          style="margin-left:1rem;padding:0.3em;border-radius:4px;border:1px solid #ccc">
 </div>
 
-  <div id="dashboard-table">
-    {% include 'partials/_dashboard_table.html' %}
-  </div>
+  <div id="dashboard-table"></div>
 
 <script>
   async function refreshDashboard(){
@@ -28,6 +26,8 @@
   }
   // Refresh every 30 seconds:
   setInterval(refreshDashboard, 30_000);
+  //call dashboard update once, to let the intial load (lazily)
+  refreshDashboard()
 </script>
 
 <script>

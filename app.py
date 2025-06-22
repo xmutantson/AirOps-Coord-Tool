@@ -21,7 +21,7 @@ from flask_limiter.util import get_remote_address
 from flask import (
     Flask, render_template, request, redirect,
     url_for, send_file, flash, make_response,
-    jsonify, Response
+    jsonify, Response, stream_with_context
 )
 
 from flask_wtf import CSRFProtect
@@ -1182,7 +1182,8 @@ def dashboard_table_partial():
     stream = tmpl.stream(flights=cursor, hide_tbd=hide_tbd)
     stream.enable_buffering(5)   # flush up to 5 rows at a time
 
-    return Response(stream, mimetype='text/html')
+    # wrap in stream_with_context so url_for() (and other request/api) works
+    return Response(stream_with_context(stream), mimetype='text/html')
 
 @app.route('/_radio_table')
 def radio_table_partial():
