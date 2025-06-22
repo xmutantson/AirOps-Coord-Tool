@@ -1,7 +1,19 @@
+{#  
+   flight_row: for the Dashboard  
+   • yellow-border only if this is a ramp-entry AND sent==0  
+   • hide or show “TBD” based on the hide_tbd cookie  
+#}
 {% macro flight_row(f) -%}
-<tr class="clickable {{ 'yellow-border' if f.sent==0 }}">
-  <td>{{ f.id }}</td>
-  <td class="status">{{ '🛬' if f.complete else '✈️' }}</td>
+<tr class="clickable{% if f.is_ramp_entry and f.sent == 0 %} yellow-border{% endif %}">
+  <td>
+    <a href="{{ url_for('edit_flight', fid=f.id) }}">
+      {{ f.id }} ✏️
+    </a>
+  </td>
+  <td class="status">
+    {% if f.complete %}🛬 Landed{% else %}✈️ In-Flight{% endif %}
+  </td>
+
   {%- for field in [
        'tail_number','pilot_name','pax_count',
        'origin_view','takeoff_time','dest_view',
@@ -18,12 +30,22 @@
 </tr>
 {%- endmacro %}
 
+
+{#  
+   radio_row: for the Radio-operator table  
+   • yellow-border only if unsent  
+   • row click navigates to detail view  
+   • same hide-TBD logic  
+#}
 {% macro radio_row(f) -%}
 <tr
-  class="clickable {{ 'yellow-border' if f.sent==0 }}"
+  class="clickable{% if f.sent == 0 %} yellow-border{% endif %}"
   onclick="location.href='{{ url_for('radio_detail', fid=f.id) }}'">
   <td>{{ f.id }}</td>
-  <td class="status">{{ '🛬' if f.complete else '✈️' }}</td>
+  <td class="status">
+    {% if f.complete %}🛬{% else %}✈️{% endif %}
+  </td>
+
   {%- for field in [
        'tail_number','pilot_name','pax_count',
        'origin_view','takeoff_time','dest_view',
