@@ -286,9 +286,11 @@ def format_airport(raw_code: str, pref: str) -> str:
         row = c.execute("""
           SELECT *
             FROM airports
-           WHERE ? IN (icao_code, iata_code, local_code, gps_code, ident)
+           WHERE ? IN (icao_code, iata_code, gps_code, local_code, ident)
+           /* prefer real ICAO / IATA over stray local_code hits like AYBM=BLI */
+           ORDER BY (icao_code = ? OR iata_code = ?) DESC
            LIMIT 1
-        """, (code,)).fetchone()
+        """, (code, code, code)).fetchone()
 
     if not row:
         return raw_code
