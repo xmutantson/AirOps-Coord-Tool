@@ -195,6 +195,18 @@
       remarks:          srvJson.remarks          ?? rem
     };
 
+    /* ── fallback: if everything important is blank/TBD, force RED ── */
+    const allBlank = [
+      row.tail_number,
+      row.airfield_takeoff,
+      row.airfield_landing,
+      row.takeoff_time,
+      row.eta,
+      row.cargo_type,
+      row.cargo_weight
+    ].every(v => !v || v === 'TBD');
+    if (allBlank) rowClass = 'red-border';
+
     feedbackBox.innerHTML = `
       <table id="incoming-feedback">
         <thead>
