@@ -6,12 +6,12 @@
        'tail_number','pilot_name','pax_count',
        'origin_view','takeoff_time','dest_view',
        'eta_view','cargo_type','cargo_view','remarks'
-    ] %}
+     ] %}
     <td>
       {% if hide_tbd %}
-        {{ attribute(f, field) | hide_tbd }}
+        {{ f[field] | hide_tbd }}
       {% else %}
-        {{ attribute(f, field) or 'TBD' }}
+        {{ f[field] or 'TBD' }}
       {% endif %}
     </td>
   {%- endfor %}
@@ -28,12 +28,12 @@
        'tail_number','pilot_name','pax_count',
        'origin_view','takeoff_time','dest_view',
        'eta_view','cargo_type','cargo_view','remarks'
-    ] %}
+     ] %}
     <td>
       {% if hide_tbd %}
-        {{ attribute(f, field) | hide_tbd }}
+        {{ f[field] | hide_tbd }}
       {% else %}
-        {{ attribute(f, field) or 'TBD' }}
+        {{ f[field] or 'TBD' }}
       {% endif %}
     </td>
   {%- endfor %}
