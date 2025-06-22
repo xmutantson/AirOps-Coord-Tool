@@ -30,6 +30,8 @@ from markupsafe import escape
 import sqlite3, csv, io, re, os, json
 from datetime import datetime
 
+from functools import lru_cache
+
 from zeroconf import Zeroconf, ServiceInfo
 import fcntl
 import struct
@@ -123,6 +125,9 @@ limiter = Limiter(
 
 # advertise our webapp on mDNS:
 MDNS_NAME, HOST_IP = register_mdns("rampops", 5150)
+
+# LRU-cache airport formatting (up to 250 entries)
+_fmt_airport = lru_cache(maxsize=250)(format_airport)
 
 @app.context_processor
 def inject_debug_pref():
@@ -1104,11 +1109,43 @@ def dashboard_table_partial():
     # Open a DB cursor for streaming
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
-    cursor = conn.execute(sql, params)
+    raw_cursor = conn.execute(sql, params)
+
+    # Generator to enrich each row with view-fields
+    def gen_rows():
+        for r in raw_cursor:
+            d = dict(r)
+
+            # airport formatting (cached)
+            d['origin_view'] = _fmt_airport(d.get('airfield_takeoff',''), code_pref)
+            d['dest_view']   = _fmt_airport(d.get('airfield_landing',''), code_pref)
+
+            # ETA / arrival view
+            if d.get('direction')=='outbound' and d.get('eta') and not d.get('complete'):
+                d['eta_view'] = d['eta'] + '*'
+            else:
+                d['eta_view'] = d.get('eta') or 'TBD'
+
+            # cargo weight view + unit conversion
+            cw = (d.get('cargo_weight') or '').strip()
+            m_lbs = re.match(r'([\d.]+)\s*lbs', cw, re.I)
+            m_kg  = re.match(r'([\d.]+)\s*kg',  cw, re.I)
+            if mass_pref=='kg' and m_lbs:
+                v = round(float(m_lbs.group(1)) / 2.20462, 1)
+                d['cargo_view'] = f"{v} kg"
+            elif mass_pref=='lbs' and m_kg:
+                v = round(float(m_kg.group(1)) * 2.20462, 1)
+                d['cargo_view'] = f"{v} lbs"
+            else:
+                d['cargo_view'] = cw or 'TBD'
+
+            yield d
+
+
 
     # Let Jinja stream the same partial, iterating over our cursor
     tmpl   = app.jinja_env.get_template('partials/_dashboard_table.html')
-    stream = tmpl.stream(flights=cursor, hide_tbd=hide_tbd)
+    stream = tmpl.stream(flights=gen_rows(), hide_tbd=hide_tbd)
     stream.enable_buffering(5)   # flush up to 5 rows at a time
 
     # wrap in stream_with_context so url_for() (and other request/api) works
