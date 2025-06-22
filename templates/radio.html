@@ -123,8 +123,9 @@
                       .trim();
     const sm = new RegExp(
       String.raw`Air Ops:\s*([^|]+?)\s*\|\s*([^|]+?)\s*to\s*([^|]+?)\s*\|\s*` +
-      String.raw`(?:took off\s*(\d{1,2}:?\d{2})\s*\|\s*ETA\s*(\d{1,2}:?\d{2})` +
-      String.raw`|took off\s*(\d{1,2}:?\d{2})\s*\|\s*landed\s*(\d{1,2}:?\d{2})` +
+      String.raw`(?:` +
+      String.raw`(?:took off|takeoff\s+estimate)\s*(\d{1,2}:?\d{2})\s*\|\s*ETA\s*(\d{1,2}:?\d{2})` +
+      String.raw`|(?:took off|takeoff\s+estimate)\s*(\d{1,2}:?\d{2})\s*\|\s*landed\s*(\d{1,2}:?\d{2})` +
       String.raw`|landed\s*(\d{1,2}:?\d{2}))`,
       'i'
     );

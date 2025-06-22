@@ -317,7 +317,7 @@ air_ops_re = re.compile(r"""
     (?P<tail>[^|]+?)\s*\|\s*
     (?P<from>[^|]+?)\s*to\s*(?P<to>[^|]+?)\s*\|\s*
     (?:                                    # optional “took off HHMM”
-       took\ off\s*(?P<tko>\d{1,2}:?\d{2})
+       (?:took\ off|takeoff\s+estimate)\s*(?P<tko>\d{1,2}:?\d{2})
        (?:\s*\|\s*|\s+)                   # allow “|” *or* just space before next
     )?
     (?:                                    # optional ETA or landed segment
