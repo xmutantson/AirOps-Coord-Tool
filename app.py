@@ -126,9 +126,6 @@ limiter = Limiter(
 # advertise our webapp on mDNS:
 MDNS_NAME, HOST_IP = register_mdns("rampops", 5150)
 
-# LRU-cache airport formatting (up to 250 entries)
-_fmt_airport = lru_cache(maxsize=250)(format_airport)
-
 @app.context_processor
 def inject_debug_pref():
     # expose as `show_debug` in **all** Jinja templates
@@ -327,6 +324,9 @@ def format_airport(raw_code: str, pref: str) -> str:
 
     # fallback
     return raw_code
+
+# Cache airport lookups (up to 250 entries)
+_fmt_airport = lru_cache(maxsize=250)(format_airport)
 
 # ── Winlink parser with conversions ──────────────────────
 # allow either “ETA” or “landed” before the time, so that
