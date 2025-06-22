@@ -169,13 +169,13 @@
        Pick highlight purely from what the server tells us.
          new            → green
          updated        → blue
-         update_ignored → yellow
+         update_ignored → grey
          anything else  → red   (parse-failure / nothing useful)
     ----------------------------------------------------------- */
     let rowClass = 'red-border';
     if      (srvJson.action === 'new')            rowClass = 'green-border';
     else if (srvJson.action === 'updated')        rowClass = 'blue-border';
-    else if (srvJson.action === 'update_ignored') rowClass = 'yellow-border';
+    else if (srvJson.action === 'update_ignored') rowClass = 'grey-border';
 
     /* -----------------------------------------------------------
        Prefer the fresh row that just came back from the server

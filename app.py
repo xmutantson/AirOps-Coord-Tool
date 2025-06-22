@@ -864,6 +864,13 @@ def radio():
                   'inbound_landing': arrival
                 })))
 
+                if is_ajax:
+                    row = dict_rows(
+                              "SELECT * FROM flights WHERE id=?", (fid,)
+                          )[0]
+                    row['action'] = 'new'
+                    return jsonify(row)
+
                 flash(f"Landed notice logged as new inbound entry #{fid}.")
                 return redirect(url_for('radio'))
 

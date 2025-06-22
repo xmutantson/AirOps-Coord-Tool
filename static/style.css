@@ -104,6 +104,8 @@ tr.yellow-border {
 tr.green-border {
   background-color: #81C784;
 }
+/* static/style.css */
+.grey-border   { background-color:#cccccc; }
 
 /* ===============================================================
    Forms & Buttons (global)
