@@ -830,7 +830,13 @@ def radio():
 
                 if dup:
                     if is_ajax:
-                        row = dict_rows("SELECT * FROM flights WHERE id=?", (dup['id'],))[0]
+                        # Always return the *entire* flight row so the
+                        # feedback table can show real data instead of TBD
+                        full = dict_rows(
+                                   "SELECT * FROM flights WHERE id=?",
+                                   (dup['id'],)
+                               )
+                        row = full[0] if full else {'id': dup['id']}
                         row['action'] = 'update_ignored'
                         return jsonify(row)
                     flash(f"Landed notice ignored – flight #{dup['id']} already recorded.")
