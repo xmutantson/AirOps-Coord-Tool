@@ -899,15 +899,31 @@ def radio():
             ).fetchone()
 
             if f:
-                # snapshot & update existing flight
+                # snapshot current row
                 before = dict_rows("SELECT * FROM flights WHERE id=?", (f['id'],))[0]
+
+                # --- decide if anything would really change ---------------
+                no_change = (
+                    before['airfield_takeoff'] == p['airfield_takeoff'] and
+                    before['airfield_landing'] == p['airfield_landing'] and
+                    (p['eta'] or before['eta']) == before['eta'] and
+                    (p['cargo_type']   or before['cargo_type'])   == before['cargo_type'] and
+                    (p['cargo_weight'] or before['cargo_weight']) == before['cargo_weight'] and
+                    (p.get('remarks','') or before['remarks'])    == before['remarks']
+                )
+
+                if no_change:
+                    if is_ajax:
+                        return jsonify({'id': f['id'], 'action': 'update_ignored'})
+                    flash(f"Duplicate Winlink ignored (flight #{f['id']}).")
+                    return redirect(url_for('radio'))
+
+                # ----- real change → record history then update ----------
                 c.execute("""
                   INSERT INTO flight_history(flight_id, timestamp, data)
                   VALUES (?,?,?)
                 """, (f['id'], datetime.utcnow().isoformat(), json.dumps(before)))
 
-                # conditional-field update so blanks don’t overwrite
-                # only overwrite ETA if we actually parsed one
                 c.execute(f"""
                   UPDATE flights SET
                     airfield_takeoff = ?,
@@ -921,11 +937,9 @@ def radio():
                   p['airfield_takeoff'],
                   p['airfield_landing'],
                   p['eta'], p['eta'],
-
                   p['cargo_type'],   p['cargo_type'],
                   p['cargo_weight'], p['cargo_weight'],
                   p.get('remarks',''), p.get('remarks',''),
-
                   f['id']
                 ))
 
