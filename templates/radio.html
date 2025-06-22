@@ -180,6 +180,7 @@
     /* -----------------------------------------------------------
        Prefer the fresh row that just came back from the server
        (it has authoritative values), fall back to local parse.
+       ── Field names match those used in the table below ──
     ----------------------------------------------------------- */
     const row = {
       id:               srvJson.id               ?? id,
@@ -225,10 +226,10 @@
             <td>${row.tail_number  ?? p.tail_number}</td>
             <td>${row.pilot_name   ?? pilot}</td>
             <td>${row.pax_count    ?? pax}</td>
-            <td>${row.airfield_takeoff ?? p.airfield_takeoff}</td>
-            <td>${row.takeoff_time ?? p.takeoff_time}</td>
-            <td>${row.airfield_landing ?? p.airfield_landing}</td>
-            <td>${row.eta ?? displayEta}</td>
+            <td>${row.airfield_takeoff}</td>
+            <td>${row.takeoff_time}</td>
+            <td>${row.airfield_landing}</td>
+            <td>${row.eta}</td>
             <td>${row.cargo_type   ?? p.cargo_type}</td>
             <td>${row.cargo_weight ?? p.cargo_weight}</td>
             <td>${row.remarks      ?? rem}</td>
