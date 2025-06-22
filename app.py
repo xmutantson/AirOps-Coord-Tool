@@ -676,89 +676,18 @@ def lookup_tail(tail):
 # --- dashboard route --------------------------------------
 @app.route('/')
 def dashboard():
-    purge_blank_flights()
-    # per-browser preferences
-    cookie_code = request.cookies.get('code_format')
-    if cookie_code:
-        code_pref = cookie_code
-    else:
-        row = dict_rows("SELECT value FROM preferences WHERE name='code_format'")
-        code_pref = row[0]['value'] if row else 'icao4'
-
-    mass_pref = request.cookies.get('mass_unit', 'lbs')
-    hide_tbd  = request.cookies.get('hide_tbd', 'yes') == 'yes'
-
-    # --- 1) Tail‐filter from queryparam
+    """
+    Render *only* the page skeleton.  The <div id="dashboard-table">
+    will be populated via AJAX from /_dashboard_table (streaming).
+    """
+    # pass tail_filter so the input box shows the right value
     tail_filter = request.args.get('tail_filter','').strip().upper()
-
-    # --- 2) Sorting preference from cookie
-    sort_seq = request.cookies.get('dashboard_sort_seq','no') == 'yes'
-
-    # --- 3) Build SQL
-    sql = "SELECT * FROM flights"
-    params = ()
-    if tail_filter:
-        sql += " WHERE tail_number LIKE ?"
-        params = (f"%{tail_filter}%",)
-    if sort_seq:
-        sql += " ORDER BY id DESC"
-    else:
-        sql += """
-         ORDER BY
-           CASE
-             WHEN is_ramp_entry = 1 AND sent = 0 THEN 0
-             WHEN complete = 0                       THEN 1
-             ELSE 2
-           END,
-           id DESC
-        """
-    flights = dict_rows(sql, params)
-
-    # --- 4) Auto‐remove completely blank/TBD rows
-    def is_blank_row(f):
-        keys = ['tail_number','origin_view','dest_view',
-                'takeoff_time','eta','cargo_type','cargo_weight','remarks']
-        return all((not f.get(k) or f.get(k)=='TBD') for k in keys)
-    flights = [f for f in flights if not is_blank_row(f)]
-
-    for f in flights:
-        # 3- vs 4-letter code
-        f['origin_view'] = format_airport(f.get('airfield_takeoff',''), code_pref)
-        f['dest_view']   = format_airport(f.get('airfield_landing',''), code_pref)
-
-        # ETA / Arrival view  – add “*” **only** for OPEN outbound legs
-        if (
-            f.get('direction') == 'outbound'       # outbound leg
-            and f.get('eta')                       # ETA present
-            and not f.get('complete', 0)           # leg not yet completed
-        ):
-            f['eta_view'] = f['eta'] + '*'
-        else:
-            f['eta_view'] = f.get('eta', 'TBD')
-
-        # mass-unit view
-        cw = (f.get('cargo_weight') or '').strip()
-        if cw:
-            m_lbs = re.match(r'([\d.]+)\s*lbs', cw, re.I)
-            m_kg  = re.match(r'([\d.]+)\s*kg',  cw, re.I)
-
-            if mass_pref == 'kg' and m_lbs:
-                v = round(float(m_lbs.group(1)) / 2.20462, 1)
-                cw = f'{v} kg'
-            elif mass_pref == 'lbs' and m_kg:
-                v = round(float(m_kg.group(1)) * 2.20462, 1)
-                cw = f'{v} lbs'
-
-        f['cargo_view'] = cw or 'TBD'
-
     return render_template(
         'dashboard.html',
-        flights=flights,
         active='dashboard',
-        tail_filter=tail_filter,
-        sort_seq=sort_seq,
-        hide_tbd=hide_tbd
+        tail_filter=tail_filter
     )
+
 # ─── Radio Operator out-box (sortable, clickable table) ───
 @app.route('/radio', methods=['GET','POST'])
 def radio():
