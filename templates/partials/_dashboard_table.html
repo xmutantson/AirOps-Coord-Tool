@@ -19,7 +19,7 @@
   {% import '_flight_macros.html' as macros %}
   <tbody>
     {% for f in flights %}
-      {{ macros.flight_row(f) }}
+      {{ macros.flight_row(f, hide_tbd) }}
     {% endfor %}
   </tbody>
 </table>

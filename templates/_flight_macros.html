@@ -1,62 +1,46 @@
-{#  
-   flight_row: for the Dashboard  
-   • yellow-border only if this is a ramp-entry AND sent==0  
-   • hide or show “TBD” based on the hide_tbd cookie  
-#}
-{% macro flight_row(f) -%}
+{# templates/_flight_macros.html #}
+
+{% macro flight_row(f, hide_tbd) -%}
 <tr class="clickable{% if f.is_ramp_entry and f.sent == 0 %} yellow-border{% endif %}">
   <td>
-    <a href="{{ url_for('edit_flight', fid=f.id) }}">
-      {{ f.id }} ✏️
-    </a>
+    <a href="{{ url_for('edit_flight', fid=f.id) }}">{{ f.id }} ✏️</a>
   </td>
   <td class="status">
     {% if f.complete %}🛬 Landed{% else %}✈️ In-Flight{% endif %}
   </td>
-
   {%- for field in [
        'tail_number','pilot_name','pax_count',
        'origin_view','takeoff_time','dest_view',
        'eta_view','cargo_type','cargo_view','remarks'
      ] %}
     <td>
-      {% if hide_tbd %}
+      {%- if hide_tbd %}
         {{ f[field] | hide_tbd }}
-      {% else %}
+      {%- else %}
         {{ f[field] or 'TBD' }}
-      {% endif %}
+      {%- endif %}
     </td>
   {%- endfor %}
 </tr>
 {%- endmacro %}
 
 
-{#  
-   radio_row: for the Radio-operator table  
-   • yellow-border only if unsent  
-   • row click navigates to detail view  
-   • same hide-TBD logic  
-#}
-{% macro radio_row(f) -%}
-<tr
-  class="clickable{% if f.sent == 0 %} yellow-border{% endif %}"
-  onclick="location.href='{{ url_for('radio_detail', fid=f.id) }}'">
+{% macro radio_row(f, hide_tbd) -%}
+<tr class="clickable{% if f.sent == 0 %} yellow-border{% endif %}"
+    onclick="location.href='{{ url_for('radio_detail',fid=f.id) }}'">
   <td>{{ f.id }}</td>
-  <td class="status">
-    {% if f.complete %}🛬{% else %}✈️{% endif %}
-  </td>
-
+  <td class="status">{% if f.complete %}🛬{% else %}✈️{% endif %}</td>
   {%- for field in [
        'tail_number','pilot_name','pax_count',
        'origin_view','takeoff_time','dest_view',
        'eta_view','cargo_type','cargo_view','remarks'
      ] %}
     <td>
-      {% if hide_tbd %}
+      {%- if hide_tbd %}
         {{ f[field] | hide_tbd }}
-      {% else %}
+      {%- else %}
         {{ f[field] or 'TBD' }}
-      {% endif %}
+      {%- endif %}
     </td>
   {%- endfor %}
 </tr>
