@@ -758,6 +758,21 @@ def radio():
         if tail_override:
             p['tail_number'] = tail_override
 
+        # ── post-clean the two HHMM fields ────────────────────────────────
+        def _clean(t: str) -> str:
+            if not t:
+                return ''
+            u = t.upper().strip()
+            # Any flavour of “UNK / UNKN / UNKNOWN” => blank
+            if re.match(r'^UNK(?:N|KNOWN)?$', u):
+                return ''
+            # Strip trailing “L” / “LOCAL”
+            u = re.sub(r'\b(?:L|LOCAL)$', '', u).strip()
+            return u                  # already zero-padded by parse_winlink()
+
+        p['takeoff_time'] = _clean(p['takeoff_time'])
+        p['eta']          = _clean(p['eta'])
+
         with sqlite3.connect(DB_FILE) as c:
             c.row_factory = sqlite3.Row
 
@@ -979,6 +994,28 @@ def radio():
 
             else:
                 # ── NEW NON-RAMP ENTRY ────────────────────────────
+                # ── auto-close earlier open legs for this tail ──
+                open_prev = c.execute("""
+                    SELECT id, remarks FROM flights
+                     WHERE tail_number=? AND complete=0
+                """, (p['tail_number'],)).fetchall()
+
+                for prev in open_prev:
+                    before = dict_rows("SELECT * FROM flights WHERE id=?", (prev['id'],))[0]
+                    c.execute("""
+                        INSERT INTO flight_history(flight_id,timestamp,data)
+                        VALUES (?,?,?)
+                    """, (prev['id'], datetime.utcnow().isoformat(),
+                          json.dumps(before)))
+
+                    suffix  = f"Auto-closed at {p['takeoff_time'] or 'next leg'}"
+                    new_rem = (prev['remarks'] + " / " if prev['remarks'] else "") + suffix
+
+                    c.execute("""
+                        UPDATE flights
+                           SET complete=1, sent=0, remarks=?
+                         WHERE id=?
+                    """, (new_rem, prev['id']))
                 fid = c.execute("""
                   INSERT INTO flights(
                     is_ramp_entry,

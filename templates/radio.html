@@ -144,6 +144,17 @@
       cargo_weight:     cw?.[1]?.trim() || 'TBD'
     };
 
+
+    /* same post-clean as back-end */
+    const clean = t => {
+      if (!t) return '';
+      let u = t.toUpperCase().trim();
+      if (/^UNK(?:N|KNOWN)?$/.test(u)) return 'TBD';
+      return u.replace(/\b(?:L|LOCAL)$/i, '').trim();
+    };
+    p.takeoff_time = clean(p.takeoff_time);
+    p.eta          = clean(p.eta);
+
     // lookup existing flight for id/pilot/pax/remarks
     let id    = '—', pilot = '—', pax = '—', rem = '';
         prior = null;   // ← will hold the JSON row if it exists
