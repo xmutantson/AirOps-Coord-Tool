@@ -856,17 +856,20 @@ def radio():
                   p.get('remarks','')
                 )).lastrowid
 
-                # record history
+                # 1) make the INSERT visible to any parallel reads
+                c.commit()
+
+                # 2) record history BEFORE we might return
                 c.execute("""
                   INSERT INTO flight_history(flight_id, timestamp, data)
                   VALUES (?,?,?)
-                """, (fid, datetime.utcnow().isoformat(), json.dumps({
-                  'inbound_landing': arrival
-                })))
+                """, (fid, datetime.utcnow().isoformat(),
+                      json.dumps({'inbound_landing': arrival})))
 
+                # 3) AJAX caller wants the fresh row back
                 if is_ajax:
                     row = dict_rows(
-                              "SELECT * FROM flights WHERE id=?", (fid,)
+                            "SELECT * FROM flights WHERE id=?", (fid,)
                           )[0]
                     row['action'] = 'new'
                     return jsonify(row)
@@ -931,11 +934,15 @@ def radio():
 
                 # ── JSON reply for AJAX caller ───────────────────────────
                 if is_ajax:
-                    row = dict_rows(
-                            "SELECT * FROM flights WHERE id=?",
-                            (f['id'],)
-                          )[0]
-                    row['action'] = 'updated'
+                    row_id = f['id']                 # should always exist
+                    rs     = dict_rows(
+                               "SELECT * FROM flights WHERE id=?", (row_id,)
+                             )
+                    if rs:                           # happy path
+                        row = rs[0]
+                        row['action'] = 'updated'
+                    else:                            # defensive fallback
+                        row = {'id': row_id, 'action': 'updated'}
                     return jsonify(row)
 
                 # ── normal (form-submit) path ────────────────────────────
