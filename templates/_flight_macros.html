@@ -1,0 +1,41 @@
+{% macro flight_row(f) -%}
+<tr class="clickable {{ 'yellow-border' if f.sent==0 }}">
+  <td>{{ f.id }}</td>
+  <td class="status">{{ '🛬' if f.complete else '✈️' }}</td>
+  {%- for field in [
+       'tail_number','pilot_name','pax_count',
+       'origin_view','takeoff_time','dest_view',
+       'eta_view','cargo_type','cargo_view','remarks'
+    ] %}
+    <td>
+      {% if hide_tbd %}
+        {{ attribute(f, field) | hide_tbd }}
+      {% else %}
+        {{ attribute(f, field) or 'TBD' }}
+      {% endif %}
+    </td>
+  {%- endfor %}
+</tr>
+{%- endmacro %}
+
+{% macro radio_row(f) -%}
+<tr
+  class="clickable {{ 'yellow-border' if f.sent==0 }}"
+  onclick="location.href='{{ url_for('radio_detail', fid=f.id) }}'">
+  <td>{{ f.id }}</td>
+  <td class="status">{{ '🛬' if f.complete else '✈️' }}</td>
+  {%- for field in [
+       'tail_number','pilot_name','pax_count',
+       'origin_view','takeoff_time','dest_view',
+       'eta_view','cargo_type','cargo_view','remarks'
+    ] %}
+    <td>
+      {% if hide_tbd %}
+        {{ attribute(f, field) | hide_tbd }}
+      {% else %}
+        {{ attribute(f, field) or 'TBD' }}
+      {% endif %}
+    </td>
+  {%- endfor %}
+</tr>
+{%- endmacro %}

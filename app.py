@@ -272,6 +272,14 @@ def norm_weight(w:str, unit:str)->str:
     if unit=='kg': num=kg_to_lbs(num)
     return f"{num} lbs"
 
+@app.template_filter('hide_tbd')
+def hide_tbd_filter(value):
+    """
+    Jinja filter: blank out any of '', None, 'TBD' or '—'.
+      In templates: {{ some_field|hide_tbd }}
+    """
+    return '' if value in (None, '', 'TBD', '—') else value
+
 def format_airport(raw_code: str, pref: str) -> str:
     """
     Given any code (ICAO, IATA, or local), look it up in airports
@@ -584,7 +592,8 @@ def refresh_user_cookies(response):
     ONE_YEAR = 31_536_000  # seconds
     pref_cookies = [
         'code_format', 'mass_unit', 'operator_call',
-        'include_test', 'radio_show_unsent_only', 'show_debug_logs'
+        'include_test', 'radio_show_unsent_only', 'show_debug_logs',
+        'hide_tbd'
     ]
     for name in pref_cookies:
         val = request.cookies.get(name)
@@ -667,6 +676,7 @@ def dashboard():
         code_pref = row[0]['value'] if row else 'icao4'
 
     mass_pref = request.cookies.get('mass_unit', 'lbs')
+    hide_tbd  = request.cookies.get('hide_tbd', 'yes') == 'yes'
 
     # --- 1) Tail‐filter from queryparam
     tail_filter = request.args.get('tail_filter','').strip().upper()
@@ -731,13 +741,13 @@ def dashboard():
 
         f['cargo_view'] = cw or 'TBD'
 
-
     return render_template(
         'dashboard.html',
         flights=flights,
         active='dashboard',
         tail_filter=tail_filter,
-        sort_seq=sort_seq
+        sort_seq=sort_seq,
+        hide_tbd=hide_tbd
     )
 # ─── Radio Operator out-box (sortable, clickable table) ───
 @app.route('/radio', methods=['GET','POST'])
@@ -1059,6 +1069,7 @@ def radio():
     # ─── GET: fetch & order ramp entries ────────────────────────────────
     # read new preference toggle
     show_unsent_only = request.cookies.get('radio_show_unsent_only','no') == 'yes'
+    hide_tbd         = request.cookies.get('hide_tbd','yes') == 'yes'
 
     # build your query
     base_sql = """
@@ -1084,6 +1095,7 @@ def radio():
     pref     = dict_rows("SELECT value FROM preferences WHERE name='code_format'")
     code_fmt = request.cookies.get('code_format') or (pref[0]['value'] if pref else 'icao4')
     mass_fmt = request.cookies.get('mass_unit', 'lbs')
+    hide_tbd = request.cookies.get('hide_tbd', 'yes') == 'yes'
 
     for f in flights:
         f['origin_view'] = format_airport(f.get('airfield_takeoff',''), code_fmt)
@@ -1106,7 +1118,12 @@ def radio():
             cw = f'{v} lbs'
         f['cargo_view'] = cw or 'TBD'
 
-    return render_template('radio.html', flights=flights, active='radio')
+    return render_template(
+        'radio.html',
+        flights=flights,
+        active='radio',
+        hide_tbd=hide_tbd
+    )
 
 # ───────────────────────────────────────────────────────────
 #  AJAX PARTIALS for Dashboard & Radio
@@ -1123,6 +1140,7 @@ def dashboard_table_partial():
         row = dict_rows("SELECT value FROM preferences WHERE name='code_format'")
         code_pref = row[0]['value'] if row else 'icao4'
     mass_pref = request.cookies.get('mass_unit', 'lbs')
+    hide_tbd  = request.cookies.get('hide_tbd', 'yes') == 'yes'
 
     # Tail-filter & sort-order prefs
     tail_filter = request.args.get('tail_filter','').strip().upper()
@@ -1173,7 +1191,11 @@ def dashboard_table_partial():
         f['cargo_view'] = cw or 'TBD'
 
     # 4) render only the table partial
-    return render_template('partials/_dashboard_table.html', flights=flights)
+    return render_template(
+        'partials/_dashboard_table.html',
+        flights=flights,
+        hide_tbd=hide_tbd
+    )
 
 @app.route('/_radio_table')
 def radio_table_partial():
@@ -1204,6 +1226,7 @@ def radio_table_partial():
     pref     = dict_rows("SELECT value FROM preferences WHERE name='code_format'")
     code_fmt = request.cookies.get('code_format') or (pref[0]['value'] if pref else 'icao4')
     mass_fmt = request.cookies.get('mass_unit', 'lbs')
+    hide_tbd = request.cookies.get('hide_tbd', 'yes') == 'yes'
 
     for f in flights:
         f['origin_view'] = format_airport(f.get('airfield_takeoff',''), code_fmt)
@@ -1225,7 +1248,11 @@ def radio_table_partial():
             cw = f'{v} lbs'
         f['cargo_view'] = cw or 'TBD'
 
-    return render_template('partials/_radio_table.html', flights=flights)
+    return render_template(
+        'partials/_radio_table.html',
+        flights=flights,
+        hide_tbd=hide_tbd
+    )
 
 # --- Radio message detail / copy-paste helper ---------------------------
 @app.route('/radio_detail/<int:fid>')
@@ -1633,6 +1660,13 @@ def preferences():
                 samesite='Lax'
             )
 
+        resp.set_cookie(
+            'hide_tbd',
+            'yes' if request.form.get('hide_tbd') else 'no',
+            max_age=ONE_YEAR,
+            samesite='Lax'
+        )
+
         if 'show_debug_logs' in request.form:
             resp.set_cookie(
                 'show_debug_logs',
@@ -1661,6 +1695,7 @@ def preferences():
     include_test    = request.cookies.get('include_test',  'yes')
     current_debug   = request.cookies.get('show_debug_logs','no')
     current_radio_unsent = request.cookies.get('radio_show_unsent_only','no')
+    hide_tbd        = request.cookies.get('hide_tbd','yes') == 'yes'
 
     return render_template(
         'preferences.html',
@@ -1671,7 +1706,8 @@ def preferences():
         include_test=include_test,
         current_debug=current_debug,
         current_radio_unsent=current_radio_unsent,
-        sort_seq=request.cookies.get('dashboard_sort_seq','no')=='yes'
+        sort_seq=request.cookies.get('dashboard_sort_seq','no')=='yes',
+        hide_tbd=hide_tbd
     )
 
 # ───────────────────────────────────────────────────────────

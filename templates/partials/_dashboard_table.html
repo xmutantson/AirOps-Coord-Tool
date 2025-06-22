@@ -16,32 +16,10 @@
       <th>Remarks</th>
     </tr>
   </thead>
+  {% import '_flight_macros.html' as macros %}
   <tbody>
     {% for f in flights %}
-    <tr
-      class="
-        {% if f.is_ramp_entry and not f.sent %}yellow-border{% endif %}
-        {# optionally add blue-border or red-border if you set flags on f #}
-      ">
-      <td>
-        <a href="{{ url_for('edit_flight', fid=f.id) }}">
-          {{ f.id }} ✏️
-        </a>
-      </td>
-      <td class="status">
-        {% if f.complete %}🛬 Landed{% else %}✈️ In-Flight{% endif %}
-      </td>
-      <td>{{ f.tail_number or 'TBD' }}</td>
-      <td>{{ f.pilot_name or 'TBD' }}</td>
-      <td>{{ f.pax_count or 'TBD' }}</td>
-      <td>{{ f.origin_view or 'TBD' }}</td>
-      <td>{{ f.takeoff_time or 'TBD' }}</td>
-      <td>{{ f.dest_view or 'TBD' }}</td>
-      <td>{{ f.eta_view }}</td>
-      <td>{{ f.cargo_type or 'TBD' }}</td>
-      <td>{{ f.cargo_view }}</td>
-      <td>{{ f.remarks or '' }}</td>
-    </tr>
+      {{ macros.flight_row(f) }}
     {% endfor %}
   </tbody>
 </table>
