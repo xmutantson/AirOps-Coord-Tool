@@ -920,7 +920,14 @@ def radio():
 
                 if no_change:
                     if is_ajax:
-                        return jsonify({'id': f['id'], 'action': 'update_ignored'})
+                        # Always return the *entire* flight row so the feedback
+                        # table can display real values instead of all “TBD”.
+                        full = dict_rows(
+                                   "SELECT * FROM flights WHERE id=?", (f['id'],)
+                               )
+                        row = full[0] if full else {'id': f['id']}
+                        row['action'] = 'update_ignored'
+                        return jsonify(row)
                     flash(f"Duplicate Winlink ignored (flight #{f['id']}).")
                     return redirect(url_for('radio'))
 
