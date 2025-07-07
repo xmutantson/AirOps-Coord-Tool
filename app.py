@@ -21,7 +21,8 @@ from flask_limiter.util import get_remote_address
 from flask import (
     Flask, render_template, request, redirect,
     url_for, send_file, flash, make_response,
-    jsonify, Response, stream_with_context
+    jsonify, Response, stream_with_context,
+    session
 )
 
 from flask_wtf import CSRFProtect
@@ -161,7 +162,7 @@ def inject_admin_flag():
     Expose `admin_unlocked` to all templates so we can
     conditionally show the Admin tab.
     """
-    return {'admin_unlocked': request.cookies.get('admin_unlocked','no') == 'yes'}
+    return {'admin_unlocked': session.get('admin_unlocked', False)}
 
 
 # ───────────────── DB init & migrations ──────────────────
@@ -1575,19 +1576,16 @@ def preferences():
     # ── update prefs ──────────────────────────────────────────────────────
     if request.method == 'POST':
 
-        # ———— Admin-unlock passphrase? ———————————————————————
+        # ── Unlock / lock admin mode ────────────────────
         if 'admin_passphrase' in request.form:
             entered = request.form['admin_passphrase'].strip()
-            resp = make_response(redirect(url_for('preferences')))
-            if entered == "I solemnly swear that I am up to no good": #this is the admin password!
-                resp.set_cookie('admin_unlocked', 'yes',
-                                max_age=ONE_YEAR, samesite='Lax')
+            if entered == "I solemnly swear that I am up to no good":
+                session['admin_unlocked'] = True
                 flash("🔓 Admin mode unlocked.", "success")
             else:
-                resp.set_cookie('admin_unlocked', 'no',
-                                max_age=ONE_YEAR, samesite='Lax')
+                session.pop('admin_unlocked', None)
                 flash("❌ Incorrect passphrase.", "error")
-            return resp
+            return redirect(url_for('preferences'))
 
         # ----- DB-backed preference --------------------------------------
         if 'default_origin' in request.form:
@@ -1645,12 +1643,14 @@ def preferences():
                 samesite='Lax'
             )
 
-        resp.set_cookie(
-            'hide_tbd',
-            'yes' if request.form.get('hide_tbd') else 'no',
-            max_age=ONE_YEAR,
-            samesite='Lax'
-        )
+        if 'hide_tbd' in request.form:
+            # now a yes/no dropdown → just echo the selected value
+            resp.set_cookie(
+                'hide_tbd',
+                request.form['hide_tbd'],
+                max_age=ONE_YEAR,
+                samesite='Lax'
+            )
 
         if 'show_debug_logs' in request.form:
             resp.set_cookie(
@@ -1666,6 +1666,7 @@ def preferences():
                             request.form['dashboard_sort_seq'],
                             max_age=31_536_000, samesite='Lax')
 
+        flash("Preferences saved", "success")
         return resp
 
     # ── GET: read current settings ────────────────────────────────────────
@@ -1700,14 +1701,20 @@ def preferences():
 # ───────────────────────────────────────────────────────────
 @app.route('/admin', methods=['GET', 'POST'])
 def admin():
-    # Redirect back unless they’ve unlocked
-    if request.cookies.get('admin_unlocked') != 'yes':
+    # only session-backed admin
+    if not session.get('admin_unlocked'):
         return redirect(url_for('preferences'))
 
     ONE_YEAR = 31_536_000  # seconds
 
     if request.method == 'POST':
-        # 1) Update DB‐backed Default Origin
+        # ── Exit Admin Mode button ───────────────────
+        if 'exit_admin' in request.form:
+            session.pop('admin_unlocked', None)
+            flash("🔒 Admin mode locked.", "info")
+            return redirect(url_for('preferences'))
+
+        # ── Update Default Origin (DB) ───────────────
         if 'default_origin' in request.form:
             val = escape(request.form['default_origin'].strip().upper())
             with sqlite3.connect(DB_FILE) as c:
@@ -1718,7 +1725,7 @@ def admin():
                       SET value = excluded.value
                 """, (val,))
 
-        # 2) Update Show Debug Logs cookie
+        # ── Update Show Debug Logs cookie ────────────
         resp = make_response(redirect(url_for('admin')))
         if 'show_debug_logs' in request.form:
             resp.set_cookie(
@@ -1728,18 +1735,13 @@ def admin():
                 samesite='Lax'
             )
 
-        # 3) Flash confirmation and return
         flash('Admin settings saved', 'info')
         return resp
 
-    # ── GET: render the page with current values ─────────────────
-    # DB-backed Default Origin
+    # GET → render the page
     pref = dict_rows("SELECT value FROM preferences WHERE name='default_origin'")
     default_origin = pref[0]['value'] if pref else ''
-
-    # Cookie-backed Show Debug Logs
     show_debug = request.cookies.get('show_debug_logs', 'no')
-
     return render_template(
         'admin.html',
         active='admin',

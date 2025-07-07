@@ -28,6 +28,12 @@
     </select>
   </form>
 
+  <!-- ── Exit Admin Mode ───────────────────────────────── -->
+  <form method="POST" action="{{ url_for('admin') }}" style="margin-top:1rem">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button name="exit_admin" value="1">Exit Admin Mode</button>
+  </form>
+
   <!-- ── Data Management ────────────────────────────────── -->
   <hr>
   <h3>Data Management</h3>

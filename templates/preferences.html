@@ -34,18 +34,11 @@
     <!-- ── Dashboard Prefs ────────────────────────────────── -->
     <h3>Dashboard Preferences</h3>
 
-    <div class="form-group" style="display:flex; align-items:center; gap:8px;">
-      <label style="flex:1; margin:0;">
-        Hide “TBD” / empty cells in tables:
-      </label>
-      <div style="flex:none;">
-        <input
-          type="checkbox"
-          name="hide_tbd"
-          onchange="this.form.submit()"
-          {% if hide_tbd %}checked{% endif %}>
-      </div>
-    </div>
+    <label>Hide “TBD” / empty cells in tables:</label>
+    <select name="hide_tbd" onchange="document.getElementById('prefs-form').submit()">
+      <option value="no"  {% if not hide_tbd %}selected{% endif %}>No</option>
+      <option value="yes" {% if hide_tbd     %}selected{% endif %}>Yes</option>
+    </select>
 
     <label>Sort by entry sequence:</label>
     <select name="dashboard_sort_seq" onchange="this.form.submit()">
@@ -97,6 +90,7 @@
       required>
     <button type="submit">Unlock</button>
   </form>
+
 </div>
 
 <script>
@@ -114,4 +108,5 @@
   });
 })();
 </script>
+
 {% endblock %}
