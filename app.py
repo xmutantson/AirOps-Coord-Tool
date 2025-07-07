@@ -26,7 +26,7 @@ from flask import (
 )
 
 from werkzeug.security import generate_password_hash, check_password_hash
-from flask_limiter.exceptions import RateLimitExceeded
+from flask_limiter.errors import RateLimitExceeded
 
 from flask_wtf import CSRFProtect
 from markupsafe import escape
