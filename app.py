@@ -174,7 +174,9 @@ def inject_admin_flag():
 def require_login():
     # allow static, ping, setup/login/logout without auth
     exempt = ('static','_ping','setup','login','logout')
-    if request.endpoint in exempt or request.endpoint.startswith('static'):
+    # guard against endpoint==None (e.g. favicon) and skip any "static" blueprint
+    ep = request.endpoint or ''
+    if ep in exempt or ep.startswith('static'):
         return
     # if no password set yet → force setup
     if not get_app_password_hash():

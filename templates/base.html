@@ -25,6 +25,7 @@
   {% endfor %}
 </div>
 
+  {% if session.get('logged_in') %}
   <header>
     <nav class="main-nav">
       <a href="{{ url_for('dashboard') }}"       class="{% if active=='dashboard' %}active{% endif %}">Dashboard</a>
@@ -36,6 +37,7 @@
       {% endif %}
     </nav>
   </header>
+  {% endif %}
 
   <main class="container">
     {% block content %}{% endblock %}
