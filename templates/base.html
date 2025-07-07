@@ -62,9 +62,13 @@
       // always toggle offline highlight
       document.body.classList.toggle('offline', !r.ok);
 
-      // but only auto-redirect stale sessions when *not* on login
-      const onLogin    = document.body.classList.contains('login');
-      if (!onLogin && r.redirected) {
+      // but only auto-redirect stale sessions when *not* on login or setup
+      const onAuthPage = 
+        document.body.classList.contains('login') ||
+        document.body.classList.contains('setup');
+
+      if (!onAuthPage && r.redirected) {
+
         window.location.href = r.url;
         return;
       }
