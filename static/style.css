@@ -395,9 +395,10 @@ body.preferences .flashes li.db_reset {
 }
 
 /* start bright red, then fade to white */
-body.preferences input.fade-red {
-  background-color: #ff9999;          /* <── initial tint  */
-  animation: fadeRed 4s ease-in-out;  /* then dissolve     */
+/* we want the 'fade-red' animation anywhere you tag an <input> */
+input.fade-red {
+  background-color: #ff9999;          /* initial tint */
+  animation: fadeRed 4s ease-in-out;  /* then dissolve */
 }
 
 /* full-bleed tables on Dashboard & Radio, even when wrapped in a div */
@@ -592,3 +593,39 @@ body.offline {
   background: #ff4242 !important;
   transition: background 0.3s;
 }
+
+/* ──────────────────────────────────────────────────────────────
+   Toast container & individual toasts
+────────────────────────────────────────────────────────────── */
+#toast-container {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  z-index: 2000;
+  pointer-events: none; /* clicks “through” to underlying UI */
+}
+.toast {
+  min-width: 200px;
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius);
+  color: white;
+  opacity: 0;
+  transform: translateX(100%);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  pointer-events: auto;
+}
+.toast.show {
+  opacity: 1;
+  transform: translateX(0);
+}
+.toast.hide {
+  opacity: 0;
+  transform: translateX(100%);
+}
+/* semantic variants */
+.toast.success { background: #4caf50; }
+.toast.error   { background: #f44336; }
+.toast.info    { background: #2196f3; }

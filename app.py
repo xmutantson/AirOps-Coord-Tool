@@ -128,9 +128,9 @@ MDNS_NAME, HOST_IP = register_mdns("rampops", 5150)
 
 @app.context_processor
 def inject_debug_pref():
-    # expose as `show_debug` in **all** Jinja templates
+    # expose as `show_debug` (bool) in **all** templates
     return {
-        'show_debug': request.cookies.get('show_debug_logs','no')
+        'show_debug': request.cookies.get('show_debug_logs','no') == 'yes'
     }
 
 @app.context_processor
@@ -154,6 +154,15 @@ def inject_hide_pref():
     return {
         'hide_tbd': request.cookies.get('hide_tbd','yes') == 'yes'
     }
+
+@app.context_processor
+def inject_admin_flag():
+    """
+    Expose `admin_unlocked` to all templates so we can
+    conditionally show the Admin tab.
+    """
+    return {'admin_unlocked': request.cookies.get('admin_unlocked','no') == 'yes'}
+
 
 # ───────────────── DB init & migrations ──────────────────
 def init_db():
@@ -1523,6 +1532,10 @@ def import_csv():
         inserted += 1
 
     flash(f"Imported and applied {inserted} rows from CSV.", "import")
+    # if we came from the Admin console, stay there
+    ref = request.referrer or ""
+    if ref.endswith(url_for('admin')) or "/admin" in ref:
+        return redirect(url_for('admin'))
     return redirect(url_for('preferences'))
 
 # ─────────────── DB RESET (danger - wipes everything) ────────────────
@@ -1540,6 +1553,10 @@ def reset_db():
     load_airports_from_csv()
 
     flash("Database reset and re-initialised.", "db_reset")
+    # if we came from the Admin console, stay there
+    ref = request.referrer or ""
+    if ref.endswith(url_for('admin')) or "/admin" in ref:
+        return redirect(url_for('admin'))
     return redirect(url_for('preferences'))
 
 # --- preferences route (DB-stored default_origin + cookie prefs) ----------
@@ -1557,6 +1574,20 @@ def preferences():
 
     # ── update prefs ──────────────────────────────────────────────────────
     if request.method == 'POST':
+
+        # ———— Admin-unlock passphrase? ———————————————————————
+        if 'admin_passphrase' in request.form:
+            entered = request.form['admin_passphrase'].strip()
+            resp = make_response(redirect(url_for('preferences')))
+            if entered == "I solemnly swear that I am up to no good": #this is the admin password!
+                resp.set_cookie('admin_unlocked', 'yes',
+                                max_age=ONE_YEAR, samesite='Lax')
+                flash("🔓 Admin mode unlocked.", "success")
+            else:
+                resp.set_cookie('admin_unlocked', 'no',
+                                max_age=ONE_YEAR, samesite='Lax')
+                flash("❌ Incorrect passphrase.", "error")
+            return resp
 
         # ----- DB-backed preference --------------------------------------
         if 'default_origin' in request.form:
@@ -1648,7 +1679,7 @@ def preferences():
     operator_call   = request.cookies.get('operator_call', '')
     include_test    = request.cookies.get('include_test',  'yes')
     current_debug   = request.cookies.get('show_debug_logs','no')
-    current_radio_unsent = request.cookies.get('radio_show_unsent_only','no')
+    current_radio_unsent = request.cookies.get('radio_show_unsent_only','yes')
     hide_tbd        = request.cookies.get('hide_tbd','yes') == 'yes'
 
     return render_template(
@@ -1662,6 +1693,58 @@ def preferences():
         current_radio_unsent=current_radio_unsent,
         sort_seq=request.cookies.get('dashboard_sort_seq','no')=='yes',
         hide_tbd=hide_tbd
+    )
+
+# ───────────────────────────────────────────────────────────
+#  Admin dashboard - only when unlocked
+# ───────────────────────────────────────────────────────────
+@app.route('/admin', methods=['GET', 'POST'])
+def admin():
+    # Redirect back unless they’ve unlocked
+    if request.cookies.get('admin_unlocked') != 'yes':
+        return redirect(url_for('preferences'))
+
+    ONE_YEAR = 31_536_000  # seconds
+
+    if request.method == 'POST':
+        # 1) Update DB‐backed Default Origin
+        if 'default_origin' in request.form:
+            val = escape(request.form['default_origin'].strip().upper())
+            with sqlite3.connect(DB_FILE) as c:
+                c.execute("""
+                    INSERT INTO preferences(name, value)
+                    VALUES('default_origin', ?)
+                    ON CONFLICT(name) DO UPDATE
+                      SET value = excluded.value
+                """, (val,))
+
+        # 2) Update Show Debug Logs cookie
+        resp = make_response(redirect(url_for('admin')))
+        if 'show_debug_logs' in request.form:
+            resp.set_cookie(
+                'show_debug_logs',
+                request.form['show_debug_logs'],
+                max_age=ONE_YEAR,
+                samesite='Lax'
+            )
+
+        # 3) Flash confirmation and return
+        flash('Admin settings saved', 'info')
+        return resp
+
+    # ── GET: render the page with current values ─────────────────
+    # DB-backed Default Origin
+    pref = dict_rows("SELECT value FROM preferences WHERE name='default_origin'")
+    default_origin = pref[0]['value'] if pref else ''
+
+    # Cookie-backed Show Debug Logs
+    show_debug = request.cookies.get('show_debug_logs', 'no')
+
+    return render_template(
+        'admin.html',
+        active='admin',
+        default_origin=default_origin,
+        show_debug_logs=show_debug
     )
 
 # ───────────────────────────────────────────────────────────

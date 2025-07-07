@@ -13,12 +13,27 @@
 </head>
 <body class="{{ active }}">
 
+{# collect all flashes exactly once #}
+{% set _all_flashes = get_flashed_messages(with_categories=true) %}
+
+<div id="toast-container">
+  {% for category, msg in _all_flashes %}
+    {# always show non-debug; show debug only if the admin toggle is on #}
+    {% if category != 'debug' or show_debug %}
+      <div class="toast {{ category }}">{{ msg }}</div>
+    {% endif %}
+  {% endfor %}
+</div>
+
   <header>
     <nav class="main-nav">
       <a href="{{ url_for('dashboard') }}"       class="{% if active=='dashboard' %}active{% endif %}">Dashboard</a>
       <a href="{{ url_for('radio') }}"           class="{% if active=='radio' %}active{% endif %}">Radio</a>
       <a href="{{ url_for('ramp_boss') }}"       class="{% if active=='ramp_boss' %}active{% endif %}">Ramp Boss</a>
       <a href="{{ url_for('preferences') }}"     class="{% if active=='preferences' %}active{% endif %}">Preferences</a>
+      {% if admin_unlocked %}
+      <a href="{{ url_for('admin') }}"           class="{% if active=='admin' %}active{% endif %}">Admin</a>
+      {% endif %}
     </nav>
   </header>
 
@@ -57,6 +72,24 @@
   beat();                              // run once at page-load
   setInterval(beat, CHECK_EVERY);      // …then every 30 s
 })();
+</script>
+
+<script>
+document.addEventListener('DOMContentLoaded', ()=> {
+  const toasts = Array.from(document.querySelectorAll('.toast'));
+  toasts.forEach((toast, i) => {
+    // entrance
+    requestAnimationFrame(()=> toast.classList.add('show'));
+    // schedule hide
+    setTimeout(()=> toast.classList.add('hide'), 3000 + i * 200);
+    // remove from DOM after transition
+    toast.addEventListener('transitionend', e => {
+      if (e.propertyName === 'opacity' && toast.classList.contains('hide')) {
+        toast.remove();
+      }
+    });
+  });
+});
 </script>
 
 </body>

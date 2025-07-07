@@ -1,19 +1,12 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <title>Preferences</title>
-</head>
-<body>
-
 {% extends "base.html" %}
 {% block title %}Preferences – Aircraft Ops{% endblock %}
-{% block content %}
 
+{% block content %}
 <div class="container preferences">
-  <form method="POST">
+  <form id="prefs-form" method="POST">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <!-- ── Ops / Display prefs (DB + cookie) ───────────────── -->
+
+    <!-- ── Ops / Display Prefs ─────────────────────────────── -->
     <h3>Display / Operational Prefs</h3>
 
     <label>Default Origin (ICAO or FAA):</label>
@@ -21,20 +14,13 @@
       id="default-origin"
       name="default_origin"
       value="{{ default_origin }}"
-      class="{% if 'db_reset' in get_flashed_messages(with_categories=true)|map(attribute=0) %}fade-red{% endif %}"
-      onchange="this.form.submit()">
+      placeholder="e.g. KSEA or SEA">
 
     <label>Airport Code Format:</label>
     <select name="code_format" onchange="this.form.submit()">
-      <option value="icao4" {% if current_code=='icao4' %}selected{% endif %}>
-        ICAO (4-letter)
-      </option>
-      <option value="iata" {% if current_code=='iata' %}selected{% endif %}>
-        IATA (3-letter)
-      </option>
-      <option value="local" {% if current_code=='local' %}selected{% endif %}>
-        FAA/GPS/Local
-      </option>
+      <option value="icao4" {% if current_code=='icao4' %}selected{% endif %}>ICAO (4-letter)</option>
+      <option value="iata"  {% if current_code=='iata'  %}selected{% endif %}>IATA (3-letter)</option>
+      <option value="local" {% if current_code=='local' %}selected{% endif %}>FAA/GPS/Local</option>
     </select>
 
     <label style="margin-top:18px">Mass Unit:</label>
@@ -43,6 +29,9 @@
       <option value="kg"  {% if current_mass=='kg'  %}selected{% endif %}>kg</option>
     </select>
 
+    <hr>
+
+    <!-- ── Dashboard Prefs ────────────────────────────────── -->
     <h3>Dashboard Preferences</h3>
 
     <div class="form-group" style="display:flex; align-items:center; gap:8px;">
@@ -60,12 +49,14 @@
 
     <label>Sort by entry sequence:</label>
     <select name="dashboard_sort_seq" onchange="this.form.submit()">
-      <option value="no" {% if not sort_seq %}selected{% endif %}>Default grouping</option>
+      <option value="no"  {% if not sort_seq %}selected{% endif %}>Default grouping</option>
       <option value="yes" {% if sort_seq     %}selected{% endif %}>Newest first</option>
     </select>
 
-    <!-- ── Radio-operator prefs (cookie only) ───────────────── -->
-    <h3>Radio Operator Prefs (per-browser)</h3>
+    <hr>
+
+    <!-- ── Radio-Operator Prefs ───────────────────────────── -->
+    <h3>Radio Operator Prefs</h3>
 
     <label>Your Callsign:</label>
     <input
@@ -75,7 +66,7 @@
       oninput="this.value=this.value.toUpperCase()">
     <script>
       document.getElementById('cs')
-              .addEventListener('blur', ()=>document.forms[0].submit());
+              .addEventListener('blur', ()=>document.getElementById('prefs-form').submit());
     </script>
 
     <label style="margin-top:18px">Include test line in outgoing Winlink?</label>
@@ -89,34 +80,38 @@
       <option value="no"  {% if current_radio_unsent=='no'  %}selected{% endif %}>No, show all</option>
       <option value="yes" {% if current_radio_unsent=='yes' %}selected{% endif %}>Yes, only unsent</option>
     </select>
-
-    <!-- ── Developer Options ─────────────────────────────────── -->
-    <h3>Developer Options</h3>
-    <label>Show flash debug logs:</label>
-    <select name="show_debug_logs" onchange="this.form.submit()">
-      <option value="no"  {% if current_debug=='no'  %}selected{% endif %}>No</option>
-      <option value="yes" {% if current_debug=='yes' %}selected{% endif %}>Yes</option>
-    </select>
   </form>
 
-  <!-- ── Incoming‐Messages CSV & DB reset ─────────────────────────── -->
-  <h3 style="margin-top:32px">Incoming-Messages CSV</h3>
-  <form style="display:inline" action="{{ url_for('export_csv') }}" method="GET">
-    <button>Export CSV</button>
-  </form>
-  <form style="display:inline" action="{{ url_for('import_csv') }}" method="POST" enctype="multipart/form-data">
+  <hr>
+
+  <!-- ── Unlock Admin Mode ───────────────────────────────── -->
+  <h3>Unlock Admin Mode</h3>
+  <form method="POST" action="{{ url_for('preferences') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input type="file" name="csv_file" accept=".csv" required>
-    <button>Import CSV</button>
-  </form>
-  <form method="POST"
-        action="{{ url_for('reset_db') }}"
-        onsubmit="return confirm('This wipes ALL flight data – continue?')">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button class="danger" style="margin-top:40px">Reset Database</button>
+    <label for="admin-pass">Passphrase:</label>
+    <input
+      id="admin-pass"
+      name="admin_passphrase"
+      type="password"
+      placeholder="I solemnly swear that I am up to no good"
+      required>
+    <button type="submit">Unlock</button>
   </form>
 </div>
 
+<script>
+;(function(){
+  const form  = document.getElementById('prefs-form');
+  const input = document.getElementById('default-origin');
+  let   timer;
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(()=> form.submit(), 800);
+  });
+  input.addEventListener('blur', () => {
+    clearTimeout(timer);
+    form.submit();
+  });
+})();
+</script>
 {% endblock %}
-</body>
-</html>

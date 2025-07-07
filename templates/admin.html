@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Admin Console – Aircraft Ops{% endblock %}
+
+{% block content %}
+<div class="container admin-console">
+  <h2>🐙 Admin Console</h2>
+
+  <form id="admin-form" method="POST" action="{{ url_for('admin') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+    <!-- ── Core Settings ──────────────────────────────────── -->
+    <hr>
+    <h3>Core Settings</h3>
+
+    <label>Default Origin (DB-backed):</label>
+    <input
+      id="admin-default-origin"
+      type="text"
+      name="default_origin"
+      value="{{ default_origin }}"
+      placeholder="e.g. KSEA or SEA"
+      class="{% if 'db_reset' in (_all_flashes|map(attribute=0)) %}fade-red{% endif %}">
+
+    <label style="margin-top:18px">Show Debug Logs:</label>
+    <select name="show_debug_logs" onchange="this.form.submit()">
+      <option value="no"  {% if show_debug_logs=='no'  %}selected{% endif %}>No</option>
+      <option value="yes" {% if show_debug_logs=='yes' %}selected{% endif %}>Yes</option>
+    </select>
+  </form>
+
+  <!-- ── Data Management ────────────────────────────────── -->
+  <hr>
+  <h3>Data Management</h3>
+  <form style="display:inline" action="{{ url_for('export_csv') }}" method="GET">
+    <button>Export CSV</button>
+  </form>
+  <form style="display:inline" action="{{ url_for('import_csv') }}" method="POST" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="file" name="csv_file" accept=".csv" required>
+    <button>Import CSV</button>
+  </form>
+  <br><br>
+  <form method="POST"
+        action="{{ url_for('reset_db') }}"
+        onsubmit="return confirm('This will wipe ALL data—continue?')">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="danger">Reset Database</button>
+  </form>
+</div>
+
+<script>
+;(function(){
+  const form  = document.getElementById('admin-form');
+  const input = document.getElementById('admin-default-origin');
+  let   timer;
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(()=> form.submit(), 800);
+  });
+  input.addEventListener('blur', () => {
+    clearTimeout(timer);
+    form.submit();
+  });
+})();
+</script>
+{% endblock %}
