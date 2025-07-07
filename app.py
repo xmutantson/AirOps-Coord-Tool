@@ -192,8 +192,8 @@ def set_session_salt(salt: str):
 
 @app.before_request
 def require_login():
-    # allow static, ping, setup/login/logout without auth
-    exempt = ('static','_ping','setup','login','logout')
+    # allow static, setup/login/logout without auth
+    exempt = ('static','setup','login','logout')
     # guard against endpoint==None (e.g. favicon) and skip any "static" blueprint
     ep = request.endpoint or ''
     if ep in exempt or ep.startswith('static'):
@@ -1643,7 +1643,7 @@ def setup():
         confirm = request.form.get('confirm','')
         if not pw or pw != confirm:
             flash("Passwords must match", "error")
-            return render_template('setup.html')
+            return render_template('setup.html', active='setup')
         # store hashed pw & log them in
         set_app_password_hash(generate_password_hash(pw))
         session['logged_in'] = True
@@ -1671,7 +1671,7 @@ def login():
             return redirect(request.args.get('next') or url_for('dashboard'))
         flash("Incorrect password.", "error")
 
-    return render_template('login.html')
+    return render_template('login.html', active='login')
 
 
 @app.route('/logout')

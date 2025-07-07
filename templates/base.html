@@ -25,7 +25,7 @@
   {% endfor %}
 </div>
 
-  {% if session.get('logged_in') %}
+  {% if active not in ['login','setup'] %}
   <header>
     <nav class="main-nav">
       <a href="{{ url_for('dashboard') }}"       class="{% if active=='dashboard' %}active{% endif %}">Dashboard</a>
@@ -57,14 +57,13 @@
     const ctrl = new AbortController();
     const tid  = setTimeout(()=>ctrl.abort(), TIMEOUT_MS);
     try{
-      const r = await fetch(
-        "{{ url_for('ping') }}",
-        {
-          signal: ctrl.signal,
-          cache : "no-store"        // ← never satisfy from HTTP-cache
-        }
-      );
-      document.body.classList.toggle('offline', !r.ok);
+    const r = await fetch("{{ url_for('ping') }}", { signal: ctrl.signal, cache: "no-store" });
+    // if server redirected us → force full-page redirect
+    if (r.redirected) {
+      window.location.href = r.url;
+      return;
+    }
+    document.body.classList.toggle('offline', !r.ok);
     }catch(_){
       document.body.classList.add('offline');
     }finally{
