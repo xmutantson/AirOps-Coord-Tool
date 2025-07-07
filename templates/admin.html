@@ -28,6 +28,26 @@
     </select>
   </form>
 
+  <!-- ── Change App Password ──────────────────────────── -->
+  <hr>
+  <form method="POST" action="{{ url_for('admin') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <h3>Change App Password</h3>
+
+    <label for="new-password">New Password:</label>
+    <input id="new-password" type="password" name="new_password" required>
+
+    <label for="confirm-password">Confirm Password:</label>
+    <input id="confirm-password" type="password" name="confirm_password" required>
+
+    <button
+      name="change_password"
+      value="1"
+      style="margin-top:0.5rem">
+      Update Password
+    </button>
+  </form>
+
   <!-- ── Exit Admin Mode ───────────────────────────────── -->
   <form method="POST" action="{{ url_for('admin') }}" style="margin-top:1rem">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

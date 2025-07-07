@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}First-Time Setup{% endblock %}
+
+{% block content %}
+<div class="container" style="max-width:400px; margin:3rem auto;">
+  <h2>📦 First-Time Setup</h2>
+  <p>Please choose an application password:</p>
+  <form method="POST">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>Password:</label>
+    <input type="password" name="password" required>
+    <label>Confirm Password:</label>
+    <input type="password" name="confirm" required>
+    <button type="submit" style="margin-top:1rem">Set Password</button>
+  </form>
+</div>
+{% endblock %}

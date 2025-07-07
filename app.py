@@ -25,6 +25,9 @@ from flask import (
     session
 )
 
+from werkzeug.security import generate_password_hash, check_password_hash
+from flask_limiter.exceptions import RateLimitExceeded
+
 from flask_wtf import CSRFProtect
 from markupsafe import escape
 
@@ -164,6 +167,45 @@ def inject_admin_flag():
     """
     return {'admin_unlocked': session.get('admin_unlocked', False)}
 
+
+# ───────────────── Login Flows ──────────────────
+
+@app.before_request
+def require_login():
+    # allow static, ping, setup/login/logout without auth
+    exempt = ('static','_ping','setup','login','logout')
+    if request.endpoint in exempt or request.endpoint.startswith('static'):
+        return
+    # if no password set yet → force setup
+    if not get_app_password_hash():
+        if request.endpoint != 'setup':
+            return redirect(url_for('setup'))
+        return
+    # password set but not logged in → force login
+    if not session.get('logged_in'):
+        return redirect(url_for('login', next=request.path))
+
+def get_app_password_hash():
+    """Fetch the hashed app password from preferences table (or None)."""
+    rows = dict_rows(
+        "SELECT value FROM preferences WHERE name='app_password'"
+    )
+    return rows[0]['value'] if rows else None
+
+def set_app_password_hash(hashval):
+    """Upsert the hashed app password into preferences."""
+    with sqlite3.connect(DB_FILE) as c:
+        c.execute("""
+            INSERT INTO preferences(name,value)
+            VALUES('app_password',?)
+            ON CONFLICT(name) DO UPDATE
+              SET value=excluded.value
+        """, (hashval,))
+
+# pretend RateLimitExceeded is a 500, to confuse bots
+@app.errorhandler(RateLimitExceeded)
+def _rate_limit_exceeded(e):
+    return "Internal Server Error", 500
 
 # ───────────────── DB init & migrations ──────────────────
 def init_db():
@@ -1560,6 +1602,55 @@ def reset_db():
         return redirect(url_for('admin'))
     return redirect(url_for('preferences'))
 
+
+# ───────────────────────────────────────────────────────────
+# First-run setup: pick a password if none exists
+@app.route('/setup', methods=['GET','POST'])
+@limiter.limit("5 per minute")
+def setup():
+    if get_app_password_hash():
+        return redirect(url_for('login'))
+
+    if request.method == 'POST':
+        pw      = request.form.get('password','')
+        confirm = request.form.get('confirm','')
+        if not pw or pw != confirm:
+            flash("Passwords must match", "error")
+            return render_template('setup.html')
+        # store hashed pw & log them in
+        set_app_password_hash(generate_password_hash(pw))
+        session['logged_in'] = True
+        flash("Password set—you're logged in!", "success")
+        return redirect(url_for('dashboard'))
+
+    return render_template('setup.html')
+
+# ───────────────────────────────────────────────────────────
+# Login / logout
+@app.route('/login', methods=['GET','POST'])
+@limiter.limit("5 per minute")
+def login():
+    if session.get('logged_in'):
+        return redirect(url_for('dashboard'))
+
+    if request.method == 'POST':
+        pw = request.form.get('password','')
+        if (h := get_app_password_hash()) and check_password_hash(h, pw):
+            session['logged_in'] = True
+            flash("Logged in successfully.", "success")
+            return redirect(request.args.get('next') or url_for('dashboard'))
+        flash("Incorrect password.", "error")
+
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    session.pop('logged_in', None)
+    flash("Logged out.", "info")
+    return redirect(url_for('login'))
+
+
+
 # --- preferences route (DB-stored default_origin + cookie prefs) ----------
 @app.route('/preferences', methods=['GET', 'POST'])
 def preferences():
@@ -1713,6 +1804,18 @@ def admin():
             session.pop('admin_unlocked', None)
             flash("🔒 Admin mode locked.", "info")
             return redirect(url_for('preferences'))
+
+        # ── Change App Password ─────────────────────────────
+        if 'change_password' in request.form:
+            new_pw     = request.form.get('new_password','')
+            confirm_pw = request.form.get('confirm_password','')
+            if new_pw and new_pw == confirm_pw:
+                # store the new hash
+                set_app_password_hash(generate_password_hash(new_pw))
+                flash("Application password updated.", "success")
+            else:
+                flash("Passwords must match.", "error")
+            return redirect(url_for('admin'))
 
         # ── Update Default Origin (DB) ───────────────
         if 'default_origin' in request.form:
