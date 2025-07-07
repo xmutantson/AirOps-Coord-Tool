@@ -57,13 +57,17 @@
     const ctrl = new AbortController();
     const tid  = setTimeout(()=>ctrl.abort(), TIMEOUT_MS);
     try{
-    const r = await fetch("{{ url_for('ping') }}", { signal: ctrl.signal, cache: "no-store" });
-    // if server redirected us → force full-page redirect
-    if (r.redirected) {
-      window.location.href = r.url;
-      return;
-    }
-    document.body.classList.toggle('offline', !r.ok);
+      const r = await fetch("{{ url_for('ping') }}", { signal: ctrl.signal, cache: "no-store" });
+
+      // always toggle offline highlight
+      document.body.classList.toggle('offline', !r.ok);
+
+      // but only auto-redirect stale sessions when *not* on login
+      const onLogin    = document.body.classList.contains('login');
+      if (!onLogin && r.redirected) {
+        window.location.href = r.url;
+        return;
+      }
     }catch(_){
       document.body.classList.add('offline');
     }finally{

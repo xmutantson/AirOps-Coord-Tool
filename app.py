@@ -1651,7 +1651,7 @@ def setup():
         flash("Password set—you're logged in!", "success")
         return redirect(url_for('dashboard'))
 
-    return render_template('setup.html')
+    return render_template('setup.html', active='setup')
 
 # ───────────────────────────────────────────────────────────
 # Login / logout
