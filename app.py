@@ -27,6 +27,7 @@ from flask import (
 
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_limiter.errors import RateLimitExceeded
+import uuid
 
 from flask_wtf import CSRFProtect
 from markupsafe import escape
@@ -167,6 +168,25 @@ def inject_admin_flag():
     """
     return {'admin_unlocked': session.get('admin_unlocked', False)}
 
+# ─── Session‐Salt Helpers ───────────────────────────────────────────
+def get_session_salt():
+    rows = dict_rows("SELECT value FROM preferences WHERE name='session_salt'")
+    if rows:
+        return rows[0]['value']
+    # initialize on first run
+    salt = uuid.uuid4().hex
+    set_session_salt(salt)
+    return salt
+
+def set_session_salt(salt: str):
+    with sqlite3.connect(DB_FILE) as c:
+        c.execute("""
+            INSERT INTO preferences(name,value)
+            VALUES('session_salt',?)
+            ON CONFLICT(name) DO UPDATE
+              SET value=excluded.value
+        """, (salt,))
+
 
 # ───────────────── Login Flows ──────────────────
 
@@ -185,6 +205,11 @@ def require_login():
         return
     # password set but not logged in → force login
     if not session.get('logged_in'):
+        return redirect(url_for('login', next=request.path))
+
+    # global‐invalidation: check the session salt
+    if session.get('session_salt') != get_session_salt():
+        session.clear()
         return redirect(url_for('login', next=request.path))
 
 def get_app_password_hash():
@@ -1622,6 +1647,7 @@ def setup():
         # store hashed pw & log them in
         set_app_password_hash(generate_password_hash(pw))
         session['logged_in'] = True
+        session['session_salt'] = get_session_salt()
         flash("Password set—you're logged in!", "success")
         return redirect(url_for('dashboard'))
 
@@ -1640,18 +1666,19 @@ def login():
         if (h := get_app_password_hash()) and check_password_hash(h, pw):
             session['logged_in'] = True
             flash("Logged in successfully.", "success")
+            # stamp session salt on successful login
+            session['session_salt'] = get_session_salt()
             return redirect(request.args.get('next') or url_for('dashboard'))
         flash("Incorrect password.", "error")
 
     return render_template('login.html')
+
 
 @app.route('/logout')
 def logout():
     session.pop('logged_in', None)
     flash("Logged out.", "info")
     return redirect(url_for('login'))
-
-
 
 # --- preferences route (DB-stored default_origin + cookie prefs) ----------
 @app.route('/preferences', methods=['GET', 'POST'])
@@ -1806,6 +1833,13 @@ def admin():
             session.pop('admin_unlocked', None)
             flash("🔒 Admin mode locked.", "info")
             return redirect(url_for('preferences'))
+
+        # ─── Invalidate All Sessions ───────────────────────────
+        if 'invalidate_sessions' in request.form:
+            new_salt = uuid.uuid4().hex
+            set_session_salt(new_salt)
+            flash("🔑 All sessions have been invalidated.", "info")
+            return redirect(url_for('admin'))
 
         # ── Change App Password ─────────────────────────────
         if 'change_password' in request.form:
