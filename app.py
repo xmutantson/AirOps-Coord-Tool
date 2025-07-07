@@ -1633,7 +1633,7 @@ def reset_db():
 # ───────────────────────────────────────────────────────────
 # First-run setup: pick a password if none exists
 @app.route('/setup', methods=['GET','POST'])
-@limiter.limit("5 per minute")
+@limiter.limit("20 per minute")
 def setup():
     if get_app_password_hash():
         return redirect(url_for('login'))
@@ -1834,12 +1834,23 @@ def admin():
             flash("🔒 Admin mode locked.", "info")
             return redirect(url_for('preferences'))
 
-        # ─── Invalidate All Sessions ───────────────────────────
+        # ─── Invalidate All Sessions + Clear Password ────────────
         if 'invalidate_sessions' in request.form:
+            # 1) rotate session_salt so all existing sessions die
             new_salt = uuid.uuid4().hex
             set_session_salt(new_salt)
-            flash("🔑 All sessions have been invalidated.", "info")
-            return redirect(url_for('admin'))
+
+            # 2) delete the stored app password → force first-time setup
+            with sqlite3.connect(DB_FILE) as c:
+                c.execute("DELETE FROM preferences WHERE name='app_password'")
+
+            flash(
+              "🔑 All sessions invalidated and password cleared – " +
+              "please set a new password now.",
+              "info"
+            )
+            # send everyone (including this user) to setup
+            return redirect(url_for('setup'))
 
         # ── Change App Password ─────────────────────────────
         if 'change_password' in request.form:
