@@ -3,7 +3,7 @@
 
 {% block content %}
 <style>
-  /* full-page reset */
+  /* Reset full page and prevent scrolling */
   html, body {
     margin: 0;
     padding: 0;
@@ -12,18 +12,18 @@
     overflow: hidden;
   }
 
-  /* pin container between header & footer */
+  /* Pin content between header & footer */
   body.embedded main.container {
     position: absolute;
-    top: 3.5rem;    /* height of header */
-    bottom: 2.5rem; /* height of footer */
+    top: 3.5rem;    /* header height */
+    bottom: 2.5rem; /* footer height */
     left: 0;
     right: 0;
     margin: 0;
     padding: 0;
   }
 
-  /* scoped iframe styling */
+  /* Scoped iframe fills the container */
   #tar1090-frame {
     position: absolute;
     top: 0;
@@ -37,30 +37,29 @@
   }
 </style>
 
-<main class="container">
-  <iframe id="tar1090-frame" src="{{ url }}"></iframe>
-</main>
+<!-- The outer <main> comes from base.html, so we just place the iframe here -->
+<iframe id="tar1090-frame" src="{{ url }}"></iframe>
 
 <script>
   const iframe = document.getElementById('tar1090-frame');
   iframe.addEventListener('load', () => {
     try {
-      // only target real tar1090 embeds
+      // Only inject into our tar1090 instance
       if (!iframe.src.includes('/tar1090/')) {
         console.warn('Skipping tar1090 injection: URL mismatch');
         return;
       }
-      const childWin = iframe.contentWindow;
+      const { contentWindow: childWin } = iframe;
       const map = childWin.map;
       if (!map || typeof map.invalidateSize !== 'function') {
         console.warn('tar1090 `map` not found for injection');
         return;
       }
 
-      // on touch end: load missing tiles
+      // On touch end: reload any missing tiles
       map.on('touchend', () => map.invalidateSize({ pan: false }));
 
-      // on resize/orientation change: redraw map
+      // On resize/orientation change: redraw the map
       window.addEventListener('resize', () => map.invalidateSize({ animate: true }));
 
       console.log('Injected tar1090 resize/touchend handlers');
