@@ -1888,20 +1888,25 @@ def admin():
                 flash("Passwords must match.", "error")
             return redirect(url_for('admin'))
 
-        # ── Embedded-Tab: Save new URL + name ───────────────────
-        if 'embedded_url' in request.form or 'embedded_name' in request.form:
+        # ── Embedded-Tab: Save new URL + name (only when both filled) ──
+        if 'save_embedded' in request.form:
             url  = request.form.get('embedded_url','').strip()
             name = request.form.get('embedded_name','').strip()
-            with sqlite3.connect(DB_FILE) as c:
-                c.execute("""
-                  INSERT INTO preferences(name,value) VALUES('embedded_url',?)
-                  ON CONFLICT(name) DO UPDATE SET value=excluded.value
-                """, (url,))
-                c.execute("""
-                  INSERT INTO preferences(name,value) VALUES('embedded_name',?)
-                  ON CONFLICT(name) DO UPDATE SET value=excluded.value
-                """, (name,))
-            flash("Embedded-tab settings saved.", "info")
+            if url and name:
+                with sqlite3.connect(DB_FILE) as c:
+                    c.execute("""
+                      INSERT INTO preferences(name,value)
+                      VALUES('embedded_url',?)
+                      ON CONFLICT(name) DO UPDATE SET value=excluded.value
+                    """, (url,))
+                    c.execute("""
+                      INSERT INTO preferences(name,value)
+                      VALUES('embedded_name',?)
+                      ON CONFLICT(name) DO UPDATE SET value=excluded.value
+                    """, (name,))
+                flash("Embedded-tab settings saved.", "info")
+            else:
+                flash("Both URL and label are required.", "error")
             return redirect(url_for('admin'))
 
         # ── Embedded-Tab: Clear both entries ────────────────────
