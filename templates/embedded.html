@@ -59,13 +59,23 @@
         return;
       }
 
+      // Disable box-zoom (Shift+drag) and double-click zoom
+      if (childWin.ol && childWin.ol.interaction) {
+        map.getInteractions().getArray().forEach(interaction => {
+          if (interaction instanceof childWin.ol.interaction.DragZoom ||
+              interaction instanceof childWin.ol.interaction.DoubleClickZoom) {
+            map.removeInteraction(interaction);
+          }
+        });
+      }
+
       // On touch end: reload any missing tiles
       map.on('touchend', () => map.invalidateSize({ pan: false }));
 
       // On resize/orientation change: redraw the map
       window.addEventListener('resize', () => map.invalidateSize({ animate: true }));
 
-      console.log('Injected tar1090 resize/touchend handlers');
+      console.log('Injected tar1090 resize/touchend handlers and disabled zoom interactions');
     } catch (err) {
       console.error('Injection into tar1090 iframe failed:', err);
     }
