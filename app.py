@@ -38,6 +38,7 @@ from datetime import datetime
 from functools import lru_cache
 
 from zeroconf import Zeroconf, ServiceInfo
+import requests
 import fcntl
 import struct
 import socket
@@ -771,6 +772,18 @@ def ping():
     # Explicit “don’t cache me” headers for any intermediate store
     resp.headers["Cache-Control"] = "no-store, max-age=0"
     return resp
+
+# ───────────────────────────────────────────────────────────
+#  Proxy upstream for embedding (so we can break out of all parent CSS)
+@app.route('/embed-proxy')
+def embed_proxy():
+    target = request.args.get('url')
+    if not target:
+        return redirect(url_for('dashboard'))
+    upstream = requests.get(target, stream=True)
+    excluded = ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
+    headers = [(k, v) for k, v in upstream.raw.headers.items() if k.lower() not in excluded]
+    return Response(upstream.raw, status=upstream.status_code, headers=headers)
 
 @app.route('/api/lookup_tail/<tail>')
 def lookup_tail(tail):
@@ -1954,19 +1967,22 @@ def admin():
 @app.route('/embedded')
 def embedded():
     # read the two prefs
-    url  = dict_rows("SELECT value FROM preferences WHERE name='embedded_url'")
-    name = dict_rows("SELECT value FROM preferences WHERE name='embedded_name'")
-    embedded_url  = url[0]['value']  if url  else ''
-    embedded_name = name[0]['value'] if name else ''
+    rows_url  = dict_rows("SELECT value FROM preferences WHERE name='embedded_url'")
+    rows_name = dict_rows("SELECT value FROM preferences WHERE name='embedded_name'")
+    embedded_url  = rows_url[0]['value']  if rows_url  else ''
+    embedded_name = rows_name[0]['value'] if rows_name else ''
 
     # nothing to embed? send back home
     if not (embedded_url and embedded_name):
         return redirect(url_for('dashboard'))
 
-    return render_template('embedded.html',
-                           url=embedded_url,
-                           active='embedded',
-                           embedded_name=embedded_name)
+    # point at our proxy so the iframe can truly break free of parent CSS
+    return render_template(
+        'embedded.html',
+        url=url_for('embed_proxy', url=embedded_url),
+        active='embedded',
+        embedded_name=embedded_name
+    )
 
 # ───────────────────────────────────────────────────────────
 if __name__=="__main__":
