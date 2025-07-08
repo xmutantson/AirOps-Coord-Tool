@@ -1,40 +1,50 @@
 {% extends "base.html" %}
 {% block title %}{{ embedded_name }} – Aircraft Ops{% endblock %}
-
 {% block content %}
 <style>
-  /* 1) reset html/body completely, no scrollbars: */
-  html, body {
-    margin: 0;
-    padding: 0;
-    height: 100%;
-    overflow: hidden;
-  }
-
-  /* 2) override your .container on embedded pages —
-        no max-width, no auto margins, no padding: */
-  body.embedded .container {
-    max-width: none !important;
-    margin: 0 !important;
-    padding: 0 !important;
-  }
-
-  /* 3) pin that container between header & footer: */
-  body.embedded main.container {
-    position: absolute;
-    top: 3.5rem;    /* matches your header height */
-    bottom: 2.5rem; /* matches your footer height */
-    left: 0;
-    right: 0;
-  }
-
-  /* 4) now the iframe fills 100% of that full-bleed box: */
-  body.embedded iframe {
-    width: 100%;
-    height: 100%;
-    border: none;
+  html, body {margin:0; padding:0; width:100%; height:100%; overflow:hidden;}
+  body.embedded main.container {position:absolute; inset:0; margin:0; padding:0;}
+  iframe {
+    position:absolute;
+    inset:0;
+    border:none;
+    touch-action:none;
+    overscroll-behavior:contain;
+    -webkit-overflow-scrolling:touch;
   }
 </style>
 
-<iframe src="{{ url }}"></iframe>
+<main class="container">
+  <iframe id="tar1090-frame" src="{{ url }}"></iframe>
+</main>
+
+<script>
+  const iframe = document.getElementById('tar1090-frame');
+  // when the iframe finishes loading, grab its Leaflet map object and hook events.
+  iframe.addEventListener('load', () => {
+    try {
+      // assume tar1090 exposes its Leaflet map as a global `map`
+      const childWin = iframe.contentWindow;
+      const map = childWin.map;
+      if (!map || typeof map.invalidateSize !== 'function') {
+        console.warn('tar1090 `map` not found for injection');
+        return;
+      }
+
+      // ① on finger-lift, force Leaflet to reload any missing tiles
+      map.on('touchend', () => {
+        map.invalidateSize({ pan: false });
+      });
+
+      // ② on orientation / resize, also force a redraw
+      window.addEventListener('resize', () => {
+        map.invalidateSize({ animate: true });
+      });
+
+      console.log('Injected resize/touchend handlers into tar1090');
+    } catch (err) {
+      console.error('Injection into tar1090 iframe failed:', err);
+    }
+  });
+</script>
 {% endblock %}
