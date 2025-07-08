@@ -1932,9 +1932,7 @@ def admin():
         'admin.html',
         active='admin',
         default_origin=default_origin,
-        show_debug_logs=show_debug,
-        embedded_url=embedded_url,
-        embedded_name=embedded_name
+        show_debug_logs=show_debug
     )
 
 @app.route('/embedded')
