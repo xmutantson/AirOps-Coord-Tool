@@ -168,7 +168,20 @@ def inject_admin_flag():
     """
     return {'admin_unlocked': session.get('admin_unlocked', False)}
 
-# ─── Session‐Salt Helpers ───────────────────────────────────────────
+# ── Optional Embedded-Tab Config ─────────────────────────────
+@app.context_processor
+def inject_embed_config():
+    # load the two new preferences from DB
+    rows = dict_rows("SELECT value FROM preferences WHERE name='embedded_url'")
+    embedded_url  = rows[0]['value'] if rows else ''
+    rows = dict_rows("SELECT value FROM preferences WHERE name='embedded_name'")
+    embedded_name = rows[0]['value'] if rows else ''
+    return {
+        'embedded_url':  embedded_url,
+        'embedded_name': embedded_name
+    }
+
+# ─── Session-Salt Helpers ───────────────────────────────────────────
 def get_session_salt():
     rows = dict_rows("SELECT value FROM preferences WHERE name='session_salt'")
     if rows:
@@ -1864,6 +1877,29 @@ def admin():
                 flash("Passwords must match.", "error")
             return redirect(url_for('admin'))
 
+        # ── Embedded-Tab: Save new URL + name ───────────────────
+        if 'embedded_url' in request.form or 'embedded_name' in request.form:
+            url  = request.form.get('embedded_url','').strip()
+            name = request.form.get('embedded_name','').strip()
+            with sqlite3.connect(DB_FILE) as c:
+                c.execute("""
+                  INSERT INTO preferences(name,value) VALUES('embedded_url',?)
+                  ON CONFLICT(name) DO UPDATE SET value=excluded.value
+                """, (url,))
+                c.execute("""
+                  INSERT INTO preferences(name,value) VALUES('embedded_name',?)
+                  ON CONFLICT(name) DO UPDATE SET value=excluded.value
+                """, (name,))
+            flash("Embedded-tab settings saved.", "info")
+            return redirect(url_for('admin'))
+
+        # ── Embedded-Tab: Clear both entries ────────────────────
+        if 'clear_embedded' in request.form:
+            with sqlite3.connect(DB_FILE) as c:
+                c.execute("DELETE FROM preferences WHERE name IN ('embedded_url','embedded_name')")
+            flash("Embedded-tab removed.", "info")
+            return redirect(url_for('admin'))
+
         # ── Update Default Origin (DB) ───────────────
         if 'default_origin' in request.form:
             val = escape(request.form['default_origin'].strip().upper())
@@ -1897,7 +1933,26 @@ def admin():
         active='admin',
         default_origin=default_origin,
         show_debug_logs=show_debug
+        embedded_url=embedded_url,
+        embedded_name=embedded_name
     )
+
+@app.route('/embedded')
+def embedded():
+    # read the two prefs
+    url  = dict_rows("SELECT value FROM preferences WHERE name='embedded_url'")
+    name = dict_rows("SELECT value FROM preferences WHERE name='embedded_name'")
+    embedded_url  = url[0]['value']  if url  else ''
+    embedded_name = name[0]['value'] if name else ''
+
+    # nothing to embed? send back home
+    if not (embedded_url and embedded_name):
+        return redirect(url_for('dashboard'))
+
+    return render_template('embedded.html',
+                           url=embedded_url,
+                           active='embedded',
+                           embedded_name=embedded_name)
 
 # ───────────────────────────────────────────────────────────
 if __name__=="__main__":

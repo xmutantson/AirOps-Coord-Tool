@@ -629,3 +629,17 @@ body.offline {
 .toast.success { background: #4caf50; }
 .toast.error   { background: #f44336; }
 .toast.info    { background: #2196f3; }
+/* ── Embedded-Tab form row in Admin ───────────────────────── */
+.container.admin-console .embedded-config {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+.container.admin-console .embedded-config input[type="text"] {
+  flex: 1;
+  /* match your other admin inputs: */
+  padding: 0.6em;
+  border: 1px solid #ccc;
+  border-radius: var(--radius);
+}

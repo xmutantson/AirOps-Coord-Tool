@@ -20,7 +20,27 @@
       value="{{ default_origin }}"
       placeholder="e.g. KSEA or SEA"
       class="{% if 'db_reset' in (_all_flashes|map(attribute=0)) %}fade-red{% endif %}">
+    <div class="embedded-config">
+      <input
+        type="text"
+        name="embedded_url"
+        value="{{ embedded_url }}"
+        placeholder="https://your.local/app">
 
+      <input
+        type="text"
+        name="embedded_name"
+        value="{{ embedded_name }}"
+        placeholder="Tab label…">
+
+      <button
+        name="clear_embedded"
+        value="1"
+        type="submit"
+        class="danger">
+        Clear
+      </button>
+    </div>
     <label style="margin-top:18px">Show Debug Logs:</label>
     <select name="show_debug_logs" onchange="this.form.submit()">
       <option value="no"  {% if show_debug_logs=='no'  %}selected{% endif %}>No</option>
