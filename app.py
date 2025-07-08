@@ -245,7 +245,18 @@ def set_app_password_hash(hashval):
 # pretend RateLimitExceeded is a 500, to confuse bots
 @app.errorhandler(RateLimitExceeded)
 def _rate_limit_exceeded(e):
-    return "Internal Server Error", 500
+    # return a realistic-looking 500 page
+    html = """<!DOCTYPE html>
+<html lang="en"><head>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8"><title>500 Internal Server Error</title>
+</head><body><h1>Internal Server Error</h1>
+<p>The server encountered an internal error and was unable to complete 
+your request. Either the server is overloaded or there is an error in 
+the application.</p>
+</body></html>"""
+    resp = make_response(html, 500)
+    resp.headers["Content-Type"] = "text/html; charset=UTF-8"
+    return resp
 
 # ───────────────── DB init & migrations ──────────────────
 def init_db():
