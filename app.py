@@ -1115,7 +1115,7 @@ def radio():
 
     # ─── GET: fetch & order ramp entries ────────────────────────────────
     # read new preference toggle
-    show_unsent_only = request.cookies.get('radio_show_unsent_only','no') == 'yes'
+    show_unsent_only = request.cookies.get('radio_show_unsent_only','yes') == 'yes'
     hide_tbd         = request.cookies.get('hide_tbd','yes') == 'yes'
 
     # build your query
@@ -1257,7 +1257,7 @@ def dashboard_table_partial():
 @app.route('/_radio_table')
 def radio_table_partial():
     # read the same toggle
-    show_unsent_only = request.cookies.get('radio_show_unsent_only','no') == 'yes'
+    show_unsent_only = request.cookies.get('radio_show_unsent_only','yes') == 'yes'
 
     # build matching query
     sql = """
