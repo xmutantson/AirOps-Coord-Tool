@@ -658,14 +658,24 @@ body.offline {
   background: #fff;
   border-radius: var(--radius);
   /* center all panel content */
-  display: flex;
   flex-direction: column;
   align-items: center;
   text-align: center;
 }
-.cargo-tools-panel.active {
-  display: block;
-}
+ /* full‑screen takeover when body.cw-active */
+ body.cw-active #cargo-tools-panel {
+   display: flex !important;      /* now actually turn it on */
+   position: fixed;
+   top:    3.5rem;
+   left:   50%;
+   transform: translateX(-50%);
+   width:  min(480px, 90vw);
+   bottom: 2.5rem;
+   background: var(--bg);
+   z-index: 2000;
+   padding: 2rem;
+   overflow-y: auto;
+ }
 .cw-button {
   width: 2.5em;
   height: 2.5em;
