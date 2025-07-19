@@ -54,11 +54,51 @@
         </select>
       </div>
 
+      <!-- Cargo Weight Tools Toggle Buttons -->
+      <div class="cargo-tools-toggle">
+        <button type="button" id="open-cw-tools"
+                title="Cargo Weight Tools">
+          Running Total
+        </button>
+        <button type="button" disabled>
+          Adv. Cargo Entry
+        </button>
+      </div>
+
       <label for="remarks">Remarks</label>
       <input id="remarks" name="remarks">
 
       <button type="submit">Save Flight</button>
     </form>
+
+    <!-- Cargo Weight Tools Panel (moved out of the form for takeover) -->
+    <div id="cargo-tools-panel" class="cargo-tools-panel">
+      <div class="cargo-tools-header"
+           style="display:flex;justify-content:space-between;
+                  align-items:center;margin-bottom:1rem;">
+        <button type="button" id="cw-back"
+                style="background:none;border:none;
+                       font-size:1.25em;cursor:pointer;">
+          ← Back
+        </button>
+        <h4 style="margin:0;">Cargo Weight Tools</h4>
+        <div style="width:2.5em;"></div>
+      </div>
+      <div id="cw-history"></div>
+      <div id="cw-total">Total: 0 lbs</div>
+      <div style="display:flex; align-items:center; gap:0.5rem;">
+        <button type="button" class="cw-button cw-minus"
+                id="cw-minus" disabled>−</button>
+        <input type="number" id="cw-change"
+               placeholder="e.g. 20" step="any" min="0">
+        <button type="button" class="cw-button cw-plus"
+                id="cw-plus">+</button>
+      </div>
+      <button type="button" id="cw-apply"
+              style="margin-top:0.5rem;">
+        Copy to Cargo Weight
+      </button>
+    </div>
 
     <div id="rb-feedback-container"></div>
   </div>
@@ -211,5 +251,68 @@
       form.reset();
       applyDirUI();
     });
+
+    // ── Cargo Weight Tools Setup & Logic ───────────────────────────
+    const cwPanel   = document.getElementById('cargo-tools-panel');
+    const openCwBtn = document.getElementById('open-cw-tools');
+    const cwBack    = document.getElementById('cw-back');
+    const cwMinus   = document.getElementById('cw-minus');
+    const cwPlus    = document.getElementById('cw-plus');
+    const cwChange  = document.getElementById('cw-change');
+    const cwHistory = document.getElementById('cw-history');
+    const cwTotalEl = document.getElementById('cw-total');
+    const cwApply   = document.getElementById('cw-apply');
+    let totalCargo  = 0;
+
+    function recordHistory(entry) {
+      const div = document.createElement('div');
+      div.textContent = entry;
+      cwHistory.appendChild(div);
+      cwHistory.scrollTop = cwHistory.scrollHeight;
+    }
+
+    // Toggle full-page takeover
+    openCwBtn.addEventListener('click', () => {
+      document.body.classList.toggle('cw-active');
+    });
+    // Back button
+    cwBack.addEventListener('click', () => {
+      document.body.classList.remove('cw-active');
+    });
+    // Copy back & exit
+    cwApply.addEventListener('click', () => {
+      document.getElementById('cargo_weight').value = totalCargo;
+      document.body.classList.remove('cw-active');
+    });
+
+    // Math: Plus
+    cwPlus.addEventListener('click', () => {
+      const val = parseFloat(cwChange.value);
+      if (isNaN(val)) return alert('Enter a valid number');
+      const change = Math.ceil(val);
+      if (totalCargo === 0) {
+        totalCargo = change;
+        recordHistory(`Initial: ${change} lbs`);
+      } else {
+        const prev = totalCargo;
+        totalCargo += change;
+        recordHistory(`${prev} + ${change} = ${totalCargo}`);
+      }
+      cwTotalEl.textContent = `Total: ${totalCargo} lbs`;
+      cwMinus.disabled = false;
+      cwChange.value = '';
+    });
+    // Math: Minus
+    cwMinus.addEventListener('click', () => {
+      const val = parseFloat(cwChange.value);
+      if (isNaN(val)) return alert('Enter a valid number');
+      const change = Math.ceil(val);
+      const prev = totalCargo;
+      totalCargo = Math.max(0, totalCargo - change);
+      recordHistory(`${prev} - ${change} = ${totalCargo}`);
+      cwTotalEl.textContent = `Total: ${totalCargo} lbs`;
+      cwChange.value = '';
+    });
+
   </script>
 {% endblock %}

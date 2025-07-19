@@ -643,3 +643,67 @@ body.offline {
   border: 1px solid #ccc;
   border-radius: var(--radius);
 }
+ /* Cargo Weight Tools */
+.cargo-tools-toggle {
+  grid-column: 2;
+  margin-top: 0.5rem;
+  display: flex;
+  gap: 0.5rem;
+}
+.cargo-tools-panel {
+  display: none;
+  border: 1px solid #ccc;
+  padding: 1rem;
+  margin-top: 1rem;
+  background: #fff;
+  border-radius: var(--radius);
+}
+.cargo-tools-panel.active {
+  display: block;
+}
+.cw-button {
+  width: 2.5em;
+  height: 2.5em;
+  border: none;
+  color: #fff;
+  font-size: 1.25em;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.cw-minus { background: #d33; }
+.cw-plus  { background: #4caf50; }
+#cw-change {
+  width: 4em;
+  padding: 0.5em;
+  text-align: right;
+}
+#cw-history {
+  max-height: 8em;
+  overflow-y: auto;
+  margin-bottom: 0.5rem;
+  font-size: 0.9em;
+  color: var(--muted);
+}
+#cw-total {
+  font-weight: bold;
+  margin-bottom: 0.5rem;
+}
+
+/* full-page takeover: hide all ramp-form children except the tools panel */
+body.cw-active .ramp-form-container > :not(#cargo-tools-panel) {
+  display: none !important;
+}
+
+/* panel fills the viewport between header and footer */
+body.cw-active #cargo-tools-panel {
+  display: block !important;
+  position: fixed;
+  top:    3.5rem;                   /* just under the navbar */
+  left:   0;
+  right:  0;
+  bottom: 2.5rem;                   /* just above the footer */
+  background: var(--bg);
+  z-index: 2000;
+  padding: 2rem;
+  overflow-y: auto;
+}
