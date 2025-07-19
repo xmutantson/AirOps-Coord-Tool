@@ -72,18 +72,22 @@
     </form>
 
     <!-- Cargo Weight Tools Panel (moved out of the form for takeover) -->
-    <div id="cargo-tools-panel" class="cargo-tools-panel">
-      <div class="cargo-tools-header"
-           style="display:flex;justify-content:space-between;
-                  align-items:center;margin-bottom:1rem;">
-        <button type="button" id="cw-back"
-                style="background:none;border:none;
-                       font-size:1.25em;cursor:pointer;">
-          ← Back
-        </button>
-        <h4 style="margin:0;">Cargo Weight Tools</h4>
-        <div style="width:2.5em;"></div>
-      </div>
+    <div id="cargo-tools-panel" class="cargo-tools-panel"
+         style="position:relative;
+                margin-bottom:1rem;
+                text-align:center;">
+      <button type="button" id="cw-back"
+              style="position:absolute;
+                     left:1rem;
+                     background:none;
+                     border:none;
+                     font-size:1em;
+                     cursor:pointer;">
+        ← Back
+      </button>
+      <h4 style="margin:0; font-size:2em;">
+        Cargo Weight Tools
+      </h4>
       <div id="cw-history"></div>
       <div id="cw-total">Total: 0 lbs</div>
       <div style="display:flex; align-items:center; gap:0.5rem;">
@@ -250,6 +254,11 @@
 
       form.reset();
       applyDirUI();
+      // clear running‐total so next use forces an initial
+      totalCargo = 0;
+      cwHistory.innerHTML = '';
+      cwTotalEl.textContent = 'Total: 0 lbs';
+      cwMinus.disabled = true;
     });
 
     // ── Cargo Weight Tools Setup & Logic ───────────────────────────
