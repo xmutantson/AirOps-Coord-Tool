@@ -56,8 +56,7 @@
 
       <!-- Cargo Weight Tools Toggle Buttons -->
       <div class="cargo-tools-toggle">
-        <button type="button" id="open-cw-tools"
-                title="Cargo Weight Tools">
+        <button type="button" id="open-cw-tools" title="Cargo Weight Tools">
           Running Total
         </button>
         <button type="button" disabled>
@@ -72,34 +71,30 @@
     </form>
 
     <!-- Cargo Weight Tools Panel (moved out of the form for takeover) -->
-    <div id="cargo-tools-panel" class="cargo-tools-panel"
-         style="position:relative;
-                margin-bottom:1rem;
-                text-align:center;">
-      <button type="button" id="cw-back"
-              style="position:absolute;
-                     left:1rem;
-                     background:none;
-                     border:none;
-                     font-size:1em;
-                     cursor:pointer;">
+    <div
+      id="cargo-tools-panel"
+      class="cargo-tools-panel"
+      style="position:relative; margin-bottom:1rem; text-align:center;"
+    >
+      <button
+        type="button"
+        id="cw-back"
+        style="position:absolute; left:1rem; background:none; border:none; font-size:1em; cursor:pointer;"
+      >
         ← Back
       </button>
-      <h4 style="margin:0; font-size:2em;">
-        Cargo Weight Tools
-      </h4>
+      <h4 style="margin:0; font-size:2em;">Cargo Weight Tools</h4>
+
       <div id="cw-history"></div>
       <div id="cw-total">Total: 0 lbs</div>
-      <div style="display:flex; align-items:center; gap:0.5rem;">
-        <button type="button" class="cw-button cw-minus"
-                id="cw-minus" disabled>−</button>
-        <input type="number" id="cw-change"
-               placeholder="e.g. 20" step="any" min="0">
-        <button type="button" class="cw-button cw-plus"
-                id="cw-plus">+</button>
+
+      <div style="display:flex; align-items:center; gap:0.5rem; margin-top:0.5rem;">
+        <button type="button" class="cw-button cw-minus" id="cw-minus" disabled>−</button>
+        <input type="number" id="cw-change" placeholder="e.g. 20" step="any" min="0">
+        <button type="button" class="cw-button cw-plus" id="cw-plus">+</button>
       </div>
-      <button type="button" id="cw-apply"
-              style="margin-top:0.5rem;">
+
+      <button type="button" id="cw-apply" style="margin-top:0.75rem;">
         Copy to Cargo Weight
       </button>
     </div>
@@ -111,33 +106,24 @@
     // ───────────────────────────────────────────────────────────────
     // Ramp-Boss form validation
     function validateRampBoss() {
-      // remove any previous error messages
-      document.querySelectorAll('#rb-form .form-error')
-              .forEach(el => el.remove());
-      // find required fields that are empty
-      const invalid = Array.from(
-        document.querySelectorAll('#rb-form [required]')
-      ).filter(f => !f.value.trim());
+      document.querySelectorAll('#rb-form .form-error').forEach(el => el.remove());
+      const invalid = Array.from(document.querySelectorAll('#rb-form [required]'))
+                           .filter(f => !f.value.trim());
       if (invalid.length) {
-        // highlight each missing field
         invalid.forEach(f => f.classList.add('error'));
-        // inject one error message under the submit button
         const submitBtn = document.querySelector('#rb-form button[type="submit"]');
         const msg = document.createElement('div');
         msg.className = 'form-error';
         msg.textContent = 'Please fill in all required fields.';
         submitBtn.parentNode.insertBefore(msg, submitBtn.nextSibling);
-        // focus the first missing field
         invalid[0].focus();
         return false;
       }
       return true;
     }
 
-    // clear red border as soon as they start typing
-    document.querySelectorAll('#rb-form [required]').forEach(field => {
-      field.addEventListener('input', () => field.classList.remove('error'));
-    });
+    document.querySelectorAll('#rb-form [required]')
+            .forEach(field => field.addEventListener('input', () => field.classList.remove('error')));
 
     // ───────────────────────────────────────────────────────────────
     /* Ramp-Boss AJAX & UI logic */
@@ -154,50 +140,48 @@
     const etaInput     = document.getElementById('eta_input');
 
     function applyDirUI() {
-      const dir = dirRadios.find(r=>r.checked).value;
+      const dir = dirRadios.find(r => r.checked).value;
       const now = new Date(),
             hh  = now.getHours().toString().padStart(2,'0'),
             mm  = now.getMinutes().toString().padStart(2,'0');
 
       if (dir === 'outbound') {
-        labelTime.textContent = 'Departure Time (HHMM)*';
-        depField.value        = hh + mm;
-        etaBlock.style.display= '';
-        etaInput.value        = '';
+        labelTime.textContent  = 'Departure Time (HHMM)*';
+        depField.value         = hh + mm;
+        etaBlock.style.display = '';
+        etaInput.value         = '';
         if (!originField.value && defaultOrigin) originField.value = defaultOrigin;
         destField.value = '';
       } else {
-        labelTime.textContent = 'Arrival Time (HHMM)*';
-        depField.value        = hh + mm;
-        etaBlock.style.display= 'none';
-        etaInput.value        = '';
+        labelTime.textContent  = 'Arrival Time (HHMM)*';
+        depField.value         = hh + mm;
+        etaBlock.style.display = 'none';
+        etaInput.value         = '';
         if (!destField.value && defaultOrigin) destField.value = defaultOrigin;
         originField.value = '';
       }
     }
-    dirRadios.forEach(r=>r.addEventListener('change',applyDirUI));
+    dirRadios.forEach(r => r.addEventListener('change', applyDirUI));
     applyDirUI();
 
-    // Tail-lookup helper
-    document.getElementById('lookup').addEventListener('click', async ()=>{
+    document.getElementById('lookup').addEventListener('click', async () => {
       const tail = form.tail_number.value.trim().toUpperCase();
       if (!tail) return alert('Enter tail number first!');
       const res = await fetch(`/api/lookup_tail/${encodeURIComponent(tail)}`);
       if (!res.ok)    return alert('Lookup failed');
       const d = await res.json();
       if (!Object.keys(d).length) return alert('No prior record for that tail.');
-      if (d.airfield_takeoff) originField.value = d.airfield_takeoff;
-      if (d.airfield_landing) destField.value   = d.airfield_landing;
+      if (d.airfield_takeoff) form.origin.value       = d.airfield_takeoff;
+      if (d.airfield_landing) form.destination.value  = d.airfield_landing;
       if (d.pilot_name)       form.pilot_name.value   = d.pilot_name;
       if (d.pax_count)        form.pax_count.value    = d.pax_count;
       if (d.cargo_type)       form.cargo_type.value   = d.cargo_type;
       if (d.cargo_weight)     form.cargo_weight.value = d.cargo_weight;
     });
 
-    // Wrapped submit handler: validate → then AJAX
     form.addEventListener('submit', async e => {
       e.preventDefault();
-      if (!validateRampBoss()) return;    // abort if missing fields
+      if (!validateRampBoss()) return;
 
       // simple HHMM sanity check
       const t = depField.value.trim();
@@ -216,15 +200,14 @@
       const f = await resp.json();
 
       // render feedback table
-      // pick a border class: red if nothing parsed, blue if update, green otherwise
       const allBlank = ['tail_number','airfield_takeoff','airfield_landing',
                         'takeoff_time','eta','cargo_type','cargo_weight','remarks']
-                        .every(k => !f[k] || f[k]==='TBD');
+                       .every(k => !f[k] || f[k]==='TBD');
       const rowClass = allBlank
         ? 'red-border'
         : (f.action==='updated' ? 'blue-border' : 'green-border');
 
-      feedbackBox.innerHTML = `      
+      feedbackBox.innerHTML = `
         <table class="full-bleed">
           <thead>
             <tr>
@@ -254,7 +237,8 @@
 
       form.reset();
       applyDirUI();
-      // clear running‐total so next use forces an initial
+
+      // reset running‑total on each form‑submit
       totalCargo = 0;
       cwHistory.innerHTML = '';
       cwTotalEl.textContent = 'Total: 0 lbs';
@@ -280,21 +264,25 @@
       cwHistory.scrollTop = cwHistory.scrollHeight;
     }
 
-    // Toggle full-page takeover
+    // Toggle full‑page takeover
     openCwBtn.addEventListener('click', () => {
-      document.body.classList.toggle('cw-active');
+      const nowActive = document.body.classList.toggle('cw-active');
+      // CSS will show/hide #cargo-tools-panel
+      cwMinus.disabled = (totalCargo === 0);
     });
-    // Back button
+
+    // “← Back” hides panel
     cwBack.addEventListener('click', () => {
       document.body.classList.remove('cw-active');
     });
-    // Copy back & exit
+
+    // “Copy to Cargo Weight” hides panel and writes back
     cwApply.addEventListener('click', () => {
       document.getElementById('cargo_weight').value = totalCargo;
       document.body.classList.remove('cw-active');
     });
 
-    // Math: Plus
+    // Plus
     cwPlus.addEventListener('click', () => {
       const val = parseFloat(cwChange.value);
       if (isNaN(val)) return alert('Enter a valid number');
@@ -311,7 +299,8 @@
       cwMinus.disabled = false;
       cwChange.value = '';
     });
-    // Math: Minus
+
+    // Minus
     cwMinus.addEventListener('click', () => {
       const val = parseFloat(cwChange.value);
       if (isNaN(val)) return alert('Enter a valid number');
@@ -321,7 +310,9 @@
       recordHistory(`${prev} - ${change} = ${totalCargo}`);
       cwTotalEl.textContent = `Total: ${totalCargo} lbs`;
       cwChange.value = '';
+      if (totalCargo === 0) {
+        cwMinus.disabled = true;
+      }
     });
-
   </script>
 {% endblock %}
