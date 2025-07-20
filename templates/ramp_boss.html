@@ -121,6 +121,14 @@
       </button>
       <h4 style="margin-top:2rem; margin-bottom:0.5rem;">Advanced Inventory Entry</h4>
 
+      <!-- local Inbound / Outbound toggle (mirrors the main one) -->
+      <div class="radio-toggle adv-dir-toggle" style="margin-bottom:0.5rem;">
+        <input type="radio" id="adv-dir-out" name="adv_direction" value="outbound">
+        <label for="adv-dir-out">Outbound</label>
+        <input type="radio" id="adv-dir-in"  name="adv_direction" value="inbound">
+        <label for="adv-dir-in">Inbound</label>
+      </div>
+
       <div id="adv-line-form" style="display:flex; gap:0.5rem; align-items:center;">
         <select id="adv-category" style="min-width:10ch;">
           <option value="">Category…</option>
@@ -378,6 +386,8 @@
     const advCat      = document.getElementById('adv-category');
     const advItem     = document.getElementById('adv-item');   // outbound
     const advSize     = document.getElementById('adv-size');   // outbound
+    const advDirOut   = document.getElementById('adv-dir-out'); // local toggle
+    const advDirIn    = document.getElementById('adv-dir-in');
     const advName     = document.getElementById('adv-name');   // inbound
     const advWeight   = document.getElementById('adv-weight'); // inbound
     const advWunit    = document.getElementById('adv-wunit');  // inbound
@@ -406,12 +416,33 @@
     /* background refresh every 15 s */
     setInterval(fetchInventory, 15_000);
 
+    /* ──────────────────────────────────────────────────────────
+       Helper: switch ADV panel UI according to dir ("inbound"/"outbound")
+    ────────────────────────────────────────────────────────── */
+    function applyAdvDirUI (dir) {
+      const outbound = (dir === 'outbound');
+      document.body.dataset.advDir = dir;              // remember current mode
+
+      /* show / hide the two groups of widgets */
+      document.querySelectorAll('.adv-out').forEach(el => el.style.display = outbound ? '' : 'none');
+      document.querySelectorAll('.adv-in' ).forEach(el => el.style.display = outbound ? 'none' : '');
+
+      /* enable / disable fields appropriately */
+      if (outbound) {
+        [advItem, advSize, advQty, advAdd].forEach(el => el.disabled = true);
+        advQty.value = '';
+      } else {
+        [advName, advWeight, advWunit, advQty].forEach(el => el.disabled = false);
+        advName.value   = '';
+        advWeight.value = '';
+        advQty.value    = '';
+        advAdd.disabled = true;
+      }
+    }
+
     /* open panel */
     function startAdvanced () {
-      /* which aircraft direction is currently selected? */
-      const dir        = document.querySelector('input[name="direction"]:checked').value;
-      const outbound   = dir === 'outbound';
-      document.body.dataset.advDir = outbound ? 'outbound' : 'inbound';
+      const dir = document.querySelector('input[name="direction"]:checked').value;
 
       const mid = ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g,
         c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16));
@@ -431,21 +462,10 @@
         return showError('Inventory data not loaded. Please wait and try again.');
       }
 
-      /* ── toggle UI for OUT vs IN ─────────────────────────── */
-      document.querySelectorAll('.adv-out').forEach(el => el.style.display = outbound ? '' : 'none');
-      document.querySelectorAll('.adv-in' ).forEach(el => el.style.display = outbound ? 'none' : '');
-
-      /* reset & disable everything appropriately */
-      if (outbound) {
-        [advItem, advSize, advQty, advAdd].forEach(el => el.disabled = true);
-        advQty.value = '';
-      } else {
-        [advName, advWeight, advWunit, advQty].forEach(el => el.disabled = false);
-        advName.value   = '';
-        advWeight.value = '';
-        advQty.value    = '';
-        advAdd.disabled = true;      // enable later via checker
-      }
+      /* sync the local toggle & widgets */
+      advDirOut.checked = (dir === 'outbound');
+      advDirIn.checked  = (dir === 'inbound');
+      applyAdvDirUI(dir);
       rbForm.style.display = 'none';
       advPanel.style.display = 'block';
     }
@@ -468,6 +488,27 @@
       advPanel.style.display = 'none';
       rbForm.style.display   = '';
     });
+
+    /* ── keep both direction toggles in sync ───────────────────────── */
+    function syncFromAdvToggle () {
+      const dir = advDirOut.checked ? 'outbound' : 'inbound';
+      /* flip the main radios */
+      dirRadios.find(r => r.value === dir).checked = true;
+      applyDirUI();               // refresh outside UI
+      applyAdvDirUI(dir);         // refresh inside UI
+    }
+    advDirOut.addEventListener('change', syncFromAdvToggle);
+    advDirIn .addEventListener('change', syncFromAdvToggle);
+
+    /* when the MAIN toggle changes while Adv is open, mirror it */
+    dirRadios.forEach(r => r.addEventListener('change', () => {
+      if (advPanel.style.display === 'block') {
+        const dir = r.value;
+        advDirOut.checked = (dir === 'outbound');
+        advDirIn.checked  = (dir === 'inbound');
+        applyAdvDirUI(dir);
+      }
+    }));
 
     /* cascaded selects */
     advCat.addEventListener('change', () => {
