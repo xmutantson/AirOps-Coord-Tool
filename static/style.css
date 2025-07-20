@@ -740,8 +740,9 @@ body.cw-active #cargo-tools-panel {
   /* fill the viewport between sticky header & footer */
   top:    3.5rem;          /* header height               */
   bottom: 2.5rem;          /* footer height               */
-  left:   10%;             /* centred @ 80 % total width  */
-  width:  80%;
+  left:   50%;
+  transform:translateX(-50%);
+  width:  80vw;            /* 80% of full-bleed width  */
   overflow-y: auto;
   background: #fff;
   z-index: 1500;
