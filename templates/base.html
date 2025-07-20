@@ -105,5 +105,32 @@ document.addEventListener('DOMContentLoaded', ()=> {
 });
 </script>
 
+<!-- on‑demand toast helper (pages may call window.showToast) -->
+<script>
+/* If back‑end flashes are already on the page the first <script> animates
+   them.  This helper covers the *run‑time* case: JS code wants to spawn its
+   own toast after the DOM is ready. */
+if (typeof window.showToast !== 'function') {
+  window.showToast = function (msg, type = 'info', ms = 3000) {
+    const wrap = document.getElementById('toast-container');
+    if (!wrap) { alert(msg); return; }          /* graceful fallback */
+
+    const t = document.createElement('div');
+    t.className = `toast ${type}`;
+    t.textContent = msg;
+    wrap.appendChild(t);
+
+    /* mimic the existing entrance / exit animation */
+    requestAnimationFrame(() => t.classList.add('show'));
+    setTimeout(() => t.classList.add('hide'), ms);
+    t.addEventListener('transitionend', e => {
+      if (e.propertyName === 'opacity' && t.classList.contains('hide')) {
+        t.remove();
+      }
+    });
+  };
+}
+</script>
+
 </body>
 </html>

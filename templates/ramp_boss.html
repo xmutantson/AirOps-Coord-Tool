@@ -527,11 +527,21 @@
       cw.value   = (+cw.value || 0) + j.total;
       rmf.value += `${j.sanitized} ${j.wpu} lb×${j.qty}; `;
 
-      /* pull a fresh snapshot so everyone stays in sync */
-      const cid = advCat.value, it = advItem.value;
-      await fetchInventory();
+      /* ----------------------------------------------------------
+         1. Adjust in‑memory “avail” counts immediately so the UI
+         reflects the reduced stock without waiting 15 s.
+         2. Rebuild the Size dropdown to show the new numbers.
+      ---------------------------------------------------------- */
+      const cid = advCat.value,
+            it  = advItem.value,
+            sz  = String(advSize.value),
+            qtyUsed = +advQty.value;
 
-      /* rebuild the Size dropdown with NEW counts */
+      if (inventoryAdvancedData.avail?.[cid]?.[it]?.[sz] !== undefined) {
+        inventoryAdvancedData.avail[cid][it][sz] =
+          Math.max(0, inventoryAdvancedData.avail[cid][it][sz] - qtyUsed);
+      }
+
       advSize.innerHTML = '<option value="">Size…</option>' +
         (inventoryAdvancedData.sizes?.[cid]?.[it] || [])
           .map(s => {
@@ -540,8 +550,8 @@
           })
           .join('');
 
-      advQty.value = '';                 // make next entry easier
-      advAdd.disabled = true;            // until user types new qty
+      advQty.value = '';
+      advAdd.disabled = true;
       advDone.disabled = false;
     });
 
