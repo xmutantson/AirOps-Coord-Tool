@@ -1716,11 +1716,11 @@ def inventory_advance_line():
     elif action == 'delete':
         eid = int(request.form['entry_id'])
         with sqlite3.connect(DB_FILE) as c:
-            c.execute(
+            cur = c.execute(
               "DELETE FROM inventory_entries WHERE id=? AND pending=1 AND session_id=?",
               (eid, mid)
             )
-        return jsonify(success=(c.rowcount>0)), (404 if c.rowcount==0 else 200)
+        return jsonify(success=(cur.rowcount>0)), (404 if cur.rowcount==0 else 200)
 
     elif action == 'commit':
         # clear pending = 0 for this manifest

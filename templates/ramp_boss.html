@@ -382,13 +382,16 @@
 
     const showError = msg => showToast(msg, 'error');
 
-    /* keep stock fresh */
-    setInterval(() => {
-      fetch("{{ url_for('inventory.inventory_advance_data') }}")
-        .then(r => r.json())
-        .then(d => inventoryAdvancedData = d)
-        .catch(() => {});
-    }, 15_000);
+    /* ── live‑stock util ────────────────────────────────────── */
+    async function fetchInventory () {
+      try {
+        const d = await fetch("{{ url_for('inventory.inventory_advance_data') }}")
+                          .then(r => r.json());
+        inventoryAdvancedData = d;
+      } catch {/* ignore network hiccup */ }
+    }
+    /* background refresh every 15 s */
+    setInterval(fetchInventory, 15_000);
 
     /* open panel */
     function startAdvanced () {
@@ -492,8 +495,10 @@
       pendingIds.push(j.entry_id);
 
       const chip = document.createElement('div');
-      chip.style.cssText = 'padding:0.25em 0.5em; background:#eee; border-radius:4px;';
-      chip.textContent   = `${j.sanitized} ${j.wpu} lb×${j.qty}`;
+      chip.style.cssText =
+        'padding:0.25em 0.5em; background:#eee; border-radius:4px; white-space:pre;';
+      chip.textContent =
+        `${j.sanitized}\n${j.wpu} lb × ${j.qty}\n≈ ${j.total} lb`;
       const rm = document.createElement('button');
       rm.textContent = '❌';
       rm.style.cssText = 'margin-left:0.25em; background:none; border:none; color:#c33; font-size:1rem; cursor:pointer;';
@@ -522,7 +527,21 @@
       cw.value   = (+cw.value || 0) + j.total;
       rmf.value += `${j.sanitized} ${j.wpu} lb×${j.qty}; `;
 
+      /* pull a fresh snapshot so everyone stays in sync */
+      const cid = advCat.value, it = advItem.value;
+      await fetchInventory();
+
+      /* rebuild the Size dropdown with NEW counts */
+      advSize.innerHTML = '<option value="">Size…</option>' +
+        (inventoryAdvancedData.sizes?.[cid]?.[it] || [])
+          .map(s => {
+            const a = inventoryAdvancedData.avail?.[cid]?.[it]?.[String(s)] ?? 0;
+            return `<option value="${s}">${s} lb (${a} avail)</option>`;
+          })
+          .join('');
+
       advQty.value = '';                 // make next entry easier
+      advAdd.disabled = true;            // until user types new qty
       advDone.disabled = false;
     });
 
