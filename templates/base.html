@@ -28,15 +28,16 @@
   {% if active not in ['login','setup'] %}
   <header>
     <nav class="main-nav">
-      <a href="{{ url_for('dashboard') }}"       class="{% if active=='dashboard' %}active{% endif %}">Dashboard</a>
-      <a href="{{ url_for('radio') }}"           class="{% if active=='radio' %}active{% endif %}">Radio</a>
-      <a href="{{ url_for('ramp_boss') }}"       class="{% if active=='ramp_boss' %}active{% endif %}">Ramp Boss</a>
-      <a href="{{ url_for('preferences') }}"     class="{% if active=='preferences' %}active{% endif %}">Preferences</a>
+      <a href="{{ url_for('dashboard') }}"                        class="{% if active=='dashboard' %}active{% endif %}">Dashboard</a>
+      <a href="{{ url_for('radio') }}"                            class="{% if active=='radio' %}active{% endif %}">Radio</a>
+      <a href="{{ url_for('ramp_boss') }}"                        class="{% if active=='ramp_boss' %}active{% endif %}">Ramp Boss</a>
+      <a href="{{ url_for('inventory.inventory_overview') }}"     class="{{ 'active' if active=='inventory' }}">Inventory</a>
+      <a href="{{ url_for('preferences') }}"                      class="{% if active=='preferences' %}active{% endif %}">Preferences</a>
       {% if embedded_name and embedded_url %}
-      <a href="{{ url_for('embedded') }}"        class="{% if active=='embedded' %}active{% endif %}">{{ embedded_name }}</a>
+      <a href="{{ url_for('embedded') }}"                         class="{% if active=='embedded' %}active{% endif %}">{{ embedded_name }}</a>
       {% endif %}
       {% if admin_unlocked %}
-      <a href="{{ url_for('admin') }}"           class="{% if active=='admin' %}active{% endif %}">Admin</a>
+      <a href="{{ url_for('admin') }}"                            class="{% if active=='admin' %}active{% endif %}">Admin</a>
       {% endif %}
     </nav>
   </header>

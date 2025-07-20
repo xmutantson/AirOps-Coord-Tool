@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Inventory Overview – Aircraft Ops{% endblock %}
+
+{% block content %}
+  <h2>Inventory Overview</h2>
+  <div id="inventory-table"><!-- table loads here --></div>
+
+  <script>
+    async function loadInventoryOverview() {
+      const resp = await fetch("{{ url_for('inventory.inventory_overview_table') }}");
+      document.getElementById("inventory-table").innerHTML = await resp.text();
+    }
+    // initial load + refresh every 60s
+    loadInventoryOverview();
+    setInterval(loadInventoryOverview, 60_000);
+  </script>
+{% endblock %}

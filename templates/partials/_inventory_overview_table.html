@@ -1,0 +1,26 @@
+<table class="full-bleed">
+  <thead>
+    <tr>
+      <th>Category</th>
+      <th>Total In ({{ mass_pref }})</th>
+      <th>Total Out ({{ mass_pref }})</th>
+      <th>Net ({{ mass_pref }})</th>
+      <th>Rate In ({{ mass_pref }}/h)</th>
+      <th>Rate Out ({{ mass_pref }}/h)</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in inventory %}
+      <tr>
+        <td>{{ row.category }}</td>
+        <td>{{ row.total_in }} {{ mass_pref }}</td>
+        <td>{{ row.total_out }} {{ mass_pref }}</td>
+        <td>{{ row.net }} {{ mass_pref }}</td>
+        <td>{{ row.rate_in }} {{ mass_pref }}/h</td>
+        <td>{{ row.rate_out }} {{ mass_pref }}/h</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="muted">No inventory activity yet.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>

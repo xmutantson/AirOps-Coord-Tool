@@ -1,0 +1,30 @@
+<table class="full-bleed">
+  <thead>
+    <tr>
+      <th>Category</th>
+      <th>Item Name</th>
+      <th>Sanitized</th>
+      <th>Wt/Unit ({{ mass_pref }})</th>
+      <th>Qty</th>
+      <th>Total Wt ({{ mass_pref }})</th>
+      <th>In / Out</th>
+      <th>When</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for e in entries %}
+      <tr>
+        <td>{{ e.category }}</td>
+        <td>{{ e.raw_name }}</td>
+        <td>{{ e.sanitized_name }}</td>
+        <td>{{ e.weight_per_unit }} {{ mass_pref }}</td>
+        <td>{{ e.quantity }}</td>
+        <td>{{ e.total_weight }} {{ mass_pref }}</td>
+        <td>{{ 'In' if e.direction=='in' else 'Out' }}</td>
+        <td>{{ e.timestamp }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="8" class="muted">No entries yet.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>

@@ -22,7 +22,7 @@ from flask import (
     Flask, render_template, request, redirect,
     url_for, send_file, flash, make_response,
     jsonify, Response, stream_with_context,
-    session
+    session, Blueprint
 )
 
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -33,7 +33,7 @@ from flask_wtf import CSRFProtect
 from markupsafe import escape
 
 import sqlite3, csv, io, re, os, json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from functools import lru_cache
 
@@ -274,6 +274,29 @@ def init_db():
         c.execute("""CREATE TABLE IF NOT EXISTS flight_history(
                        id INTEGER PRIMARY KEY AUTOINCREMENT,
                        flight_id INTEGER, timestamp TEXT, data TEXT)""")
+        # ─── Inventory tables ────────────────────────────────────────
+        c.execute("""
+          CREATE TABLE IF NOT EXISTS inventory_categories (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            name          TEXT    UNIQUE NOT NULL,
+            display_name  TEXT    NOT NULL
+          )
+        """)
+        c.execute("""
+          CREATE TABLE IF NOT EXISTS inventory_entries (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            category_id      INTEGER NOT NULL,
+            raw_name         TEXT,
+            sanitized_name   TEXT,
+            weight_per_unit  REAL,
+            quantity         INTEGER,
+            total_weight     REAL,
+            direction        TEXT    CHECK(direction IN ('in','out')),
+            timestamp        TEXT    NOT NULL,
+            FOREIGN KEY(category_id) REFERENCES inventory_categories(id)
+          )
+        """)
+
 
 # ───────────────────────────────────────────────────────────
 #  schema migrations – run on every start or after DB reset
@@ -354,6 +377,23 @@ def load_airports_from_csv():
                 r['local_code'] or None
             ))
 
+# ───────────────────────────────────────────────────────────────────────────
+# Inventory Name‑Sanitization (strip punctuation, lowercase, drop adjectives)
+ADJECTIVES_FILE = os.path.join(os.path.dirname(__file__), 'english_adjectives.txt')
+with open(ADJECTIVES_FILE, encoding='utf-8') as f:
+    ENGLISH_ADJECTIVES = {
+        line.strip().lower()
+        for line in f
+        if line.strip() and not line.startswith('#')
+    }
+
+def sanitize_name(raw: str) -> str:
+    cleaned = re.sub(r'[^\w\s]', ' ', raw or '')
+    words   = cleaned.lower().split()
+    nouns   = [w for w in words if w not in ENGLISH_ADJECTIVES]
+    return nouns[-1] if nouns else (words[-1] if words else '')
+
+
 def ensure_column(table, col, ctype="TEXT"):
     with sqlite3.connect(DB_FILE) as c:
         have={r[1] for r in c.execute(f"PRAGMA table_info({table})")}
@@ -364,6 +404,19 @@ init_db()
 run_migrations()
 ensure_airports_table()
 load_airports_from_csv()
+
+# ────────────────────────────────────────────────────────────────
+# Seed default inventory categories
+def seed_default_categories():
+    defaults = ['emergency supplies','food','medical supplies','water','other']
+    with sqlite3.connect(DB_FILE) as c:
+        for nm in defaults:
+            c.execute("""
+              INSERT OR IGNORE INTO inventory_categories(name, display_name)
+              VALUES(?,?)
+            """, (nm, nm.title()))
+
+seed_default_categories()
 
 # ───────────────── helper funcs ──────────────────────────
 def dict_rows(sql, params=()):
@@ -1967,6 +2020,175 @@ def embedded():
                            url=embedded_url,
                            active='embedded',
                            embedded_name=embedded_name)
+
+# ─────────────────── Inventory Blueprint & Routes ────────────────────
+inventory_bp = Blueprint('inventory', __name__, url_prefix='/inventory')
+
+@inventory_bp.route('/')
+def inventory_overview():
+    cutoff = (datetime.utcnow() - timedelta(hours=2)).isoformat()
+    overview = []
+    for c in dict_rows("SELECT id,display_name FROM inventory_categories"):
+        ents = dict_rows(
+            "SELECT direction,total_weight,timestamp FROM inventory_entries WHERE category_id=?",
+            (c['id'],)
+        )
+        tot_in  = sum(e['total_weight'] for e in ents if e['direction']=='in')
+        tot_out = sum(e['total_weight'] for e in ents if e['direction']=='out')
+        recent  = [e for e in ents if e['timestamp'] >= cutoff]
+        in2h    = sum(e['total_weight'] for e in recent if e['direction']=='in')
+        out2h   = sum(e['total_weight'] for e in recent if e['direction']=='out')
+        overview.append({
+            'category':  c['display_name'],
+            'total_in':  tot_in,
+            'total_out': tot_out,
+            'net':       tot_in - tot_out,
+            'rate_in':   in2h  / 2,
+            'rate_out':  out2h / 2
+        })
+    # apply user’s mass‐unit preference (cookie from /preferences)
+    mass_pref = request.cookies.get('mass_unit','lbs')
+    if mass_pref == 'kg':
+        for item in overview:
+            # stored totals are in pounds → convert to kg
+            item['total_in']  = round(item['total_in']  / 2.20462, 1)
+            item['total_out'] = round(item['total_out'] / 2.20462, 1)
+            item['net']       = round(item['net']       / 2.20462, 1)
+            item['rate_in']   = round(item['rate_in']   / 2.20462, 1)
+            item['rate_out']  = round(item['rate_out']  / 2.20462, 1)
+    # pass skeleton page only; table will come from AJAX
+    return render_template(
+        'inventory_overview.html',
+        active='inventory'
+    )
+
+@inventory_bp.route('/_overview_table')
+def inventory_overview_table():
+    """AJAX partial: just the <table> for overview."""
+    cutoff = (datetime.utcnow() - timedelta(hours=2)).isoformat()
+    overview = []
+    for c in dict_rows("SELECT id,display_name FROM inventory_categories"):
+        ents = dict_rows(
+            "SELECT direction,total_weight,timestamp FROM inventory_entries WHERE category_id=?",
+            (c['id'],)
+        )
+        tot_in  = sum(e['total_weight'] for e in ents if e['direction']=='in')
+        tot_out = sum(e['total_weight'] for e in ents if e['direction']=='out')
+        recent  = [e for e in ents if e['timestamp'] >= cutoff]
+        in2h    = sum(e['total_weight'] for e in recent if e['direction']=='in')
+        out2h   = sum(e['total_weight'] for e in recent if e['direction']=='out')
+        overview.append({
+            'category':  c['display_name'],
+            'total_in':  tot_in,
+            'total_out': tot_out,
+            'net':       tot_in - tot_out,
+            'rate_in':   in2h  / 2,
+            'rate_out':  out2h / 2
+        })
+    # apply user’s mass‐unit preference
+    mass_pref = request.cookies.get('mass_unit','lbs')
+    if mass_pref == 'kg':
+        for row in overview:
+            for key in ('total_in','total_out','net','rate_in','rate_out'):
+                row[key] = round(row[key] / 2.20462, 1)
+
+    return render_template(
+        'partials/_inventory_overview_table.html',
+        inventory=overview,
+        mass_pref=mass_pref
+    )
+
+@inventory_bp.route('/detail', methods=('GET','POST'))
+def inventory_detail():
+    if request.method=='POST':
+        # read form + persist last‐used unit in session
+        cat_id      = int(request.form['category'])
+        raw         = request.form['name']
+        noun        = sanitize_name(raw)
+        weight_val  = float(request.form['weight'] or 0)
+        weight_unit = request.form['weight_unit']
+        session['inv_weight_unit'] = weight_unit
+
+        # normalize storage in pounds
+        if weight_unit == 'kg':
+            wpu_lbs = kg_to_lbs(weight_val)
+        else:
+            wpu_lbs = weight_val
+
+        qty        = int(request.form['qty'] or 0)
+        total_lbs  = wpu_lbs * qty
+        dirn       = request.form['direction']
+        ts         = datetime.utcnow().isoformat()
+
+        with sqlite3.connect(DB_FILE) as c:
+            c.execute("""
+              INSERT INTO inventory_entries(
+                category_id,raw_name,sanitized_name,
+                weight_per_unit,quantity,total_weight,
+                direction,timestamp
+              ) VALUES (?,?,?,?,?,?,?,?)
+            """, (cat_id, raw, noun, wpu_lbs, qty, total_lbs, dirn, ts))
+        return redirect(url_for('inventory.inventory_detail'))
+
+    categories = dict_rows("SELECT id, display_name FROM inventory_categories")
+
+    # Fetch everything for display
+    entries    = dict_rows("""
+      SELECT e.id,c.display_name AS category,
+             e.raw_name,e.sanitized_name,
+             e.weight_per_unit,e.quantity,
+             e.total_weight,e.direction,e.timestamp
+        FROM inventory_entries e
+        JOIN inventory_categories c ON c.id=e.category_id
+       ORDER BY e.timestamp DESC
+    """)
+
+    # apply mass-unit preference and prepare view-fields
+    mass_pref = request.cookies.get('mass_unit','lbs')
+    inv_unit  = session.get('inv_weight_unit', mass_pref)
+
+    for e in entries:
+        if mass_pref == 'kg':
+            e['weight_view'] = round(e['weight_per_unit'] / 2.20462, 1)
+            e['total_view']  = round(e['total_weight']    / 2.20462, 1)
+        else:
+            e['weight_view'] = e['weight_per_unit']
+            e['total_view']  = e['total_weight']
+
+    # render skeleton; entries come from AJAX
+    return render_template(
+        'inventory_detail.html',
+        categories=categories,
+        inv_weight_unit=session.get('inv_weight_unit', request.cookies.get('mass_unit','lbs')),
+        active='inventory'
+    )
+
+@inventory_bp.route('/_detail_table')
+def inventory_detail_table():
+    """AJAX partial: table of recent inventory entries."""
+    entries = dict_rows("""
+      SELECT e.id, c.display_name AS category,
+             e.raw_name, e.sanitized_name,
+             e.weight_per_unit, e.quantity,
+             e.total_weight, e.direction, e.timestamp
+        FROM inventory_entries e
+        JOIN inventory_categories c ON c.id=e.category_id
+       ORDER BY e.timestamp DESC
+    """)
+    mass_pref = request.cookies.get('mass_unit','lbs')
+    if mass_pref=='kg':
+        for e in entries:
+            e['weight_per_unit'] = round(e['weight_per_unit']/2.20462, 1)
+            e['total_weight']    = round(e['total_weight']/2.20462,    1)
+
+    return render_template(
+        'partials/_inventory_detail_table.html',
+        entries=entries,
+        mass_pref=mass_pref
+    )
+
+# register the inventory blueprint
+app.register_blueprint(inventory_bp)
 
 # ───────────────────────────────────────────────────────────
 if __name__=="__main__":
