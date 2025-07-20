@@ -511,16 +511,27 @@
     }));
 
     /* cascaded selects */
+    /* ---------- Category select ---------- */
     advCat.addEventListener('change', () => {
-      const cid = advCat.value;
-      advItem.disabled = false;
-      advItem.innerHTML = '<option value="">Item…</option>' +
-        (inventoryAdvancedData.items?.[cid] || [])
-          .map(i => `<option>${i}</option>`).join('');
-      [advSize, advQty, advAdd].forEach(el => el.disabled = true);
+      const cid      = advCat.value;
+      const outbound = (document.body.dataset.advDir === 'outbound');
+
+      if (outbound) {
+        /* OUTBOUND: cascade to Item‑dropdown */
+        advItem.disabled = false;
+        advItem.innerHTML = '<option value="">Item…</option>' +
+          (inventoryAdvancedData.items?.[cid] || [])
+            .map(i => `<option>${i}</option>`).join('');
+        [advSize, advQty, advAdd].forEach(el => el.disabled = true);
+      } else {
+        /* INBOUND: no further cascading, just (re)check form completeness */
+        checkInboundReady();
+      }
     });
 
+    /* ---------- Item select (OUTBOUND only) ---------- */
     advItem.addEventListener('change', () => {
+      if (document.body.dataset.advDir !== 'outbound') return;
       const cid = advCat.value, it = advItem.value;
       advSize.disabled = false;
       advSize.innerHTML = '<option value="">Size…</option>' +
@@ -533,14 +544,21 @@
       advQty.disabled = advAdd.disabled = true;
     });
 
+    /* ---------- Size select (OUTBOUND only) ---------- */
     advSize.addEventListener('change', () => {
+      if (document.body.dataset.advDir !== 'outbound') return;
       advQty.disabled = false;
       advAdd.disabled = true;
     });
     /* enable Add for OUTBOUND */
+    /* ---------- Qty keystrokes ---------- */
     advQty.addEventListener('input', () => {
-      if (document.querySelector('body').dataset.advDir === 'outbound') {
+      if (document.body.dataset.advDir === 'outbound') {
+        /* OUTBOUND: simple ≥1 check */
         advAdd.disabled = (+advQty.value < 1);
+      } else {
+        /* INBOUND: run full completeness checker */
+        checkInboundReady();
       }
     });
 
