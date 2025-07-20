@@ -735,15 +735,16 @@ body.cw-active #cargo-tools-panel {
    Advanced Inventory Panel (Ramp Boss)
    ────────────────────────────────────────────────────────────── */
 #adv-panel {
-  display: none; /* hidden initially, shown via JS */
+  display: none;           /* revealed by JS             */
   position: fixed;
-  top: 0;
-  left: 10%; /* centered at 80% width */
-  width: 80%;
-  height: 100%;
+  /* fill the viewport between sticky header & footer */
+  top:    3.5rem;          /* header height               */
+  bottom: 2.5rem;          /* footer height               */
+  left:   10%;             /* centred @ 80 % total width  */
+  width:  80%;
   overflow-y: auto;
-  background-color: #ffffff;
-  z-index: 1500; /* high enough to overlay other elements */
+  background: #fff;
+  z-index: 1500;
   padding: 2rem;
   border: 1px solid #ccc;
   box-shadow: 0 0 15px rgba(0,0,0,0.2);

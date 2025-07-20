@@ -108,9 +108,9 @@
     <!-- Advanced Inventory Take‑over Panel -->
     <div
       id="adv-panel"
-      class="cargo-tools-panel"
-      style="display:none; position:relative; margin-bottom:1rem; text-align:left;"
+      style="display:none; position:relative; text-align:left;"
     >
+
       <button
         type="button"
         id="adv-back"
@@ -447,7 +447,10 @@
       advSize.disabled = false;
       advSize.innerHTML = '<option value="">Size…</option>' +
         (inventoryAdvancedData.sizes?.[cid]?.[it] || [])
-          .map(s => `<option value="${s}">${s} lb (${(inventoryAdvancedData.avail?.[cid]?.[it]?.[s] ?? 0)} avail)</option>`)
+          .map(s => {
+            const a = inventoryAdvancedData.avail?.[cid]?.[it]?.[String(s)] ?? 0;
+            return `<option value="${s}">${s} lb (${a} avail)</option>`;
+          })
           .join('');
       advQty.disabled = advAdd.disabled = true;
     });
@@ -488,8 +491,8 @@
       chip.style.cssText = 'padding:0.25em 0.5em; background:#eee; border-radius:4px;';
       chip.textContent   = `${j.sanitized} ${j.wpu} lb×${j.qty}`;
       const rm = document.createElement('button');
-      rm.textContent = '×';
-      rm.style.marginLeft = '0.25em';
+      rm.textContent = '❌';
+      rm.style.cssText = 'margin-left:0.25em; background:none; border:none; color:#c33; font-size:1rem; cursor:pointer;';
       rm.addEventListener('click', async () => {
         try {
           await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
