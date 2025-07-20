@@ -237,8 +237,8 @@ def set_session_salt(salt: str):
         """, (salt,))
 
 # ── optional distance‐unit pref for dashboard ───────────────
- @app.context_processor
- def inject_distance_pref():
+@app.context_processor
+def inject_distance_pref():
     # per-browser preference, default nautical miles
     unit = request.cookies.get('distance_unit','nm')
     return {'distance_unit': unit}
