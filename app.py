@@ -359,18 +359,22 @@ def inventory_advance_data():
     """JSON stock snapshot for Advanced panel (re-polled every 15s)."""
     # same build logic as in ramp_boss()
     rows = dict_rows("""
-      SELECT e.category_id AS cid, c.display_name AS cname,
-             e.sanitized_name, e.weight_per_unit, SUM(e.quantity) AS qty
+      SELECT e.category_id AS cid,
+             c.display_name AS cname,
+             e.sanitized_name,
+             e.weight_per_unit,
+             /*   in  −  out   → available   */
+             SUM(
+               CASE
+                 WHEN e.direction = 'in'  THEN  e.quantity
+                 WHEN e.direction = 'out' THEN -e.quantity
+               END
+             ) AS qty
         FROM inventory_entries e
         JOIN inventory_categories c ON c.id=e.category_id
         WHERE e.pending = 0
         GROUP BY e.category_id, e.sanitized_name, e.weight_per_unit
-        HAVING SUM(
-                CASE
-                  WHEN e.direction = 'in'  THEN  e.quantity
-                  WHEN e.direction = 'out' THEN -e.quantity
-                END
-              ) > 0
+        HAVING qty > 0
     """)
     data = {"categories":[], "items":{}, "sizes":{}, "avail":{}}
     for r in rows:
@@ -1620,18 +1624,21 @@ def ramp_boss():
 
     # build the same advanced_data and inject it for initial page render
     rows = dict_rows("""
-      SELECT e.category_id AS cid, c.display_name AS cname,
-             e.sanitized_name, e.weight_per_unit, SUM(e.quantity) AS qty
+      SELECT e.category_id AS cid,
+             c.display_name AS cname,
+             e.sanitized_name,
+             e.weight_per_unit,
+             SUM(
+               CASE
+                 WHEN e.direction = 'in'  THEN  e.quantity
+                 WHEN e.direction = 'out' THEN -e.quantity
+               END
+             ) AS qty
         FROM inventory_entries e
         JOIN inventory_categories c ON c.id=e.category_id
         WHERE e.pending = 0
         GROUP BY e.category_id, e.sanitized_name, e.weight_per_unit
-        HAVING SUM(
-                CASE
-                  WHEN e.direction = 'in'  THEN  e.quantity
-                  WHEN e.direction = 'out' THEN -e.quantity
-                END
-              ) > 0
+        HAVING qty > 0
     """)
     advanced_data = {"categories":[], "items":{}, "sizes":{}, "avail":{}}
     for r in rows:
