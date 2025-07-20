@@ -359,7 +359,7 @@
     let inventoryAdvancedData = {{ advanced_data|safe }};
   </script>
 
-  <!-- ───────────────── Advanced‑panel JS (fixed & complete) ───────────────── -->
+  <!-- ───────────────── Advanced‑panel JS (updated 2024‑07‑20) ───────────────── -->
   <script>
     /* DOM helpers */
     const advBtn      = document.getElementById('open-adv');
@@ -471,9 +471,9 @@
 
     /* add line */
     advAdd.addEventListener('click', async () => {
-      /* keep track of every category we add during this manifest so we
-         can auto‑populate the main “Cargo Type” field */
+      /* track all categories used in this manifest so we can auto‑fill “Cargo Type” */
       if (!window._rbCategories) window._rbCategories = new Set();
+
       const params = new URLSearchParams({
         csrf_token: csrfToken,
         action:      'add',
@@ -484,6 +484,7 @@
         size:        advSize.value,
         qty:         advQty.value
       });
+
       let resp;
       try {
         resp = await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
@@ -497,6 +498,7 @@
 
       pendingIds.push(j.entry_id);
 
+      /* ------------- chip UI ------------- */
       const chip = document.createElement('div');
       chip.style.cssText =
         'padding:0.25em 0.5em; background:#eee; border-radius:4px; white-space:pre;';
@@ -524,36 +526,31 @@
       chip.append(rm);
       advLines.append(chip);
 
-      /* update main form */
+      /* update main form totals / remarks */
       const cw  = document.getElementById('cargo_weight');
       const rmf = document.getElementById('remarks');
       cw.value   = (+cw.value || 0) + j.total;
       rmf.value += `${j.sanitized} ${j.wpu} lb×${j.qty}; `;
 
-      /* ── NEW : auto‑fill / update Cargo Type ───────────────────── */
+      /* ── NEW : auto‑fill Cargo Type field ───────────────────────────── */
       const catId   = advCat.value;
-      /* find human‑readable name from our pre‑loaded categories list */
       const catName =
           inventoryAdvancedData.categories
             .find(c => String(c.id) === catId)?.display_name || catId;
 
-      /* remember it & write to the main form */
       window._rbCategories.add(catName);
-      const cargoField = document.getElementById('cargo_type');
-      cargoField.value = window._rbCategories.size === 1
-           ? catName         /* single category */
-           : 'Mixed';        /* more than one category */
-
+      document.getElementById('cargo_type').value =
+          window._rbCategories.size === 1 ? catName : 'Mixed';
 
       /* ----------------------------------------------------------
          1. Adjust in‑memory “avail” counts immediately so the UI
-         reflects the reduced stock without waiting 15 s.
+           reflects the reduced stock.
          2. Rebuild the Size dropdown to show the new numbers.
       ---------------------------------------------------------- */
       const cid      = advCat.value;
       const it       = advItem.value;
       const sz       = String(advSize.value);
-      const qtyUsed  = Number(advQty.value || 0);   /* <-- ensure Number and non‑blank */
+      const qtyUsed  = Number(advQty.value || 0);
 
       if (!isNaN(qtyUsed) &&
           inventoryAdvancedData.avail?.[cid]?.[it]?.[sz] !== undefined) {
@@ -590,4 +587,5 @@
       rbForm.style.display   = '';
     });
   </script>
+
 {% endblock %}

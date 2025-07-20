@@ -363,8 +363,14 @@ def inventory_advance_data():
              e.sanitized_name, e.weight_per_unit, SUM(e.quantity) AS qty
         FROM inventory_entries e
         JOIN inventory_categories c ON c.id=e.category_id
-       WHERE e.direction='in' AND e.pending=0
-       GROUP BY e.category_id,e.sanitized_name,e.weight_per_unit
+        WHERE e.pending = 0
+        GROUP BY e.category_id, e.sanitized_name, e.weight_per_unit
+        HAVING SUM(
+                CASE
+                  WHEN e.direction = 'in'  THEN  e.quantity
+                  WHEN e.direction = 'out' THEN -e.quantity
+                END
+              ) > 0
     """)
     data = {"categories":[], "items":{}, "sizes":{}, "avail":{}}
     for r in rows:
@@ -1618,8 +1624,14 @@ def ramp_boss():
              e.sanitized_name, e.weight_per_unit, SUM(e.quantity) AS qty
         FROM inventory_entries e
         JOIN inventory_categories c ON c.id=e.category_id
-       WHERE e.direction='in' AND e.pending=0
-       GROUP BY e.category_id,e.sanitized_name,e.weight_per_unit
+        WHERE e.pending = 0
+        GROUP BY e.category_id, e.sanitized_name, e.weight_per_unit
+        HAVING SUM(
+                CASE
+                  WHEN e.direction = 'in'  THEN  e.quantity
+                  WHEN e.direction = 'out' THEN -e.quantity
+                END
+              ) > 0
     """)
     advanced_data = {"categories":[], "items":{}, "sizes":{}, "avail":{}}
     for r in rows:
