@@ -471,6 +471,9 @@
 
     /* add line */
     advAdd.addEventListener('click', async () => {
+      /* keep track of every category we add during this manifest so we
+         can auto‑populate the main “Cargo Type” field */
+      if (!window._rbCategories) window._rbCategories = new Set();
       const params = new URLSearchParams({
         csrf_token: csrfToken,
         action:      'add',
@@ -526,6 +529,21 @@
       const rmf = document.getElementById('remarks');
       cw.value   = (+cw.value || 0) + j.total;
       rmf.value += `${j.sanitized} ${j.wpu} lb×${j.qty}; `;
+
+      /* ── NEW : auto‑fill / update Cargo Type ───────────────────── */
+      const catId   = advCat.value;
+      /* find human‑readable name from our pre‑loaded categories list */
+      const catName =
+          inventoryAdvancedData.categories
+            .find(c => String(c.id) === catId)?.display_name || catId;
+
+      /* remember it & write to the main form */
+      window._rbCategories.add(catName);
+      const cargoField = document.getElementById('cargo_type');
+      cargoField.value = window._rbCategories.size === 1
+           ? catName         /* single category */
+           : 'Mixed';        /* more than one category */
+
 
       /* ----------------------------------------------------------
          1. Adjust in‑memory “avail” counts immediately so the UI
