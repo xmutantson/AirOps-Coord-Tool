@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Inventory Stock – Aircraft Ops{% endblock %}
+
+{% block content %}
+<a href="{{ url_for('inventory.inventory_categories') }}" class="back-button">← Back</a>
+<h2 style="margin-top:0;">Current Stock On‑Hand</h2>
+
+{% for cat, items in stock.items() %}
+<details style="margin:1rem 0;">
+  <summary style="cursor:pointer; font-weight:bold;">
+    {{ cat }} –
+    {{ items|sum(attribute='total')|round(1) }} {{ 'kg' if mass_pref=='kg' else 'lbs' }}
+    ({{ items|sum(attribute='qty') }} units)
+  </summary>
+
+  <table class="full-bleed" style="margin-top:0.5rem;">
+    <thead>
+      <tr>
+        <th>Item</th>
+        <th>Size ({{ mass_pref }})</th>
+        <th>Avail</th>
+        <th>Total ({{ mass_pref }})</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for it in items %}
+      <tr>
+        <td>{{ it.noun }}</td>
+        <td>{{ it.size }}</td>
+        <td>{{ it.qty }}</td>
+        <td>{{ it.total|round(1) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</details>
+{% endfor %}
+{% endblock %}

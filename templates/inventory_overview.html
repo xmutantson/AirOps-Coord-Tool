@@ -12,6 +12,10 @@
       Manage Inventory
     </button>
     <button type="button"
+            onclick="location.href='{{ url_for('inventory.inventory_stock') }}'">
+      View Stock
+    </button>
+    <button type="button"
             onclick="location.href='{{ url_for('inventory.inventory_categories') }}'">
       Add Category
     </button>
