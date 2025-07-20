@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Edit Inventory Entry – Aircraft Ops{% endblock %}
+
+{% block content %}
+  <h2>Edit Inventory Entry</h2>
+  <button type="button"
+          class="back-button"
+          onclick="location.href='{{ url_for('inventory.inventory_detail') }}'">
+    ← Back to Detail
+  </button>
+
+  <div class="ramp-form-container">
+    <form method="POST"
+          action="{{ url_for('inventory.inventory_edit', entry_id=entry.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <label for="category">Category</label>
+      <select id="category" name="category" required>
+        {% for c in categories %}
+          <option value="{{ c.id }}"
+            {% if c.id==entry.category_id %}selected{% endif %}>
+            {{ c.display_name }}
+          </option>
+        {% endfor %}
+      </select>
+
+      <label for="name">Item Name</label>
+      <input id="name" name="name" required value="{{ entry.raw_name }}">
+
+      <label for="weight">Wt/Unit</label>
+      <div style="display:flex;align-items:center;gap:0.5rem;">
+        <input id="weight"
+               name="weight"
+               type="number" step="any" min="0" required
+               style="flex:1;min-width:16ch"
+               value="{{
+                  (entry.weight_per_unit if inv_weight_unit=='lbs'
+                  else (entry.weight_per_unit/2.20462)|round(1))
+               }}">
+        <select id="weight_unit" name="weight_unit">
+          <option value="lbs"
+            {% if inv_weight_unit=='lbs' %}selected{% endif %}>lbs</option>
+          <option value="kg"
+            {% if inv_weight_unit=='kg' %}selected{% endif %}>kg</option>
+        </select>
+      </div>
+
+      <label for="qty">Quantity</label>
+      <input id="qty" name="qty" type="number" step="1" min="0" required
+             value="{{ entry.quantity }}">
+
+      <label for="direction">Direction</label>
+      <select id="direction" name="direction">
+        <option value="in"
+          {% if entry.direction=='in' %}selected{% endif %}>
+          Incoming
+        </option>
+        <option value="out"
+          {% if entry.direction=='out' %}selected{% endif %}>
+          Outgoing
+        </option>
+      </select>
+
+      <button type="submit" style="grid-column:span 2; margin-top:1rem;">
+        Save Changes
+      </button>
+    </form>
+  </div>
+{% endblock %}

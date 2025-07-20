@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Manage Categories – Aircraft Ops{% endblock %}
+
+{% block content %}
+  <h2>Manage Categories</h2>
+  <button type="button"
+          class="back-button"
+          onclick="location.href='{{ url_for('inventory.inventory_overview') }}'">
+    ← Back to Overview
+  </button>
+
+  <p class="warning">
+    <strong>Warning:</strong> Categories should not be added lightly.  
+    Other parts of the site use these to filter data. Too many categories 
+    can make inventory management harder.
+  </p>
+
+  <table class="full-bleed">
+    <thead>
+      <tr><th>ID</th><th>Internal Name</th><th>Display Name</th></tr>
+    </thead>
+    <tbody>
+      {% for c in categories %}
+      <tr>
+        <td>{{ c.id }}</td>
+        <td>{{ c.name }}</td>
+        <td>{{ c.display_name }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h3>Add New Category</h3>
+  <form method="POST" action="{{ url_for('inventory.inventory_categories') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="lookup-row">
+      <label for="name">Internal Name (lowercase, no spaces):</label>
+      <input id="name" name="name" required>
+    </div>
+    <div class="lookup-row">
+      <label for="display_name">Display Name:</label>
+      <input id="display_name" name="display_name" required>
+    </div>
+    <button type="submit">Add Category</button>
+  </form>
+{% endblock %}

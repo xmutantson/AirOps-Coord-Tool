@@ -3,6 +3,11 @@
 
 {% block content %}
   <h2>Inventory Detail</h2>
+  <button type="button"
+          class="back-button"
+          onclick="location.href='{{ url_for('inventory.inventory_overview') }}'">
+    ← Back to Overview
+  </button>
 
   <!-- two-column form, re-using the Ramp-Boss grid styles -->
   <div class="ramp-form-container">

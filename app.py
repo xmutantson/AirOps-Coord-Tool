@@ -2062,6 +2062,33 @@ def inventory_overview():
         active='inventory'
     )
 
+# ─────────── Manage Inventory Categories ───────────
+@inventory_bp.route('/categories', methods=('GET','POST'))
+def inventory_categories():
+    """List existing categories and let you add new ones (use sparingly!)."""
+    if request.method == 'POST':
+        # pull and normalize inputs
+        name    = request.form['name'].strip().lower()
+        display = request.form['display_name'].strip()
+        with sqlite3.connect(DB_FILE) as c:
+            c.execute("""
+              INSERT INTO inventory_categories(name, display_name)
+              VALUES(?,?)
+            """, (name, display))
+        flash("Category added.", "success")
+        return redirect(url_for('inventory.inventory_categories'))
+
+    cats = dict_rows("""
+      SELECT id, name, display_name
+        FROM inventory_categories
+       ORDER BY display_name
+    """)
+    return render_template(
+        'inventory_categories.html',
+        categories=cats,
+        active='inventory'
+    )
+
 @inventory_bp.route('/_overview_table')
 def inventory_overview_table():
     """AJAX partial: just the <table> for overview."""
@@ -2185,6 +2212,55 @@ def inventory_detail_table():
         'partials/_inventory_detail_table.html',
         entries=entries,
         mass_pref=mass_pref
+    )
+
+# ──────────── Edit Inventory Entry ────────────
+@inventory_bp.route('/edit/<int:entry_id>', methods=('GET','POST'))
+def inventory_edit(entry_id):
+    # load categories & the entry
+    categories = dict_rows("SELECT id,display_name FROM inventory_categories")
+    rows = dict_rows("SELECT * FROM inventory_entries WHERE id=?", (entry_id,))
+    if not rows:
+        flash("Entry not found.", "error")
+        return redirect(url_for('inventory.inventory_detail'))
+    entry = rows[0]
+
+    if request.method=='POST':
+        raw         = request.form['name']
+        noun        = sanitize_name(raw)
+        weight_val  = float(request.form['weight'] or 0)
+        weight_unit = request.form['weight_unit']
+        # normalize to lbs
+        wpu = kg_to_lbs(weight_val) if weight_unit=='kg' else weight_val
+        qty         = int(request.form['qty'] or 0)
+        total       = wpu * qty
+        dirn        = request.form['direction']
+        # persist
+        with sqlite3.connect(DB_FILE) as c:
+            c.execute("""
+              UPDATE inventory_entries
+                 SET category_id=?,
+                     raw_name=?, sanitized_name=?,
+                     weight_per_unit=?, quantity=?, total_weight=?, direction=?
+               WHERE id=?
+            """, (
+              int(request.form['category']),
+              raw, noun,
+              wpu, qty, total,
+              dirn,
+              entry_id
+            ))
+        return redirect(url_for('inventory.inventory_detail'))
+
+    return render_template(
+        'inventory_edit.html',
+        entry=entry,
+        categories=categories,
+        inv_weight_unit=session.get(
+           'inv_weight_unit',
+           request.cookies.get('mass_unit','lbs')
+        ),
+        active='inventory'
     )
 
 # register the inventory blueprint

@@ -5,11 +5,15 @@
   <h2>Inventory Overview</h2>
   <div id="inventory-table"><!-- table loads here --></div>
 
-  <!-- button to jump to the detail/entry page -->
-  <div class="lookup-row" style="margin-top:1rem;">
+  <!-- buttons to jump to the detail/entry page or manage categories -->
+  <div class="lookup-row" style="margin-top:1rem; gap:1rem;">
     <button type="button"
             onclick="location.href='{{ url_for('inventory.inventory_detail') }}'">
       Manage Inventory
+    </button>
+    <button type="button"
+            onclick="location.href='{{ url_for('inventory.inventory_categories') }}'">
+      Add Category
     </button>
   </div>
 
