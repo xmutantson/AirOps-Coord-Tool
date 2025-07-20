@@ -323,6 +323,10 @@ the application.</p>
 
 # ───────────────── DB init & migrations ──────────────────
 def init_db():
+    with sqlite3.connect(DB_FILE, timeout=30) as c:
+        c.execute("PRAGMA journal_mode=WAL;")
+        c.execute("PRAGMA busy_timeout=5000;")
+
     with sqlite3.connect(DB_FILE) as c:
         c.execute("""CREATE TABLE IF NOT EXISTS preferences(
                        id INTEGER PRIMARY KEY,
