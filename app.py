@@ -243,6 +243,27 @@ def inject_distance_pref():
     unit = request.cookies.get('distance_unit','nm')
     return {'distance_unit': unit}
 
+### thread-once guard
+_distance_thread_started = False
+
+@app.before_request
+def maybe_start_distances():
+    global _distance_thread_started
+    if _distance_thread_started:
+        return
+    # check user preference
+    rows = dict_rows(
+      "SELECT value FROM preferences WHERE name='enable_1090_distances'"
+    )
+    if not (rows and rows[0]['value']=='yes'):
+        return
+    # grab receiver location once
+    fetch_recv_loc()
+    # spin up the background worker
+    t = threading.Thread(target=distances_worker, daemon=True)
+    t.start()
+    _distance_thread_started = True
+
 # ───────────────── Login Flows ──────────────────
 
 @app.before_request
@@ -553,14 +574,6 @@ def distances_worker():
                     continue
         except:
             time.sleep(5)
-
-@app.before_first_request
-def start_distance_threads():
-    # only if enabled in preferences
-    rows = dict_rows("SELECT value FROM preferences WHERE name='enable_1090_distances'")
-    if rows and rows[0]['value']=='yes':
-        fetch_recv_loc()
-        threading.Thread(target=distances_worker, daemon=True).start()
 
 # ────────────────────────────────────────────────────────────────
 # Seed default inventory categories
