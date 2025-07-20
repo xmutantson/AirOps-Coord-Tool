@@ -39,7 +39,7 @@ from datetime import datetime, timedelta
 
 from functools import lru_cache
 
-from zeroconf import Zeroconf, ServiceInfo
+from zeroconf import Zeroconf, ServiceInfo, NonUniqueNameException
 import fcntl
 import struct
 import socket
@@ -84,22 +84,51 @@ def get_lan_ip() -> str:
     return ip
 
 # ─── mDNS registration & context injection ──────────────────────
-_zeroconf = Zeroconf()
+
+_zeroconf   = Zeroconf()
+MDNS_REASON = ""                 # becomes a human‑readable tooltip on failure
 
 def register_mdns(name: str, port: int):
-    host_ip   = get_lan_ip()
-    mdns_name = f"{name}.local"
+    """
+    Try to announce the service via Bonjour.  On success returns
+    (mdns_name, host_ip).  On any failure returns ("", host_ip) and
+    stores an explanatory message in MDNS_REASON so the UI can tell
+    users why mDNS is absent.
+    """
+    global MDNS_REASON
 
-    info = ServiceInfo(
-      type_     = "_http._tcp.local.",
-      name      = f"{name}._http._tcp.local.",
-      addresses = [socket.inet_aton(host_ip)],
-      port      = port,
-      server    = f"{name}.local.",
-      properties= {}
-    )
-    _zeroconf.register_service(info)
-    return mdns_name, host_ip
+    # --- honour opt‑out via env ---------------------------------
+    if os.environ.get("DISABLE_MDNS") == "1":
+        MDNS_REASON = "mDNS disabled via DISABLE_MDNS=1"
+        return "", get_lan_ip()
+
+    host_ip = get_lan_ip()
+
+    # --- attempt to claim a unique Bonjour name -----------------
+    base   = name
+    trial  = base
+    for i in range(1, 10):                  # rampops, rampops-1, … rampops-9
+        info = ServiceInfo(
+            type_      = "_http._tcp.local.",
+            name       = f"{trial}._http._tcp.local.",
+            addresses  = [socket.inet_aton(host_ip)],
+            port       = port,
+            server     = f"{trial}.local.",
+            properties = {}
+        )
+        try:
+            _zeroconf.register_service(info)
+            return f"{trial}.local", host_ip
+        except NonUniqueNameException:
+            trial = f"{base}-{i}"           # try a new suffix
+        except Exception as exc:
+            MDNS_REASON = f"mDNS error: {exc}"
+            return "", host_ip
+
+    # exhausted all variants
+    MDNS_REASON = "mdns failed: Too many servers!"
+    return "", host_ip
+
 
 # 1) Try Docker secret file (if you mount one)
 secret = None
@@ -148,8 +177,9 @@ def inject_now():
 @app.context_processor
 def inject_network_info():
     return {
-        'mdns_name': MDNS_NAME,
-        'host_ip'  : HOST_IP,
+        'mdns_name'  : MDNS_NAME,    # may be ''
+        'mdns_reason': MDNS_REASON,  # '' on success
+        'host_ip'    : HOST_IP,
     }
 
 @app.context_processor
