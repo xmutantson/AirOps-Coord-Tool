@@ -377,6 +377,9 @@
     const rbForm      = document.getElementById('rb-form');
     let   pendingIds  = [];
 
+    /* grab CSRF token once for all AJAX calls */
+    const csrfToken   = document.querySelector('input[name="csrf_token"]').value;
+
     const showError = msg => showToast(msg, 'error');
 
     /* keep stock fresh */
@@ -421,8 +424,8 @@
           await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
             method:'POST',
             body: new URLSearchParams({
+              csrf_token:  csrfToken,
               action:      'delete',
-              manifest_id: manifestId.value,
               entry_id:    eid
             })
           });
@@ -466,6 +469,7 @@
     /* add line */
     advAdd.addEventListener('click', async () => {
       const params = new URLSearchParams({
+        csrf_token: csrfToken,
         action:      'add',
         manifest_id: manifestId.value,
         direction:   document.querySelector('input[name="direction"]:checked').value,
@@ -498,6 +502,7 @@
           await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
             method:'POST',
             body: new URLSearchParams({
+              csrf_token: csrfToken,
               action:      'delete',
               manifest_id: manifestId.value,
               entry_id:    j.entry_id
@@ -526,6 +531,7 @@
         await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
           method:'POST',
           body: new URLSearchParams({
+            csrf_token: csrfToken,
             action:      'commit',
             manifest_id: manifestId.value
           })
