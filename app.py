@@ -1698,6 +1698,7 @@ def reset_db():
     # ─── rebuild & reload our airports lookup ────────────────
     ensure_airports_table()
     load_airports_from_csv()
+    seed_default_categories()
 
     flash("Database reset and re-initialised.", "db_reset")
     # if we came from the Admin console, stay there
