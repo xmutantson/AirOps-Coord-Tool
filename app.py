@@ -381,7 +381,7 @@ def inventory_advance_data():
         if r['sanitized_name'] not in data["items"][cid]:
             data["items"][cid].append(r['sanitized_name'])
             data["sizes"][cid][r['sanitized_name']] = []
-        data["sizes"][cid][r['sanitized_name']].append(r['weight_per_unit'])
+        data["sizes"][cid][r['sanitized_name']].append(str(r['weight_per_unit']))
     return jsonify(data)
 
 
@@ -1633,7 +1633,7 @@ def ramp_boss():
         if r['sanitized_name'] not in advanced_data["items"][cid]:
             advanced_data["items"][cid].append(r['sanitized_name'])
             advanced_data["sizes"][cid][r['sanitized_name']] = []
-        advanced_data["sizes"][cid][r['sanitized_name']].append(r['weight_per_unit'])
+        advanced_data["sizes"][cid][r['sanitized_name']].append(str(r['weight_per_unit']))
 
     return render_template(
       'ramp_boss.html',
