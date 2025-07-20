@@ -532,12 +532,13 @@
          reflects the reduced stock without waiting 15 s.
          2. Rebuild the Size dropdown to show the new numbers.
       ---------------------------------------------------------- */
-      const cid = advCat.value,
-            it  = advItem.value,
-            sz  = String(advSize.value),
-            qtyUsed = +advQty.value;
+      const cid      = advCat.value;
+      const it       = advItem.value;
+      const sz       = String(advSize.value);
+      const qtyUsed  = Number(advQty.value || 0);   /* <-- ensure Number and non‑blank */
 
-      if (inventoryAdvancedData.avail?.[cid]?.[it]?.[sz] !== undefined) {
+      if (!isNaN(qtyUsed) &&
+          inventoryAdvancedData.avail?.[cid]?.[it]?.[sz] !== undefined) {
         inventoryAdvancedData.avail[cid][it][sz] =
           Math.max(0, inventoryAdvancedData.avail[cid][it][sz] - qtyUsed);
       }
