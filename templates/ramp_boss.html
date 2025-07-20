@@ -411,7 +411,7 @@
       }
 
       [advItem, advSize, advQty, advAdd].forEach(el => el.disabled = true);
-
+      advQty.value = '';                 // reset any old number
       rbForm.style.display = 'none';
       advPanel.style.display = 'block';
     }
@@ -522,6 +522,7 @@
       cw.value   = (+cw.value || 0) + j.total;
       rmf.value += `${j.sanitized} ${j.wpu} lb×${j.qty}; `;
 
+      advQty.value = '';                 // make next entry easier
       advDone.disabled = false;
     });
 

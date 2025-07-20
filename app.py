@@ -1689,7 +1689,7 @@ def inventory_advance_line():
         ts    = datetime.utcnow().isoformat()
 
         with sqlite3.connect(DB_FILE) as c:
-            c.execute("""
+            cur = c.execute("""
               INSERT INTO inventory_entries(
                 category_id,raw_name,sanitized_name,
                 weight_per_unit,quantity,total_weight,
@@ -1700,7 +1700,7 @@ def inventory_advance_line():
               wpu, qty, total,
               direction[:3], ts, 1, ts, mid
             ))
-            eid = c.lastrowid
+            eid = cur.lastrowid
 
         return jsonify(success=True,
                        entry_id=eid,
