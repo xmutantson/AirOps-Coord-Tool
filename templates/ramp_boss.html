@@ -585,7 +585,9 @@
         csrf_token:  csrfToken,
         action:      'add',
         manifest_id: manifestId.value,
-        direction:   dirNow,
+        /* 'outbound' → server recognises & slices to 'out'
+           anything else → inbound; explicitly send 'in'   */
+        direction:   (dirNow === 'outbound' ? 'outbound' : 'in'),
         category:    advCat.value,
       });
       if (dirNow === 'outbound') {                     /* pick FROM stock */
