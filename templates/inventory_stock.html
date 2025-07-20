@@ -2,7 +2,7 @@
 {% block title %}Inventory Stock – Aircraft Ops{% endblock %}
 
 {% block content %}
-<a href="{{ url_for('inventory.inventory_categories') }}" class="back-button">← Back</a>
+<a href="{{ url_for('inventory.inventory_overview') }}" class="back-button">← Back</a>
 <h2 style="margin-top:0;">Current Stock On‑Hand</h2>
 
 {% for cat, items in stock.items() %}
