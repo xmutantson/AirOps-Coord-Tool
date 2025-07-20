@@ -36,6 +36,7 @@ from markupsafe import escape
 
 import sqlite3, csv, io, re, os, json
 from datetime import datetime, timedelta
+import threading, time, socket, math
 
 from functools import lru_cache
 
@@ -208,9 +209,12 @@ def inject_embed_config():
     embedded_url  = rows[0]['value'] if rows else ''
     rows = dict_rows("SELECT value FROM preferences WHERE name='embedded_name'")
     embedded_name = rows[0]['value'] if rows else ''
+    rows = dict_rows("SELECT value FROM preferences WHERE name='enable_1090_distances'")
+    enable_1090_distances = (rows and rows[0]['value']=='yes')
     return {
         'embedded_url':  embedded_url,
-        'embedded_name': embedded_name
+        'embedded_name': embedded_name,
+        'enable_1090_distances': enable_1090_distances
     }
 
 # ─── Session-Salt Helpers ───────────────────────────────────────────
@@ -232,6 +236,12 @@ def set_session_salt(salt: str):
               SET value=excluded.value
         """, (salt,))
 
+# ── optional distance‐unit pref for dashboard ───────────────
+ @app.context_processor
+ def inject_distance_pref():
+    # per-browser preference, default nautical miles
+    unit = request.cookies.get('distance_unit','nm')
+    return {'distance_unit': unit}
 
 # ───────────────── Login Flows ──────────────────
 
@@ -496,6 +506,61 @@ init_db()
 run_migrations()
 ensure_airports_table()
 load_airports_from_csv()
+
+
+  # ── init 1090-distance globals ───────────────────────────────────────
+app.extensions.setdefault('distances', {})   # hex/flight→km
+app.extensions.setdefault('recv_loc', {'lat':None,'lon':None})
+
+def haversine(lat1, lon1, lat2, lon2):
+    # all args in decimal degrees → km
+    R = 6371.0
+    φ1, φ2 = map(math.radians, (lat1, lat2))
+    Δφ = math.radians(lat2 - lat1)
+    Δλ = math.radians(lon2 - lon1)
+    a = math.sin(Δφ/2)**2 + math.cos(φ1)*math.cos(φ2)*math.sin(Δλ/2)**2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+
+def fetch_recv_loc():
+    """Grab <pre>LAT, LON</pre> from localhost:/info once."""
+    try:
+        html = urlopen("http://localhost/info/").read().decode('utf-8')
+        m = re.search(r'<pre>\s*([0-9.+-]+),\s*([0-9.+-]+)\s*</pre>', html)
+        if m:
+            app.extensions['recv_loc']['lat'] = float(m.group(1))
+            app.extensions['recv_loc']['lon'] = float(m.group(2))
+    except:
+        pass
+
+def distances_worker():
+    """Continuously read JSON lines from 30154 and compute distances."""
+    while True:
+        try:
+            sock = socket.create_connection(('127.0.0.1', 30154), timeout=5)
+            f = sock.makefile('r')
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                    call = rec.get('flight','').strip()
+                    lat2 = rec.get('lat')
+                    lon2 = rec.get('lon')
+                    lat1 = app.extensions['recv_loc']['lat']
+                    lon1 = app.extensions['recv_loc']['lon']
+                    if call and lat1 is not None:
+                        d = haversine(lat1, lon1, lat2, lon2)
+                        app.extensions['distances'][call] = round(d,1)
+                except:
+                    continue
+        except:
+            time.sleep(5)
+
+@app.before_first_request
+def start_distance_threads():
+    # only if enabled in preferences
+    rows = dict_rows("SELECT value FROM preferences WHERE name='enable_1090_distances'")
+    if rows and rows[0]['value']=='yes':
+        fetch_recv_loc()
+        threading.Thread(target=distances_worker, daemon=True).start()
 
 # ────────────────────────────────────────────────────────────────
 # Seed default inventory categories
@@ -1364,6 +1429,20 @@ def dashboard_table_partial():
         for r in raw_cursor:
             d = dict(r)
 
+            # pick user unit
+            unit = request.cookies.get('distance_unit','nm')
+            km = app.extensions['distances'].get(d.get('tail_number',''), None)
+            if km is None or km=='':
+                d['distance'] = ''
+            else:
+                if unit=='mi':
+                    d['distance'] = round(km * 0.621371, 1)
+                elif unit=='nm':
+                    d['distance'] = round(km * 0.539957, 1)
+                else:  # km
+                    d['distance'] = round(km, 1)
+            yield d
+
             # airport formatting (cached)
             d['origin_view'] = _fmt_airport(d.get('airfield_takeoff',''), code_pref)
             d['dest_view']   = _fmt_airport(d.get('airfield_landing',''), code_pref)
@@ -2033,6 +2112,14 @@ def preferences():
                 samesite='Lax'
             )
 
+        if 'distance_unit' in request.form:
+            resp.set_cookie(
+                'distance_unit',
+                request.form['distance_unit'],
+                max_age=ONE_YEAR,
+                samesite='Lax'
+            )
+
         if 'operator_call' in request.form:  # protect from arbitrary text XSS
             oc = escape(request.form['operator_call'].upper())
             resp.set_cookie(
@@ -2184,7 +2271,22 @@ def admin():
         if 'clear_embedded' in request.form:
             with sqlite3.connect(DB_FILE) as c:
                 c.execute("DELETE FROM preferences WHERE name IN ('embedded_url','embedded_name')")
+            # also disable distances
+            c.execute("INSERT OR REPLACE INTO preferences(name,value) VALUES('enable_1090_distances','no')")
             flash("Embedded-tab removed.", "info")
+            return redirect(url_for('admin'))
+
+        # ── Toggle 1090 distances checkbox ────────────────────
+        if 'save_embedded' in request.form:
+            # after storing url+name above, store the checkbox
+            val = 'yes' if request.form.get('enable_1090_distances')=='on' else 'no'
+            with sqlite3.connect(DB_FILE) as c:
+                c.execute("""
+                  INSERT INTO preferences(name,value)
+                  VALUES('enable_1090_distances',?)
+                  ON CONFLICT(name) DO UPDATE SET value=excluded.value
+                """, (val,))
+            flash("1090‑distances preference saved.", "info")
             return redirect(url_for('admin'))
 
         # ── Update Default Origin (DB) ───────────────

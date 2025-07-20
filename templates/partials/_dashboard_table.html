@@ -5,6 +5,7 @@
       <th>#</th>
       <th class="status">Status</th>
       <th>Tail #</th>
+      <th>Dist ({{ distance_unit }})</th>
       <th>Pilot</th>
       <th>PAX #</th>
       <th>Origin</th>
@@ -19,7 +20,7 @@
   {% import '_flight_macros.html' as macros %}
   <tbody>
     {% for f in flights %}
-      {{ macros.flight_row(f, hide_tbd) }}
+      {{ macros.flight_row(f, hide_tbd, show_distance=true) }}
     {% endfor %}
   </tbody>
 </table>

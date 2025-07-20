@@ -44,6 +44,12 @@
         Clear
       </button>
     </div>
+      <label style="display:block; margin-top:1rem;">
+        <input type="checkbox"
+               name="enable_1090_distances"
+               {% if enable_1090_distances %}checked{% endif %}>
+        Compute and show 1090 feed distances
+      </label>
     <label style="margin-top:18px">Show Debug Logs:</label>
     <select name="show_debug_logs" onchange="this.form.submit()">
       <option value="no"  {% if show_debug_logs=='no'  %}selected{% endif %}>No</option>
