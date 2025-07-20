@@ -25,6 +25,8 @@ from flask import (
     session, Blueprint
 )
 
+inventory_bp = Blueprint('inventory', __name__, url_prefix='/inventory')
+
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_limiter.errors import RateLimitExceeded
 import uuid
@@ -332,6 +334,56 @@ def run_migrations():
         ("remarks",          "TEXT")
     ]:
         ensure_column("incoming_messages", col, typ)
+
+    # ─── Inventory: add pending‐line support ───────────────
+    ensure_column("inventory_entries", "pending",    "INTEGER DEFAULT 0")
+    ensure_column("inventory_entries", "pending_ts", "TEXT")
+    ensure_column("inventory_entries", "session_id", "TEXT")
+
+def cleanup_pending():
+    """Purge any pending inventory‐entries older than 15 minutes."""
+    cutoff = (datetime.utcnow() - timedelta(minutes=15)).isoformat()
+    with sqlite3.connect(DB_FILE) as c:
+        c.execute("DELETE FROM inventory_entries WHERE pending=1 AND pending_ts<=?",
+                  (cutoff,))
+
+# ─── Run pending‐cleanup before any inventory view ─────────
+@inventory_bp.before_app_request
+def _cleanup_before_view():
+    # fire only on inventory blueprint routes
+    if request.blueprint == 'inventory':
+        cleanup_pending()
+
+@inventory_bp.route('/_advance_data')
+def inventory_advance_data():
+    """JSON stock snapshot for Advanced panel (re-polled every 15s)."""
+    # same build logic as in ramp_boss()
+    rows = dict_rows("""
+      SELECT e.category_id AS cid, c.display_name AS cname,
+             e.sanitized_name, e.weight_per_unit, SUM(e.quantity) AS qty
+        FROM inventory_entries e
+        JOIN inventory_categories c ON c.id=e.category_id
+       WHERE e.direction='in' AND e.pending=0
+       GROUP BY e.category_id,e.sanitized_name,e.weight_per_unit
+    """)
+    data = {"categories":[], "items":{}, "sizes":{}, "avail":{}}
+    for r in rows:
+        cid = str(r['cid'])
+        # availability
+        data["avail"].setdefault(cid, {})\
+             .setdefault(r['sanitized_name'], {})[str(r['weight_per_unit'])] = r['qty']
+        # categories
+        if not any(c["id"]==cid for c in data["categories"]):
+            data["categories"].append({"id":cid,"display_name":r['cname']})
+        # items & sizes
+        data["items"].setdefault(cid, [])
+        data["sizes"].setdefault(cid, {})
+        if r['sanitized_name'] not in data["items"][cid]:
+            data["items"][cid].append(r['sanitized_name'])
+            data["sizes"][cid][r['sanitized_name']] = []
+        data["sizes"][cid][r['sanitized_name']].append(r['weight_per_unit'])
+    return jsonify(data)
+
 
 def ensure_airports_table():
     with sqlite3.connect(DB_FILE) as c:
@@ -1560,7 +1612,123 @@ def ramp_boss():
         # otherwise fall back to the old behavior:
         return redirect(url_for('dashboard'))
 
-    return render_template('ramp_boss.html', default_origin=default_origin, active='ramp_boss')
+    # build the same advanced_data and inject it for initial page render
+    rows = dict_rows("""
+      SELECT e.category_id AS cid, c.display_name AS cname,
+             e.sanitized_name, e.weight_per_unit, SUM(e.quantity) AS qty
+        FROM inventory_entries e
+        JOIN inventory_categories c ON c.id=e.category_id
+       WHERE e.direction='in' AND e.pending=0
+       GROUP BY e.category_id,e.sanitized_name,e.weight_per_unit
+    """)
+    advanced_data = {"categories":[], "items":{}, "sizes":{}, "avail":{}}
+    for r in rows:
+        cid = str(r['cid'])
+        advanced_data["avail"].setdefault(cid, {})\
+             .setdefault(r['sanitized_name'], {})[str(r['weight_per_unit'])] = r['qty']
+        if not any(c["id"]==cid for c in advanced_data["categories"]):
+            advanced_data["categories"].append({"id":cid,"display_name":r['cname']})
+        advanced_data["items"].setdefault(cid, [])
+        advanced_data["sizes"].setdefault(cid, {})
+        if r['sanitized_name'] not in advanced_data["items"][cid]:
+            advanced_data["items"][cid].append(r['sanitized_name'])
+            advanced_data["sizes"][cid][r['sanitized_name']] = []
+        advanced_data["sizes"][cid][r['sanitized_name']].append(r['weight_per_unit'])
+
+    return render_template(
+      'ramp_boss.html',
+      default_origin=default_origin,
+      active='ramp_boss',
+      advanced_data=json.dumps(advanced_data)
+    )
+
+# ─────────── Consolidated Advanced endpoint ─────────────
+@inventory_bp.route('/_advance_line', methods=['POST'])
+def inventory_advance_line():
+    """Single endpoint: add / delete / commit pending lines by `action`."""
+    action = request.form.get('action')
+    mid     = request.form['manifest_id']
+
+    if action == 'add':
+        cleanup_pending()
+        direction = request.form['direction']
+        cat_id    = int(request.form['category'])
+
+        if direction == 'outbound':
+            name = request.form['item']
+            wpu  = float(request.form['size'])
+            qty  = int(request.form['qty'])
+
+            # check stock availability
+            in_qty  = dict_rows(
+              "SELECT COALESCE(SUM(quantity),0) AS v FROM inventory_entries "
+              "WHERE category_id=? AND sanitized_name=? AND weight_per_unit=? "
+              "  AND direction='in' AND pending=0",
+              (cat_id,name,wpu)
+            )[0]['v']
+            out_qty = dict_rows(
+              "SELECT COALESCE(SUM(quantity),0) AS v FROM inventory_entries "
+              "WHERE category_id=? AND sanitized_name=? AND weight_per_unit=? "
+              "  AND direction='out' AND pending=0",
+              (cat_id,name,wpu)
+            )[0]['v']
+            avail = in_qty - out_qty
+            if qty > avail:
+                return jsonify(success=False,
+                               message=f"Only {avail} available"), 400
+
+            raw       = name
+            sanitized = name
+        else:
+            raw       = request.form['name']
+            sanitized = sanitize_name(raw)
+            wpu       = float(request.form['weight'])
+            qty       = int(request.form['qty'])
+
+        total = wpu * qty
+        ts    = datetime.utcnow().isoformat()
+
+        with sqlite3.connect(DB_FILE) as c:
+            c.execute("""
+              INSERT INTO inventory_entries(
+                category_id,raw_name,sanitized_name,
+                weight_per_unit,quantity,total_weight,
+                direction,timestamp,pending,pending_ts,session_id
+              ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+              cat_id, raw, sanitized,
+              wpu, qty, total,
+              direction[:3], ts, 1, ts, mid
+            ))
+            eid = c.lastrowid
+
+        return jsonify(success=True,
+                       entry_id=eid,
+                       raw=raw,
+                       sanitized=sanitized,
+                       wpu=wpu,
+                       qty=qty,
+                       total=total,
+                       direction=direction,
+                       ts=ts)
+
+
+    elif action == 'delete':
+        eid = int(request.form['entry_id'])
+        with sqlite3.connect(DB_FILE) as c:
+            c.execute(
+              "DELETE FROM inventory_entries WHERE id=? AND pending=1 AND session_id=?",
+              (eid, mid)
+            )
+        return jsonify(success=(c.rowcount>0)), (404 if c.rowcount==0 else 200)
+
+    elif action == 'commit':
+        # clear pending = 0 for this manifest
+        with sqlite3.connect(DB_FILE) as c:
+            c.execute("UPDATE inventory_entries SET pending=0 WHERE session_id=?", (mid,))
+        return jsonify(success=True)
+
+    return jsonify(success=False), 400
 
 @app.route('/edit_flight/<int:fid>', methods=['GET','POST'])
 def edit_flight(fid):
@@ -2022,9 +2190,6 @@ def embedded():
                            active='embedded',
                            embedded_name=embedded_name)
 
-# ─────────────────── Inventory Blueprint & Routes ────────────────────
-inventory_bp = Blueprint('inventory', __name__, url_prefix='/inventory')
-
 @inventory_bp.route('/')
 def inventory_overview():
     cutoff = (datetime.utcnow() - timedelta(hours=2)).isoformat()
@@ -2263,6 +2428,14 @@ def inventory_edit(entry_id):
         ),
         active='inventory'
     )
+
+# ───────────── Delete Inventory Entry ─────────────
+@inventory_bp.route('/delete/<int:entry_id>', methods=('POST',))
+def inventory_delete(entry_id):
+    """Delete a single inventory entry and return to detail page."""
+    with sqlite3.connect(DB_FILE) as c:
+        c.execute("DELETE FROM inventory_entries WHERE id = ?", (entry_id,))
+    return redirect(url_for('inventory.inventory_detail'))
 
 # register the inventory blueprint
 app.register_blueprint(inventory_bp)
