@@ -23,7 +23,13 @@
 
       <label for="weight">Wt/Unit</label>
       <div style="display:flex; align-items:center; gap:0.5rem;">
-        <input id="weight" name="weight" type="number" step="any" min="0" required style="flex:1">
+        <input id="weight"
+               name="weight"
+               type="number"
+               step="any"
+               min="0"
+               required
+               style="flex:1; min-width:8ch">
         <select id="weight_unit" name="weight_unit">
           <option value="lbs" {% if inv_weight_unit=='lbs' %}selected{% endif %}>lbs</option>
           <option value="kg"  {% if inv_weight_unit=='kg'  %}selected{% endif %}>kg</option>
