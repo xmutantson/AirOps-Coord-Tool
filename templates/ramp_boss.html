@@ -76,7 +76,7 @@
       <button type="submit">Save Flight</button>
     </form>
 
-    <!-- Cargo Weight Tools Panel (unchanged) -->
+    <!-- Cargo Weight Tools Panel -->
     <div
       id="cargo-tools-panel"
       class="cargo-tools-panel"
@@ -87,16 +87,16 @@
         id="cw-back"
         style="position:absolute; left:1rem; background:none; border:none; font-size:1em; cursor:pointer;"
       >
-        ← Back
+        ← Back
       </button>
       <h4 style="margin:0; font-size:2em;">Running Cargo Total</h4>
 
       <div id="cw-history"></div>
-      <div id="cw-total">Total: 0 lbs</div>
+      <div id="cw-total">Total: 0 lbs</div>
 
       <div style="display:flex; align-items:center; gap:0.5rem; margin-top:0.5rem;">
         <button type="button" class="cw-button cw-minus" id="cw-minus" disabled>−</button>
-        <input type="number" id="cw-change" placeholder="e.g. 20" step="any" min="0" style="min-width:10ch">
+        <input type="number" id="cw-change" placeholder="e.g. 20" step="any" min="0" style="min-width:10ch">
         <button type="button" class="cw-button cw-plus"  id="cw-plus">+</button>
       </div>
 
@@ -105,7 +105,7 @@
       </button>
     </div>
 
-    <!-- Advanced Inventory Takeover Panel -->
+    <!-- Advanced Inventory Take‑over Panel -->
     <div
       id="adv-panel"
       class="cargo-tools-panel"
@@ -117,7 +117,7 @@
         class="back-button"
         style="position:absolute; left:1rem; background:none; border:none; font-size:1em; cursor:pointer;"
       >
-        ← Back
+        ← Back
       </button>
       <h4 style="margin-top:2rem; margin-bottom:0.5rem;">Advanced Inventory Entry</h4>
 
@@ -125,10 +125,10 @@
         <select id="adv-category" style="min-width:10ch;">
           <option value="">Category…</option>
         </select>
-        <select id="adv-item"     disabled style="min-width:10ch;">
+        <select id="adv-item" disabled style="min-width:10ch;">
           <option value="">Item…</option>
         </select>
-        <select id="adv-size"     disabled style="min-width:10ch;">
+        <select id="adv-size" disabled style="min-width:10ch;">
           <option value="">Size…</option>
         </select>
         <input id="adv-qty"
@@ -141,7 +141,7 @@
       </div>
 
       <div id="adv-lines" style="margin-top:1rem; display:flex; flex-wrap:wrap; gap:0.5rem;">
-        <!-- individual “chips” get appended here -->
+        <!-- chips appear here -->
       </div>
       <button type="button" id="adv-done" disabled style="margin-top:1rem;">
         Done
@@ -151,12 +151,13 @@
     <div id="rb-feedback-container"></div>
   </div>
 
+  <!-- ───────────────── Ramp‑Boss main JS (validation, lookup, CW‑tools) ───────────────── -->
   <script>
     // Ramp‑Boss form validation
-    function validateRampBoss() {
+    function validateRampBoss () {
       document.querySelectorAll('#rb-form .form-error').forEach(el => el.remove());
       const invalid = Array.from(document.querySelectorAll('#rb-form [required]'))
-                           .filter(f => !f.value.trim());
+                            .filter(f => !f.value.trim());
       if (invalid.length) {
         invalid.forEach(f => f.classList.add('error'));
         const submitBtn = document.querySelector('#rb-form button[type="submit"]');
@@ -172,20 +173,19 @@
     document.querySelectorAll('#rb-form [required]')
             .forEach(f => f.addEventListener('input', () => f.classList.remove('error')));
 
-    /* Ramp‑Boss AJAX & UI logic */
-    const form         = document.getElementById('rb-form');
-    const feedbackBox  = document.getElementById('rb-feedback-container');
-    const defaultOrigin= "{{ default_origin }}";
+    // shortcuts to DOM nodes
+    const form          = document.getElementById('rb-form');
+    const feedbackBox   = document.getElementById('rb-feedback-container');
+    const defaultOrigin = "{{ default_origin }}";
+    const depField      = document.getElementById('dep_time');
+    const originField   = document.getElementById('origin');
+    const destField     = document.getElementById('destination');
+    const dirRadios     = [...document.querySelectorAll('input[name="direction"]')];
+    const labelTime     = document.getElementById('time-label');
+    const etaBlock      = document.getElementById('eta_block');
+    const etaInput      = document.getElementById('eta_input');
 
-    const depField     = document.getElementById('dep_time');
-    const originField  = document.getElementById('origin');
-    const destField    = document.getElementById('destination');
-    const dirRadios    = [...document.querySelectorAll('input[name="direction"]')];
-    const labelTime    = document.getElementById('time-label');
-    const etaBlock     = document.getElementById('eta_block');
-    const etaInput     = document.getElementById('eta_input');
-
-    function applyDirUI() {
+    function applyDirUI () {
       const dir = dirRadios.find(r => r.checked).value;
       const now = new Date(),
             hh  = now.getHours().toString().padStart(2,'0'),
@@ -210,64 +210,62 @@
     dirRadios.forEach(r => r.addEventListener('change', applyDirUI));
     applyDirUI();
 
+    // Tail‑lookup
     document.getElementById('lookup').addEventListener('click', async () => {
       const tail = form.tail_number.value.trim().toUpperCase();
-      if (!tail) {
-        return showToast('Enter tail number first!', 'error');
-      }
+      if (!tail) return showToast('Enter tail number first!', 'error');
+
       const res = await fetch(`/api/lookup_tail/${encodeURIComponent(tail)}`);
-      if (!res.ok) {
-        return showToast('Lookup failed', 'error');
-      }
+      if (!res.ok) return showToast('Lookup failed', 'error');
+
       const d = await res.json();
-      if (!Object.keys(d).length) {
+      if (!Object.keys(d).length)
         return showToast('No prior record for that tail.', 'error');
-      }
-      if (d.airfield_takeoff)  form.origin.value      = d.airfield_takeoff;
-      if (d.airfield_landing)  form.destination.value = d.airfield_landing;
-      if (d.pilot_name)        form.pilot_name.value  = d.pilot_name;
-      if (d.pax_count)         form.pax_count.value   = d.pax_count;
-      if (d.cargo_type)        form.cargo_type.value  = d.cargo_type;
-      if (d.cargo_weight)      form.cargo_weight.value= d.cargo_weight;
+
+      if (d.airfield_takeoff) form.origin.value       = d.airfield_takeoff;
+      if (d.airfield_landing) form.destination.value  = d.airfield_landing;
+      if (d.pilot_name)       form.pilot_name.value   = d.pilot_name;
+      if (d.pax_count)        form.pax_count.value    = d.pax_count;
+      if (d.cargo_type)       form.cargo_type.value   = d.cargo_type;
+      if (d.cargo_weight)     form.cargo_weight.value = d.cargo_weight;
     });
 
+    // form submit (AJAX)
     form.addEventListener('submit', async e => {
       e.preventDefault();
       if (!validateRampBoss()) return;
 
       // HHMM sanity
       const t = depField.value.trim();
-      if (t.length<3 || t.length>4 || isNaN(t)) {
+      if (t.length < 3 || t.length > 4 || isNaN(t)) {
         depField.classList.add('error');
         return showToast('Time must be 3–4 digits', 'error');
       }
       depField.classList.remove('error');
 
       const resp = await fetch(window.location.href, {
-        method: 'POST',
-        headers:{ 'X-Requested-With':'XMLHttpRequest' },
-        body:   new FormData(form)
+        method:  'POST',
+        headers: { 'X-Requested-With':'XMLHttpRequest' },
+        body:    new FormData(form)
       });
-      if (!resp.ok) {
-        return showToast('Save failed', 'error');
-      }
+      if (!resp.ok) return showToast('Save failed', 'error');
       const f = await resp.json();
 
-      // render feedback row…
+      // feedback table
       const allBlank = ['tail_number','airfield_takeoff','airfield_landing',
                         'takeoff_time','eta','cargo_type','cargo_weight','remarks']
-                       .every(k => !f[k] || f[k]==='TBD');
+                       .every(k => !f[k] || f[k] === 'TBD');
       const rowClass = allBlank
         ? 'red-border'
-        : (f.action==='updated' ? 'blue-border' : 'green-border');
+        : (f.action === 'updated' ? 'blue-border' : 'green-border');
 
       feedbackBox.innerHTML = `
         <table class="full-bleed">
           <thead>
             <tr>
-              <th>#</th><th>Dir</th><th>Tail #</th><th>Pilot</th><th>PAX #</th>
+              <th>#</th><th>Dir</th><th>Tail #</th><th>Pilot</th><th>PAX #</th>
               <th>Origin</th><th>${f.direction==='outbound'?'Dep':'Arr'} HHMM</th>
-              <th>Dest</th><th>ETA</th><th>Cargo Type</th><th>Cargo Wt</th><th>Remarks</th>
+              <th>Dest</th><th>ETA</th><th>Cargo Type</th><th>Cargo Wt</th><th>Remarks</th>
             </tr>
           </thead>
           <tbody>
@@ -295,11 +293,11 @@
       // reset running total
       totalCargo = 0;
       cwHistory.innerHTML = '';
-      cwTotalEl.textContent = 'Total: 0 lbs';
+      cwTotalEl.textContent = 'Total: 0 lbs';
       cwMinus.disabled = true;
     });
 
-    // ── Cargo‑tools logic (unchanged) ─────────────────────────
+    /* ───────────────── Cargo‑Weight mini‑panel ───────────────── */
     const cwPanel   = document.getElementById('cargo-tools-panel');
     const openCwBtn = document.getElementById('open-cw-tools');
     const cwBack    = document.getElementById('cw-back');
@@ -309,9 +307,9 @@
     const cwHistory = document.getElementById('cw-history');
     const cwTotalEl = document.getElementById('cw-total');
     const cwApply   = document.getElementById('cw-apply');
-    let   totalCargo= 0;
+    let   totalCargo = 0;
 
-    function recordHistory(entry) {
+    function recordHistory (entry) {
       const div = document.createElement('div');
       div.textContent = entry;
       cwHistory.appendChild(div);
@@ -323,13 +321,13 @@
       cwMinus.disabled = (totalCargo === 0);
     });
     cwBack.addEventListener('click',   () => document.body.classList.remove('cw-active'));
-    cwApply.addEventListener('click', () => {
+    cwApply.addEventListener('click',  () => {
       document.getElementById('cargo_weight').value = totalCargo;
       document.body.classList.remove('cw-active');
     });
-    cwPlus.addEventListener('click',  () => {
+    cwPlus.addEventListener('click', () => {
       const val = parseFloat(cwChange.value);
-      if (isNaN(val)) return showToast('Enter a valid number','error');
+      if (isNaN(val)) return showToast('Enter a valid number', 'error');
       const change = Math.ceil(val);
       if (totalCargo === 0) {
         totalCargo = change;
@@ -339,136 +337,131 @@
         totalCargo += change;
         recordHistory(`${prev} + ${change} = ${totalCargo}`);
       }
-      cwTotalEl.textContent = `Total: ${totalCargo} lbs`;
+      cwTotalEl.textContent = `Total: ${totalCargo} lbs`;
       cwMinus.disabled = false;
       cwChange.value = '';
     });
     cwMinus.addEventListener('click', () => {
       const val = parseFloat(cwChange.value);
-      if (isNaN(val)) return showToast('Enter a valid number','error');
+      if (isNaN(val)) return showToast('Enter a valid number', 'error');
       const change = Math.ceil(val);
       const prev = totalCargo;
       totalCargo = Math.max(0, totalCargo - change);
       recordHistory(`${prev} - ${change} = ${totalCargo}`);
-      cwTotalEl.textContent = `Total: ${totalCargo} lbs`;
+      cwTotalEl.textContent = `Total: ${totalCargo} lbs`;
       cwChange.value = '';
       if (totalCargo === 0) cwMinus.disabled = true;
     });
   </script>
 
-  <!-- inject initial stock snapshot for Advanced panel -->
+  <!-- initial stock snapshot for Advanced panel -->
   <script>
     let inventoryAdvancedData = {{ advanced_data|safe }};
   </script>
 
+  <!-- ───────────────── Advanced‑panel JS (fixed & complete) ───────────────── -->
   <script>
-    // ── Advanced RampBoss Inventory logic ─────────────────────
-    const advBtn     = document.getElementById('open-adv');
-    const advPanel   = document.getElementById('adv-panel');
-    const advBack    = document.getElementById('adv-back');
-    const advCat     = document.getElementById('adv-category');
-    const advItem    = document.getElementById('adv-item');
-    const advSize    = document.getElementById('adv-size');
-    const advQty     = document.getElementById('adv-qty');
-    const advAdd     = document.getElementById('adv-add-line');
-    const advLines   = document.getElementById('adv-lines');
-    const advDone    = document.getElementById('adv-done');
-    const advMode    = document.getElementById('advanced-mode');
-    const manifestId = document.getElementById('manifest-id');
-    let   pendingIds = [];
+    /* DOM helpers */
+    const advBtn      = document.getElementById('open-adv');
+    const advPanel    = document.getElementById('adv-panel');
+    const advBack     = document.getElementById('adv-back');
+    const advCat      = document.getElementById('adv-category');
+    const advItem     = document.getElementById('adv-item');
+    const advSize     = document.getElementById('adv-size');
+    const advQty      = document.getElementById('adv-qty');
+    const advAdd      = document.getElementById('adv-add-line');
+    const advLines    = document.getElementById('adv-lines');
+    const advDone     = document.getElementById('adv-done');
+    const advMode     = document.getElementById('advanced-mode');
+    const manifestId  = document.getElementById('manifest-id');
+    const rbForm      = document.getElementById('rb-form');
+    let   pendingIds  = [];
 
-    function showError(msg) {
-      showToast(msg, 'error');
-    }
+    const showError = msg => showToast(msg, 'error');
 
-    // refresh every 15 s
+    /* keep stock fresh */
     setInterval(() => {
       fetch("{{ url_for('inventory.inventory_advance_data') }}")
-        .then(r=>r.json())
-        .then(d=> inventoryAdvancedData = d)
-        .catch(()=>{/* ignore */});
+        .then(r => r.json())
+        .then(d => inventoryAdvancedData = d)
+        .catch(() => {});
     }, 15_000);
 
-    function startAdvanced() {
-      // Generate UUID safely
+    /* open panel */
+    function startAdvanced () {
       const mid = ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g,
-        c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
-      );
+        c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16));
 
-      manifestId.value = mid;
-      advMode.value    = '1';
-      pendingIds       = [];
+      manifestId.value   = mid;
+      advMode.value      = '1';
+      pendingIds         = [];
       advLines.innerHTML = '';
       advDone.disabled   = true;
 
-      // Populate category dropdown explicitly
-      if (inventoryAdvancedData && inventoryAdvancedData.categories) {
+      if (inventoryAdvancedData?.categories) {
         advCat.innerHTML = '<option value="">Category…</option>' +
           inventoryAdvancedData.categories
             .map(c => `<option value="${c.id}">${c.display_name}</option>`)
             .join('');
       } else {
-        showError('Inventory data not loaded. Please wait a few seconds and try again.');
-        return;
+        return showError('Inventory data not loaded. Please wait and try again.');
       }
 
-      // Ensure form elements are correctly initialized
       [advItem, advSize, advQty, advAdd].forEach(el => el.disabled = true);
 
-      // Hide Ramp Boss form explicitly by adding CSS class
-      document.getElementById('ramp-boss-form').classList.add('hidden');
-
-      // Explicitly show the advanced panel
+      rbForm.style.display = 'none';
       advPanel.style.display = 'block';
     }
-
     advBtn.addEventListener('click', startAdvanced);
 
-    advBack.addEventListener('click', async ()=>{
-      // rollback
-      for(let eid of pendingIds) {
-        await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
-          method:'POST',
-          body: new URLSearchParams({
-            action:      'delete',
-            manifest_id: manifestId.value,
-            entry_id:    eid
-          })
-        .catch(() => {/* ignore rollback errors */});
+    /* cancel panel */
+    advBack.addEventListener('click', async () => {
+      for (const eid of pendingIds) {
+        try {
+          await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
+            method:'POST',
+            body: new URLSearchParams({
+              action:      'delete',
+              manifest_id: manifestId.value,
+              entry_id:    eid
+            })
+          });
+        } catch {/* ignore */ }
       }
       advPanel.style.display = 'none';
-      document.getElementById('ramp-boss-form').classList.remove('hidden');
+      rbForm.style.display   = '';
     });
 
-    advCat.addEventListener('change', ()=>{
+    /* cascaded selects */
+    advCat.addEventListener('change', () => {
       const cid = advCat.value;
       advItem.disabled = false;
       advItem.innerHTML = '<option value="">Item…</option>' +
-        inventoryAdvancedData.items[cid]
-          .map(i=>`<option>${i}</option>`).join('');
-      [advSize, advQty, advAdd].forEach(el=>el.disabled=true);
+        (inventoryAdvancedData.items?.[cid] || [])
+          .map(i => `<option>${i}</option>`).join('');
+      [advSize, advQty, advAdd].forEach(el => el.disabled = true);
     });
 
-    advItem.addEventListener('change', ()=>{
+    advItem.addEventListener('change', () => {
       const cid = advCat.value, it = advItem.value;
       advSize.disabled = false;
       advSize.innerHTML = '<option value="">Size…</option>' +
-        (inventoryAdvancedData.sizes[cid]?.[it] || [])
-          .map(s=>`<option value="${s}">${s} lb (${inventoryAdvancedData.avail[cid][it][s]} avail)</option>`)
+        (inventoryAdvancedData.sizes?.[cid]?.[it] || [])
+          .map(s => `<option value="${s}">${s} lb (${(inventoryAdvancedData.avail?.[cid]?.[it]?.[s] ?? 0)} avail)</option>`)
           .join('');
       advQty.disabled = advAdd.disabled = true;
     });
 
-    advSize.addEventListener('change', ()=>{
+    advSize.addEventListener('change', () => {
       advQty.disabled = false;
       advAdd.disabled = true;
     });
-
-    advQty.addEventListener('input', ()=>{
-      advAdd.disabled = (parseInt(advQty.value,10) < 1);
+    advQty.addEventListener('input', () => {
+      advAdd.disabled = (+advQty.value < 1);
     });
 
-    advAdd.addEventListener('click', async ()=>{
+    /* add line */
+    advAdd.addEventListener('click', async () => {
       const params = new URLSearchParams({
         action:      'add',
         manifest_id: manifestId.value,
@@ -478,60 +471,65 @@
         size:        advSize.value,
         qty:         advQty.value
       });
-      const resp = await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
-        method:'POST', body: params
-      }).catch(() => {
-        return showError('Network error. Please try again.');
-      });
+      let resp;
+      try {
+        resp = await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
+          method:'POST',
+          body: params
+        });
+      } catch { return showError('Network error.'); }
+
       const j = await resp.json();
-      if (!resp.ok) {
-        return showError(j.message || 'Error adding line');
-      }
+      if (!resp.ok) return showError(j.message || 'Error adding line');
+
       pendingIds.push(j.entry_id);
-      // chip UI
+
       const chip = document.createElement('div');
-      chip.style.padding = '0.25em 0.5em';
-      chip.style.background = '#eee';
-      chip.style.borderRadius = '4px';
-      chip.textContent = `${j.sanitized} ${j.wpu} lb×${j.qty}`;
+      chip.style.cssText = 'padding:0.25em 0.5em; background:#eee; border-radius:4px;';
+      chip.textContent   = `${j.sanitized} ${j.wpu} lb×${j.qty}`;
       const rm = document.createElement('button');
       rm.textContent = '×';
       rm.style.marginLeft = '0.25em';
-      rm.addEventListener('click', async ()=>{
-        await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
-          method:'POST',
-          body: new URLSearchParams({
-            action:      'delete',
-            manifest_id: manifestId.value,
-            entry_id:    j.entry_id
-          })
-        })
-        .catch(() => {/* ignore deletion errors */});
+      rm.addEventListener('click', async () => {
+        try {
+          await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
+            method:'POST',
+            body: new URLSearchParams({
+              action:      'delete',
+              manifest_id: manifestId.value,
+              entry_id:    j.entry_id
+            })
+          });
+        } catch {/* ignore */ }
         chip.remove();
-        pendingIds = pendingIds.filter(x=>x!==j.entry_id);
+        pendingIds = pendingIds.filter(x => x !== j.entry_id);
         advDone.disabled = !pendingIds.length;
       });
       chip.append(rm);
       advLines.append(chip);
 
-      // update main form
+      /* update main form */
       const cw  = document.getElementById('cargo_weight');
       const rmf = document.getElementById('remarks');
-      cw.value   = (parseFloat(cw.value)||0) + j.total;
-      rmf.value += `${j.sanitized} ${j.wpu} lb×${j.qty}; `;
+      cw.value   = (+cw.value || 0) + j.total;
+      rmf.value += `${j.sanitized} ${j.wpu} lb×${j.qty}; `;
 
-      advDone.disabled = !pendingIds.length;
+      advDone.disabled = false;
     });
 
-    advDone.addEventListener('click', async ()=>{
-      await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
-        method:'POST',
-        body: new URLSearchParams({
-          action:      'commit',
-          manifest_id: manifestId.value
-        })
-      });
+    /* commit */
+    advDone.addEventListener('click', async () => {
+      try {
+        await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
+          method:'POST',
+          body: new URLSearchParams({
+            action:      'commit',
+            manifest_id: manifestId.value
+          })
+        });
+      } catch { return showError('Network error committing manifest.'); }
       advPanel.style.display = 'none';
+      rbForm.style.display   = '';
     });
   </script>
 {% endblock %}
