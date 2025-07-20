@@ -415,6 +415,9 @@
       // Ensure form elements are correctly initialized
       [advItem, advSize, advQty, advAdd].forEach(el => el.disabled = true);
 
+      // Hide Ramp Boss form explicitly by adding CSS class
+      document.getElementById('ramp-boss-form').classList.add('hidden');
+
       // Explicitly show the advanced panel
       advPanel.style.display = 'block';
     }
@@ -431,9 +434,10 @@
             manifest_id: manifestId.value,
             entry_id:    eid
           })
-        });
+        .catch(() => {/* ignore rollback errors */});
       }
       advPanel.style.display = 'none';
+      document.getElementById('ramp-boss-form').classList.remove('hidden');
     });
 
     advCat.addEventListener('change', ()=>{
@@ -449,7 +453,7 @@
       const cid = advCat.value, it = advItem.value;
       advSize.disabled = false;
       advSize.innerHTML = '<option value="">Size…</option>' +
-        inventoryAdvancedData.sizes[cid][it]
+        (inventoryAdvancedData.sizes[cid]?.[it] || [])
           .map(s=>`<option value="${s}">${s} lb (${inventoryAdvancedData.avail[cid][it][s]} avail)</option>`)
           .join('');
       advQty.disabled = advAdd.disabled = true;
@@ -476,6 +480,8 @@
       });
       const resp = await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
         method:'POST', body: params
+      }).catch(() => {
+        return showError('Network error. Please try again.');
       });
       const j = await resp.json();
       if (!resp.ok) {
@@ -499,7 +505,8 @@
             manifest_id: manifestId.value,
             entry_id:    j.entry_id
           })
-        });
+        })
+        .catch(() => {/* ignore deletion errors */});
         chip.remove();
         pendingIds = pendingIds.filter(x=>x!==j.entry_id);
         advDone.disabled = !pendingIds.length;

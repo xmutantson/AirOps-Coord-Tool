@@ -730,3 +730,36 @@ body.cw-active #cargo-tools-panel {
   padding: 2rem;
   overflow-y: auto;
 }
+
+/* ──────────────────────────────────────────────────────────────
+   Advanced Inventory Panel (Ramp Boss)
+   ────────────────────────────────────────────────────────────── */
+#adv-panel {
+  display: none; /* hidden initially, shown via JS */
+  position: fixed;
+  top: 0;
+  left: 10%; /* centered at 80% width */
+  width: 80%;
+  height: 100%;
+  overflow-y: auto;
+  background-color: #ffffff;
+  z-index: 1500; /* high enough to overlay other elements */
+  padding: 2rem;
+  border: 1px solid #ccc;
+  box-shadow: 0 0 15px rgba(0,0,0,0.2);
+  box-sizing: border-box;
+}
+
+/* When advanced panel is active, hide the main ramp boss form */
+#ramp-boss-form.hidden {
+  display: none;
+}
+
+/* Responsive adjustments for narrow screens (≤600px) */
+@media (max-width: 600px) {
+  #adv-panel {
+    left: 0;
+    width: 100%;
+    padding: 1rem;
+  }
+}
