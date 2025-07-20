@@ -125,11 +125,21 @@
         <select id="adv-category" style="min-width:10ch;">
           <option value="">Category…</option>
         </select>
-        <select id="adv-item" disabled style="min-width:10ch;">
+        <!-- OUTBOUND widgets (pick from stock) -->
+        <select id="adv-item"  class="adv-out" disabled style="min-width:10ch;">
           <option value="">Item…</option>
         </select>
-        <select id="adv-size" disabled style="min-width:10ch;">
+        <select id="adv-size"  class="adv-out" disabled style="min-width:10ch;">
           <option value="">Size…</option>
+        </select>
+
+        <!-- INBOUND widgets (free entry) -->
+        <input  id="adv-name"   class="adv-in"  placeholder="Item name…" style="min-width:10ch; display:none;">
+        <input  id="adv-weight" class="adv-in"  type="number" min="0" step="any"
+                placeholder="Wt/unit"            style="min-width:10ch; display:none;">
+        <select id="adv-wunit"  class="adv-in"  style="min-width:8ch;  display:none;">
+          <option value="lbs" selected>lbs</option>
+          <option value="kg">kg</option>
         </select>
         <input id="adv-qty"
                type="number"
@@ -366,8 +376,11 @@
     const advPanel    = document.getElementById('adv-panel');
     const advBack     = document.getElementById('adv-back');
     const advCat      = document.getElementById('adv-category');
-    const advItem     = document.getElementById('adv-item');
-    const advSize     = document.getElementById('adv-size');
+    const advItem     = document.getElementById('adv-item');   // outbound
+    const advSize     = document.getElementById('adv-size');   // outbound
+    const advName     = document.getElementById('adv-name');   // inbound
+    const advWeight   = document.getElementById('adv-weight'); // inbound
+    const advWunit    = document.getElementById('adv-wunit');  // inbound
     const advQty      = document.getElementById('adv-qty');
     const advAdd      = document.getElementById('adv-add-line');
     const advLines    = document.getElementById('adv-lines');
@@ -395,6 +408,11 @@
 
     /* open panel */
     function startAdvanced () {
+      /* which aircraft direction is currently selected? */
+      const dir        = document.querySelector('input[name="direction"]:checked').value;
+      const outbound   = dir === 'outbound';
+      document.body.dataset.advDir = outbound ? 'outbound' : 'inbound';
+
       const mid = ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g,
         c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16));
 
@@ -413,8 +431,21 @@
         return showError('Inventory data not loaded. Please wait and try again.');
       }
 
-      [advItem, advSize, advQty, advAdd].forEach(el => el.disabled = true);
-      advQty.value = '';                 // reset any old number
+      /* ── toggle UI for OUT vs IN ─────────────────────────── */
+      document.querySelectorAll('.adv-out').forEach(el => el.style.display = outbound ? '' : 'none');
+      document.querySelectorAll('.adv-in' ).forEach(el => el.style.display = outbound ? 'none' : '');
+
+      /* reset & disable everything appropriately */
+      if (outbound) {
+        [advItem, advSize, advQty, advAdd].forEach(el => el.disabled = true);
+        advQty.value = '';
+      } else {
+        [advName, advWeight, advWunit, advQty].forEach(el => el.disabled = false);
+        advName.value   = '';
+        advWeight.value = '';
+        advQty.value    = '';
+        advAdd.disabled = true;      // enable later via checker
+      }
       rbForm.style.display = 'none';
       advPanel.style.display = 'block';
     }
@@ -465,25 +496,48 @@
       advQty.disabled = false;
       advAdd.disabled = true;
     });
+    /* enable Add for OUTBOUND */
     advQty.addEventListener('input', () => {
-      advAdd.disabled = (+advQty.value < 1);
+      if (document.querySelector('body').dataset.advDir === 'outbound') {
+        advAdd.disabled = (+advQty.value < 1);
+      }
     });
+
+    /* enable Add for INBOUND */
+    function checkInboundReady () {
+      const ok = (
+        advCat.value &&
+        advName.value.trim() &&
+        +advWeight.value > 0 &&
+        +advQty.value    > 0
+      );
+      advAdd.disabled = !ok;
+    }
+    [advName, advWeight, advQty].forEach(el =>
+       el.addEventListener('input', checkInboundReady));
 
     /* add line */
     advAdd.addEventListener('click', async () => {
       /* track all categories used in this manifest so we can auto‑fill “Cargo Type” */
       if (!window._rbCategories) window._rbCategories = new Set();
 
+      const dirNow = document.querySelector('input[name="direction"]:checked').value;
       const params = new URLSearchParams({
-        csrf_token: csrfToken,
+        csrf_token:  csrfToken,
         action:      'add',
         manifest_id: manifestId.value,
-        direction:   document.querySelector('input[name="direction"]:checked').value,
+        direction:   dirNow,
         category:    advCat.value,
-        item:        advItem.value,
-        size:        advSize.value,
-        qty:         advQty.value
       });
+      if (dirNow === 'outbound') {                     /* pick FROM stock */
+        params.append('item', advItem.value);
+        params.append('size', advSize.value);
+        params.append('qty',  advQty.value);
+      } else {                                         /* inbound shipment */
+        params.append('name',   advName.value.trim());
+        params.append('weight', advWeight.value);
+        params.append('qty',    advQty.value);
+      }
 
       let resp;
       try {
@@ -543,16 +597,15 @@
           window._rbCategories.size === 1 ? catName : 'Mixed';
 
       /* ----------------------------------------------------------
-         1. Adjust in‑memory “avail” counts immediately so the UI
-           reflects the reduced stock.
-         2. Rebuild the Size dropdown to show the new numbers.
+         OUTBOUND only: update in‑memory availability + dropdown
       ---------------------------------------------------------- */
       const cid      = advCat.value;
       const it       = advItem.value;
       const sz       = String(advSize.value);
       const qtyUsed  = Number(advQty.value || 0);
 
-      if (!isNaN(qtyUsed) &&
+      if (dirNow === 'outbound' &&
+          !isNaN(qtyUsed) &&
           inventoryAdvancedData.avail?.[cid]?.[it]?.[sz] !== undefined) {
         inventoryAdvancedData.avail[cid][it][sz] =
           Math.max(0, inventoryAdvancedData.avail[cid][it][sz] - qtyUsed);
