@@ -3,45 +3,41 @@
 
 {% block content %}
   <h2>Inventory Detail</h2>
-
+  <!-- wrap in Ramp‑Boss style grid container for two‑col layout -->
+  <div class="ramp-form-container">
   <form id="inventory-form"
         method="POST"
         action="{{ url_for('inventory.inventory_detail') }}">
-    <div class="lookup-row">
-      <label for="category">Category</label>
-      <select id="category" name="category">
-        {% for c in categories %}
-          <option value="{{ c.id }}">{{ c.display_name }}</option>
-        {% endfor %}
-      </select>
-    </div>
 
-    <div class="lookup-row">
-      <label for="name">Item Name</label>
-      <input id="name" name="name" required>
-    </div>
-
-    <div class="lookup-row">
-      <label for="weight">Weight per Unit</label>
-      <input id="weight" name="weight" type="number" step="any" min="0" required style="width:8ch">
-    <select id="weight_unit" name="weight_unit">
-      <option value="lbs" {% if inv_weight_unit=='lbs' %}selected{% endif %}>lbs</option>
-      <option value="kg"  {% if inv_weight_unit=='kg' %}selected{% endif %}>kg</option>
+    <label for="category">Category</label>
+    <select id="category" name="category">
+      {% for c in categories %}
+        <option value="{{ c.id }}">{{ c.display_name }}</option>
+      {% endfor %}
     </select>
-    </div>
 
-    <div class="lookup-row">
-      <label for="qty">Quantity</label>
-      <input id="qty" name="qty" type="number" step="1" min="0" required>
-    </div>
+    <label for="name">Item Name</label>
+    <input id="name" name="name" required>
 
+    <label for="weight">Weight per Unit</label>
     <div class="lookup-row">
-      <label for="direction">Direction</label>
-      <select id="direction" name="direction">
-        <option value="in">Incoming</option>
-        <option value="out">Outgoing</option>
+      <input id="weight" name="weight"
+             type="number" step="any" min="0" required
+             style="width:8ch">
+      <select id="weight_unit" name="weight_unit">
+        <option value="lbs" {% if inv_weight_unit=='lbs' %}selected{% endif %}>lbs</option>
+        <option value="kg"  {% if inv_weight_unit=='kg'  %}selected{% endif %}>kg</option>
       </select>
     </div>
+
+    <label for="qty">Quantity</label>
+    <input id="qty" name="qty" type="number" step="1" min="0" required>
+
+    <label for="direction">Direction</label>
+    <select id="direction" name="direction">
+      <option value="in">Incoming</option>
+      <option value="out">Outgoing</option>
+    </select>
 
     <button type="submit">Save Entry</button>
   </form>

@@ -5,6 +5,14 @@
   <h2>Inventory Overview</h2>
   <div id="inventory-table"><!-- table loads here --></div>
 
+  <!-- button to jump to the detail/entry page -->
+  <div class="lookup-row" style="margin-top:1rem;">
+    <button type="button"
+            onclick="location.href='{{ url_for('inventory.inventory_detail') }}'">
+      Manage Inventory
+    </button>
+  </div>
+
   <script>
     async function loadInventoryOverview() {
       const resp = await fetch("{{ url_for('inventory.inventory_overview_table') }}");
