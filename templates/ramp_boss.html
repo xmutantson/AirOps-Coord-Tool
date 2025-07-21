@@ -474,7 +474,7 @@
     pendingIds         = [];
     advLines.innerHTML = '';
     advDone.disabled   = true;
-    if (!inventoryAdvancedData.categories) {
+    if (!inventoryAdvancedData.all_categories) {
       return showError('Inventory data not yet loaded.');
     }
     // pick full list for inbound, stock-only for outbound
@@ -669,7 +669,7 @@
 
     // auto‑fill Cargo Type
     const catName = inventoryAdvancedData
-                       .categories.find(c=>String(c.id)===advCat.value)
+                       .all_categories.find(c=>String(c.id)===advCat.value)
                        ?.display_name || advCat.value;
     window._rbCategories = window._rbCategories||new Set();
     window._rbCategories.add(catName);
