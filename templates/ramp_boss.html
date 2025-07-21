@@ -547,33 +547,56 @@
     /* ---------- Size select (OUTBOUND only) ---------- */
     advSize.addEventListener('change', () => {
       if (document.body.dataset.advDir !== 'outbound') return;
+      // now that size is chosen, allow qty entry
       advQty.disabled = false;
-      advAdd.disabled = true;
-    });
-    /* enable Add for OUTBOUND */
-    /* ---------- Qty keystrokes ---------- */
-    advQty.addEventListener('input', () => {
-      if (document.body.dataset.advDir === 'outbound') {
-        /* OUTBOUND: simple ≥1 check */
-        advAdd.disabled = (+advQty.value < 1);
-      } else {
-        /* INBOUND: run full completeness checker */
-        checkInboundReady();
-      }
+      // re‑evaluate whether “Add” can light up
+      checkOutboundReady();
     });
 
-    /* enable Add for INBOUND */
-    function checkInboundReady () {
+    /* helper to enable the “Add” button whenever all four outbound fields are non‑empty */
+    function checkOutboundReady() {
+      if (document.body.dataset.advDir !== 'outbound') return;
+      const q = +advQty.value;
+      advAdd.disabled = !(
+           advCat.value    // category chosen
+        && advItem.value   // item chosen
+        && advSize.value   // size chosen
+        && q > 0           // positive qty
+      );
+    }
+
+    // Run on both input *and* change so spinners and manual edits both count:
+    advQty .addEventListener('input',  checkOutboundReady);
+    advQty .addEventListener('change', checkOutboundReady);
+
+    // And live‑wire the other two selects for completeness:
+    advCat .addEventListener('change', checkOutboundReady);
+    advItem.addEventListener('change', checkOutboundReady);
+
+    /* ---------- enable Add for INBOUND ---------- */
+    function checkInboundReady() {
       const ok = (
-        advCat.value &&
-        advName.value.trim() &&
-        +advWeight.value > 0 &&
-        +advQty.value    > 0
+           advCat.value                          // category chosen
+        && advName.value.trim()                   // name filled
+        && +advWeight.value   > 0                 // positive weight
+        && +advQty.value      > 0                 // positive qty
       );
       advAdd.disabled = !ok;
     }
-    [advName, advWeight, advQty].forEach(el =>
-       el.addEventListener('input', checkInboundReady));
+
+    // wire it to both typing *and* spinner clicks…
+    [advName, advWeight, advQty].forEach(el => {
+      el.addEventListener('input',  checkInboundReady);
+      el.addEventListener('change', checkInboundReady);
+    });
+
+    // and re‑run whenever they change the category
+    advCat.addEventListener('change', checkInboundReady);
+
+    // if you ever allow toggling direction while the panel is open,
+    // you can also do:
+    advDirIn .addEventListener('change', checkInboundReady);
+    advDirOut.addEventListener('change', checkInboundReady);
 
     /* add line */
     advAdd.addEventListener('click', async () => {

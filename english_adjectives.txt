@@ -70,7 +70,6 @@ attractive
 austere
 authentic
 authorized
-automatic
 avaricious
 average
 aware
@@ -189,7 +188,6 @@ considerate
 constant
 content
 conventional
-cooked
 cool
 cooperative
 coordinated
@@ -290,7 +288,6 @@ drafty
 dramatic
 dreary
 droopy
-dry
 dual
 dull
 dutiful
@@ -383,7 +380,6 @@ filthy
 fine
 finished
 firm
-first
 firsthand
 fitting
 fixed
@@ -416,7 +412,6 @@ frank
 frayed
 free
 French
-fresh
 frequent
 friendly
 frightened
@@ -427,7 +422,6 @@ frizzy
 frivolous
 front
 frosty
-frozen
 frugal
 fruitful
 full
@@ -449,7 +443,6 @@ gifted
 giving
 glamorous
 glaring
-glass
 gleaming
 gleeful
 glistening
@@ -511,7 +504,6 @@ healthy
 heartfelt
 hearty
 heavenly
-heavy
 hefty
 helpful
 helpless
@@ -704,7 +696,6 @@ mealy
 mean
 measly
 meaty
-medical
 mediocre
 medium
 meek
@@ -915,7 +906,6 @@ ragged
 rapid
 rare
 rash
-raw
 recent
 reckless
 rectangular
@@ -944,7 +934,6 @@ rigid
 right
 ringed
 ripe
-roasted
 robust
 rosy
 rotating
