@@ -37,6 +37,7 @@ from markupsafe import escape
 import sqlite3, csv, io, re, os, json
 from datetime import datetime, timedelta
 import threading, time, socket, math
+from urllib.request import urlopen
 
 from functools import lru_cache
 
@@ -1418,6 +1419,12 @@ def dashboard_table_partial():
     tail_filter = request.args.get('tail_filter','').strip().upper()
     sort_seq    = request.cookies.get('dashboard_sort_seq','no') == 'yes'
 
+    # ── read 1090‑distances enable flag ───────────────────────────────
+    rows = dict_rows(
+        "SELECT value FROM preferences WHERE name='enable_1090_distances'"
+    )
+    show_dist = bool(rows and rows[0]['value']=='yes')
+
     sql = "SELECT * FROM flights"
     params = ()
     if tail_filter:
@@ -1441,55 +1448,52 @@ def dashboard_table_partial():
     conn.row_factory = sqlite3.Row
     raw_cursor = conn.execute(sql, params)
 
-    # Generator to enrich each row with view-fields
     def gen_rows():
         for r in raw_cursor:
             d = dict(r)
 
-            # pick user unit
-            unit = request.cookies.get('distance_unit','nm')
-            km = app.extensions['distances'].get(d.get('tail_number',''), None)
-            if km is None or km=='':
-                d['distance'] = ''
-            else:
-                if unit=='mi':
-                    d['distance'] = round(km * 0.621371, 1)
-                elif unit=='nm':
-                    d['distance'] = round(km * 0.539957, 1)
-                else:  # km
-                    d['distance'] = round(km, 1)
-            yield d
-
-            # airport formatting (cached)
+            # — airport formatting & views —
             d['origin_view'] = _fmt_airport(d.get('airfield_takeoff',''), code_pref)
             d['dest_view']   = _fmt_airport(d.get('airfield_landing',''), code_pref)
-
-            # ETA / arrival view
             if d.get('direction')=='outbound' and d.get('eta') and not d.get('complete'):
                 d['eta_view'] = d['eta'] + '*'
             else:
                 d['eta_view'] = d.get('eta') or 'TBD'
-
-            # cargo weight view + unit conversion
             cw = (d.get('cargo_weight') or '').strip()
             m_lbs = re.match(r'([\d.]+)\s*lbs', cw, re.I)
             m_kg  = re.match(r'([\d.]+)\s*kg',  cw, re.I)
             if mass_pref=='kg' and m_lbs:
-                v = round(float(m_lbs.group(1)) / 2.20462, 1)
-                d['cargo_view'] = f"{v} kg"
+                d['cargo_view'] = f"{round(float(m_lbs.group(1)) / 2.20462, 1)} kg"
             elif mass_pref=='lbs' and m_kg:
-                v = round(float(m_kg.group(1)) * 2.20462, 1)
-                d['cargo_view'] = f"{v} lbs"
+                d['cargo_view'] = f"{round(float(m_kg.group(1)) * 2.20462, 1)} lbs"
             else:
                 d['cargo_view'] = cw or 'TBD'
 
+            # — distance (only if enabled) —
+            if show_dist:
+                unit = request.cookies.get('distance_unit','nm')
+                km = app.extensions['distances'].get(d.get('tail_number'))
+                if km is None:
+                    d['distance'] = ''
+                else:
+                    if unit=='mi':
+                        d['distance'] = round(km * 0.621371, 1)
+                    elif unit=='nm':
+                        d['distance'] = round(km * 0.539957, 1)
+                    else:
+                        d['distance'] = round(km, 1)
+            else:
+                d['distance'] = ''
+
             yield d
-
-
 
     # Let Jinja stream the same partial, iterating over our cursor
     tmpl   = app.jinja_env.get_template('partials/_dashboard_table.html')
-    stream = tmpl.stream(flights=gen_rows(), hide_tbd=hide_tbd)
+    stream = tmpl.stream(
+       flights=gen_rows(),
+       hide_tbd=hide_tbd,
+       enable_1090_distances=show_dist
+    )
     stream.enable_buffering(5)   # flush up to 5 rows at a time
 
     # wrap in stream_with_context so url_for() (and other request/api) works
@@ -2263,11 +2267,24 @@ def admin():
                 flash("Passwords must match.", "error")
             return redirect(url_for('admin'))
 
-        # ── Embedded-Tab: Save new URL + name (only when both filled) ──
-        if 'save_embedded' in request.form:
+        # ── Embedded‑Tab: Clear both entries ────────────────────
+        if 'clear_embedded' in request.form:
+            with sqlite3.connect(DB_FILE) as c:
+                c.execute(
+                  "DELETE FROM preferences WHERE name IN ('embedded_url','embedded_name')"
+                )
+                c.execute(
+                  "INSERT OR REPLACE INTO preferences(name,value) VALUES('enable_1090_distances','no')"
+                )
+            flash("Embedded-tab removed.", "info")
+            return redirect(url_for('admin'))
+
+        # ── Embedded‑Tab: auto‑save URL/name/dist‑flag on any change ──
+        if any(k in request.form for k in ('embedded_url','embedded_name','enable_1090_distances')):
             url  = request.form.get('embedded_url','').strip()
             name = request.form.get('embedded_name','').strip()
             if url and name:
+                dist_val = 'yes' if request.form.get('enable_1090_distances')=='on' else 'no'
                 with sqlite3.connect(DB_FILE) as c:
                     c.execute("""
                       INSERT INTO preferences(name,value)
@@ -2279,31 +2296,14 @@ def admin():
                       VALUES('embedded_name',?)
                       ON CONFLICT(name) DO UPDATE SET value=excluded.value
                     """, (name,))
-                flash("Embedded-tab settings saved.", "info")
+                    c.execute("""
+                      INSERT INTO preferences(name,value)
+                      VALUES('enable_1090_distances',?)
+                      ON CONFLICT(name) DO UPDATE SET value=excluded.value
+                    """, (dist_val,))
+                flash("Embedded‑tab settings (and 1090‑distances) saved.", "info")
             else:
                 flash("Both URL and label are required.", "error")
-            return redirect(url_for('admin'))
-
-        # ── Embedded-Tab: Clear both entries ────────────────────
-        if 'clear_embedded' in request.form:
-            with sqlite3.connect(DB_FILE) as c:
-                c.execute("DELETE FROM preferences WHERE name IN ('embedded_url','embedded_name')")
-            # also disable distances
-            c.execute("INSERT OR REPLACE INTO preferences(name,value) VALUES('enable_1090_distances','no')")
-            flash("Embedded-tab removed.", "info")
-            return redirect(url_for('admin'))
-
-        # ── Toggle 1090 distances checkbox ────────────────────
-        if 'save_embedded' in request.form:
-            # after storing url+name above, store the checkbox
-            val = 'yes' if request.form.get('enable_1090_distances')=='on' else 'no'
-            with sqlite3.connect(DB_FILE) as c:
-                c.execute("""
-                  INSERT INTO preferences(name,value)
-                  VALUES('enable_1090_distances',?)
-                  ON CONFLICT(name) DO UPDATE SET value=excluded.value
-                """, (val,))
-            flash("1090‑distances preference saved.", "info")
             return redirect(url_for('admin'))
 
         # ── Update Default Origin (DB) ───────────────

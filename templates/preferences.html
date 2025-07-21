@@ -31,9 +31,9 @@
 
     <label style="margin-top:18px">Distance Unit:</label>
     <select name="distance_unit" onchange="this.form.submit()">
-      <option value="km" {% if distance_unit=='km' %}selected{% endif %}>kilometers</option>
-      <option value="mi" {% if distance_unit=='mi' %}selected{% endif %}>statute miles</option>
       <option value="nm" {% if distance_unit=='nm' %}selected{% endif %}>nautical miles</option>
+      <option value="mi" {% if distance_unit=='mi' %}selected{% endif %}>statute miles</option>
+      <option value="km" {% if distance_unit=='km' %}selected{% endif %}>kilometers</option>
     </select>
 
     <hr>

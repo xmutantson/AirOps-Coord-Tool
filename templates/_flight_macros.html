@@ -2,17 +2,18 @@
 
 {% macro flight_row(f, hide_tbd, show_distance=False) -%}
 <tr class="clickable{% if f.is_ramp_entry and f.sent == 0 %} yellow-border{% endif %}">
-  {%- if show_distance %}
-  <td>{{ f.distance or '' }}</td>
-  {%- endif %}
   <td>
     <a href="{{ url_for('edit_flight', fid=f.id) }}">{{ f.id }} ✏️</a>
   </td>
   <td class="status">
     {% if f.complete %}🛬 Landed{% else %}✈️ In-Flight{% endif %}
   </td>
+  <td>{{ f.tail_number }}</td>
+  {%- if show_distance %}
+    <td>{{ f.distance or '' }}</td>
+  {%- endif %}
   {%- for field in [
-       'tail_number','pilot_name','pax_count',
+       'pilot_name','pax_count',
        'origin_view','takeoff_time','dest_view',
        'eta_view','cargo_type','cargo_view','remarks'
      ] %}
@@ -26,7 +27,6 @@
   {%- endfor %}
 </tr>
 {%- endmacro %}
-
 
 {% macro radio_row(f, hide_tbd) -%}
 <tr class="clickable{% if f.sent == 0 %} yellow-border{% endif %}"

@@ -44,10 +44,11 @@
         Clear
       </button>
     </div>
-      <label style="display:block; margin-top:1rem;">
-        <input type="checkbox"
-               name="enable_1090_distances"
-               {% if enable_1090_distances %}checked{% endif %}>
+    <label style="display:block; margin-top:1rem;">
+      <input type="checkbox"
+             name="enable_1090_distances"
+             onchange="this.form.submit()"
+             {% if enable_1090_distances %}checked{% endif %}>
         Compute and show 1090 feed distances
       </label>
     <label style="margin-top:18px">Show Debug Logs:</label>
