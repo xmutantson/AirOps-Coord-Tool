@@ -405,6 +405,8 @@
 
   /** Rebuild size dropdown from live inventoryAdvancedData.avail **/
   function updateSizeOptions(cid, itemName) {
+    // enable size dropdown now that we have an item
+    advSize.disabled = false;
     advSize.innerHTML = '<option value="">Size…</option>' +
       (inventoryAdvancedData.sizes?.[cid]?.[itemName] || [])
         .map(sz => {
@@ -530,7 +532,18 @@
 
   advItem.addEventListener('change', () => {
     if (document.body.dataset.advDir !== 'outbound') return;
-    updateSizeOptions(advCat.value, advItem.value);
+
+    const item = advItem.value;
+    // if no item selected, keep Size disabled and clear it
+    if (!item) {
+      advSize.disabled = true;
+      advSize.innerHTML = '<option value="">Size…</option>';
+      advQty.disabled   = true;
+      return;
+    }
+
+    // otherwise rebuild & enable Size
+    updateSizeOptions(advCat.value, item);
   });
 
   advSize.addEventListener('change', () => {
