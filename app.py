@@ -1766,7 +1766,19 @@ def ramp_boss():
         # otherwise fall back to the old behavior:
         return redirect(url_for('dashboard'))
 
-    # build the same advanced_data and inject it for initial page render
+    # build Advanced panel data: preload ALL defined categories, then stock snapshot
+    cats = dict_rows(
+      "SELECT id AS cid, display_name AS cname "
+      "  FROM inventory_categories "
+      " ORDER BY display_name"
+    )
+    advanced_data = {
+      "categories": [
+        {"id": str(c["cid"]), "display_name": c["cname"]}
+        for c in cats
+      ],
+      "items": {}, "sizes": {}, "avail": {}
+    }
     rows = dict_rows("""
       SELECT e.category_id AS cid,
              c.display_name AS cname,
@@ -1774,23 +1786,22 @@ def ramp_boss():
              e.weight_per_unit,
              SUM(
                CASE
-                 WHEN e.direction = 'in'  THEN  e.quantity
-                 WHEN e.direction = 'out' THEN -e.quantity
+                 WHEN e.direction='in'  THEN  e.quantity
+                 WHEN e.direction='out' THEN -e.quantity
                END
              ) AS qty
         FROM inventory_entries e
         JOIN inventory_categories c ON c.id=e.category_id
-        WHERE e.pending = 0
-        GROUP BY e.category_id, e.sanitized_name, e.weight_per_unit
-        HAVING qty > 0
+       WHERE e.pending = 0
+       GROUP BY e.category_id, e.sanitized_name, e.weight_per_unit
+       HAVING qty > 0
     """)
-    advanced_data = {"categories":[], "items":{}, "sizes":{}, "avail":{}}
     for r in rows:
         cid = str(r['cid'])
+        # availability
         advanced_data["avail"].setdefault(cid, {})\
              .setdefault(r['sanitized_name'], {})[str(r['weight_per_unit'])] = r['qty']
-        if not any(c["id"]==cid for c in advanced_data["categories"]):
-            advanced_data["categories"].append({"id":cid,"display_name":r['cname']})
+        # items & sizes
         advanced_data["items"].setdefault(cid, [])
         advanced_data["sizes"].setdefault(cid, {})
         if r['sanitized_name'] not in advanced_data["items"][cid]:
