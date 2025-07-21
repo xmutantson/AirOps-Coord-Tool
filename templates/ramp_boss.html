@@ -425,7 +425,11 @@
       // cache‑bust with a timestamp
       const fresh = await fetch(inventoryUrl + "?_=" + Date.now())
                         .then(r => r.json());
-      inventoryAdvancedData = fresh;
+      // update only the *stock* bits, keep full list intact
+      inventoryAdvancedData.stock_categories = fresh.categories;
+      inventoryAdvancedData.items            = fresh.items;
+      inventoryAdvancedData.sizes            = fresh.sizes;
+      inventoryAdvancedData.avail            = fresh.avail;
       // only rebuild if user has NOT already chosen a size
       if (
         document.body.dataset.advDir === 'outbound' &&
@@ -473,8 +477,12 @@
     if (!inventoryAdvancedData.categories) {
       return showError('Inventory data not yet loaded.');
     }
+    // pick full list for inbound, stock-only for outbound
+    const useList = (dir === 'inbound')
+      ? inventoryAdvancedData.all_categories
+      : inventoryAdvancedData.stock_categories;
     advCat.innerHTML = '<option value="">Category…</option>' +
-      inventoryAdvancedData.categories.map(c =>
+      useList.map(c =>
         `<option value="${c.id}">${c.display_name}</option>`
       ).join('');
     advDirOut.checked = (dir === 'outbound');
@@ -509,6 +517,14 @@
     document.querySelector(`input[name="direction"][value="${dir}"]`).checked = true;
     applyDirUI();      // outside
     applyAdvDirUI(dir);
+    // rebuild category list on toggle
+    const useList = (dir === 'inbound')
+      ? inventoryAdvancedData.all_categories
+      : inventoryAdvancedData.stock_categories;
+    advCat.innerHTML = '<option value="">Category…</option>' +
+      useList.map(c =>
+        `<option value="${c.id}">${c.display_name}</option>`
+      ).join('');
   }
   advDirOut.addEventListener('change', syncFromAdvToggle);
   advDirIn .addEventListener('change', syncFromAdvToggle);

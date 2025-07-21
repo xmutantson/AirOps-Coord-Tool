@@ -1767,16 +1767,19 @@ def ramp_boss():
         return redirect(url_for('dashboard'))
 
     # build Advanced panel data: preload ALL defined categories, then stock snapshot
-    cats = dict_rows(
-      "SELECT id AS cid, display_name AS cname "
-      "  FROM inventory_categories "
-      " ORDER BY display_name"
-    )
+    # preload *every* category (for inbound mode)
+    cats = dict_rows("""
+      SELECT id AS cid, display_name AS cname
+        FROM inventory_categories
+       ORDER BY display_name
+    """)
     advanced_data = {
-      "categories": [
+      "all_categories": [
         {"id": str(c["cid"]), "display_name": c["cname"]}
         for c in cats
       ],
+      # will fill in only those with stock
+      "stock_categories": [],
       "items": {}, "sizes": {}, "avail": {}
     }
     rows = dict_rows("""
@@ -1808,6 +1811,11 @@ def ramp_boss():
             advanced_data["items"][cid].append(r['sanitized_name'])
             advanced_data["sizes"][cid][r['sanitized_name']] = []
         advanced_data["sizes"][cid][r['sanitized_name']].append(str(r['weight_per_unit']))
+        # record this category for outbound (stock-only) dropdown
+        if not any(c["id"] == cid for c in advanced_data["stock_categories"]):
+            advanced_data["stock_categories"].append({
+              "id": cid, "display_name": r["cname"]
+            })
 
     return render_template(
       'ramp_boss.html',
