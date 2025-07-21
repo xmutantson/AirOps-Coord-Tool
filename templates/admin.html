@@ -44,7 +44,8 @@
         Clear
       </button>
     </div>
-    <label style="display:block; margin-top:1rem;">
+      <!-- distances controlled automatically; hide manual toggle -->
+      <label id="distances-toggle" style="display:none; margin-top:1rem;">
       <input type="checkbox"
              name="enable_1090_distances"
              onchange="this.form.submit()"
@@ -133,6 +134,15 @@
   const nameInput = document.getElementById('embedded-name');
   const distCheckbox = document.querySelector('input[name="enable_1090_distances"]');
   let   embedTimer;
+
+  // ── Prevent Enter from submitting & clearing url fields ─
+  [urlInput, nameInput].forEach(el => {
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+      }
+    });
+  }); 
 
   function trySaveEmbedded(){
     const u = urlInput .value.trim();
