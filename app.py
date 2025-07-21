@@ -438,7 +438,6 @@ def inventory_advance_data():
              ) AS qty
         FROM inventory_entries e
         JOIN inventory_categories c ON c.id=e.category_id
-        WHERE e.pending = 0
         GROUP BY e.category_id, e.sanitized_name, e.weight_per_unit
         HAVING qty > 0
     """)
