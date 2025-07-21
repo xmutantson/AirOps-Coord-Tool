@@ -131,12 +131,20 @@
   // ── Embedded-Tab autosave (only when both fields filled) ─
   const urlInput  = document.getElementById('embedded-url');
   const nameInput = document.getElementById('embedded-name');
+  const distCheckbox = document.querySelector('input[name="enable_1090_distances"]');
   let   embedTimer;
 
   function trySaveEmbedded(){
     const u = urlInput .value.trim();
     const n = nameInput.value.trim();
     if (!u || !n) return;
+
+    // if they’re pointing at tar1090, auto-enable distances
+    if (u.toLowerCase().includes('tar1090')) {
+      distCheckbox.checked = true;
+    } else {
+      distCheckbox.checked = false;
+    }
 
     // inject a hidden flag so the server knows to save these two
     let flag = form.querySelector('input[name="save_embedded"]');
