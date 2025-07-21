@@ -1423,6 +1423,10 @@ def dashboard_table_partial():
     rows = dict_rows(
         "SELECT value FROM preferences WHERE name='enable_1090_distances'"
     )
+
+    # per‑browser unit preference (for the “Dist (…)" header)
+    unit = request.cookies.get('distance_unit','nm')
+
     show_dist = bool(rows and rows[0]['value']=='yes')
 
     sql = "SELECT * FROM flights"
@@ -1489,11 +1493,14 @@ def dashboard_table_partial():
 
     # Let Jinja stream the same partial, iterating over our cursor
     tmpl   = app.jinja_env.get_template('partials/_dashboard_table.html')
+
     stream = tmpl.stream(
-       flights=gen_rows(),
-       hide_tbd=hide_tbd,
-       enable_1090_distances=show_dist
+        flights=gen_rows(),
+        hide_tbd=hide_tbd,
+        enable_1090_distances=show_dist,
+        distance_unit=unit
     )
+
     stream.enable_buffering(5)   # flush up to 5 rows at a time
 
     # wrap in stream_with_context so url_for() (and other request/api) works
