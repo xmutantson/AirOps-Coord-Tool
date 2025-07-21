@@ -1832,7 +1832,7 @@ def inventory_advance_line():
             out_qty = dict_rows(
               "SELECT COALESCE(SUM(quantity),0) AS v FROM inventory_entries "
               "WHERE category_id=? AND sanitized_name=? AND weight_per_unit=? "
-              "  AND direction='out' AND pending=0",
+              "  AND direction='out'",
               (cat_id,name,wpu)
             )[0]['v']
             avail = in_qty - out_qty
