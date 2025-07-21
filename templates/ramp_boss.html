@@ -424,8 +424,9 @@
       const fresh = await fetch("{{ url_for('inventory.inventory_advance_data') }}")
                           .then(r => r.json());
       inventoryAdvancedData = fresh;
+      // as long as we’re in outbound advanced‐mode with a category+item picked,
+      // rebuild the Size dropdown from the fresh DB snapshot
       if (
-        advPanel.style.display === 'block' &&
         document.body.dataset.advDir === 'outbound' &&
         advCat.value && advItem.value
       ) {
