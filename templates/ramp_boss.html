@@ -604,13 +604,14 @@
     if (!resp.ok) return showError(j.message||'Error adding line');
     pendingIds.push(j.entry_id);
 
-    // immediately refresh inventory from DB, then rebuild dropdown
+    // after adding an outbound line, clear the size so we can force‑rebuild
+    if (dirNow === 'outbound') {
+      advSize.value = '';
+    }
+    // immediately fetch fresh stock & rebuild size list
     await fetchInventory();
-    if (dirNow==='outbound') {
-        // only rebuild if the user hasn't already chosen a size
-        if (!advSize.value) {
-          updateSizeOptions(advCat.value, advItem.value);
-        }
+    if (dirNow === 'outbound') {
+      updateSizeOptions(advCat.value, advItem.value);
     }
 
     // add chip
