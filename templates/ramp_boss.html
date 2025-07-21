@@ -426,11 +426,11 @@
       const fresh = await fetch(inventoryUrl + "?_=" + Date.now())
                         .then(r => r.json());
       inventoryAdvancedData = fresh;
-      // as long as we’re in outbound advanced‐mode with a category+item picked,
-      // rebuild the Size dropdown from the fresh DB snapshot
+      // only rebuild if user has NOT already chosen a size
       if (
         document.body.dataset.advDir === 'outbound' &&
-        advCat.value && advItem.value
+        advCat.value && advItem.value &&
+        !advSize.value
       ) {
         updateSizeOptions(advCat.value, advItem.value);
       }
@@ -635,6 +635,7 @@
       chip.remove();
       pendingIds = pendingIds.filter(x=>x!==j.entry_id);
       advDone.disabled = !pendingIds.length;
+      // after a deletion we always want to re‑pull and rebuild
       await fetchInventory();
       if (document.body.dataset.advDir==='outbound') {
         updateSizeOptions(advCat.value, advItem.value);
