@@ -10,7 +10,9 @@
   </td>
   <td>{{ f.tail_number }}</td>
   {%- if show_distance %}
-    <td>{{ f.distance or '' }}</td>
+    <td{% if f.distance_stale %} style="opacity:0.5"{% endif %}>
+      {{ f.distance or '' }}
+    </td>
   {%- endif %}
   {%- for field in [
        'pilot_name','pax_count',

@@ -573,8 +573,9 @@ def distances_worker():
                     lat1 = app.extensions['recv_loc']['lat']
                     lon1 = app.extensions['recv_loc']['lon']
                     if call and lat1 is not None:
-                        d = haversine(lat1, lon1, lat2, lon2)
-                        app.extensions['distances'][call] = round(d,1)
+                        km_val = haversine(lat1, lon1, lat2, lon2)
+                        # store both the latest distance *and* when we saw it
+                        app.extensions['distances'][call] = (round(km_val,1), time.time())
                 except:
                     continue
         except:
@@ -1473,21 +1474,28 @@ def dashboard_table_partial():
             else:
                 d['cargo_view'] = cw or 'TBD'
 
-            # — distance (only if enabled) —
+            # — distance (only if enabled) + stale‑flag for >5 min old —
             if show_dist:
                 unit = request.cookies.get('distance_unit','nm')
-                km = app.extensions['distances'].get(d.get('tail_number'))
-                if km is None:
+                entry = app.extensions['distances'].get(d.get('tail_number'))
+                if entry is None:
                     d['distance'] = ''
+                    d['distance_stale'] = False
                 else:
+                    km_val, ts = entry
+                    # convert
                     if unit=='mi':
-                        d['distance'] = round(km * 0.621371, 1)
+                        val = round(km_val * 0.621371, 1)
                     elif unit=='nm':
-                        d['distance'] = round(km * 0.539957, 1)
+                        val = round(km_val * 0.539957, 1)
                     else:
-                        d['distance'] = round(km, 1)
+                        val = round(km_val, 1)
+                    d['distance'] = val
+                    # stale if more than 5 minutes old
+                    d['distance_stale'] = (time.time() - ts) > 300
             else:
                 d['distance'] = ''
+                d['distance_stale'] = False
 
             yield d
 
