@@ -155,7 +155,7 @@
                disabled
                placeholder="Qty"
                style="min-width:10ch;">
-        <button type="button" id="adv-add-line" disabled>Add</button>
+        <button type="button" id="adv-add-line">Add</button>
       </div>
 
       <div id="adv-lines" style="margin-top:1rem; display:flex; flex-wrap:wrap; gap:0.5rem;">
@@ -378,351 +378,319 @@
   </script>
 
   <!-- ───────────────── Advanced‑panel JS (updated 2024‑07‑20) ───────────────── -->
-  <script>
-    /* DOM helpers */
-    const advBtn      = document.getElementById('open-adv');
-    const advPanel    = document.getElementById('adv-panel');
-    const advBack     = document.getElementById('adv-back');
-    const advCat      = document.getElementById('adv-category');
-    const advItem     = document.getElementById('adv-item');   // outbound
-    const advSize     = document.getElementById('adv-size');   // outbound
-    const advDirOut   = document.getElementById('adv-dir-out'); // local toggle
-    const advDirIn    = document.getElementById('adv-dir-in');
-    const advName     = document.getElementById('adv-name');   // inbound
-    const advWeight   = document.getElementById('adv-weight'); // inbound
-    const advWunit    = document.getElementById('adv-wunit');  // inbound
-    const advQty      = document.getElementById('adv-qty');
-    const advAdd      = document.getElementById('adv-add-line');
-    const advLines    = document.getElementById('adv-lines');
-    const advDone     = document.getElementById('adv-done');
-    const advMode     = document.getElementById('advanced-mode');
-    const manifestId  = document.getElementById('manifest-id');
-    const rbForm      = document.getElementById('rb-form');
-    let   pendingIds  = [];
 
-    /* grab CSRF token once for all AJAX calls */
-    const csrfToken   = document.querySelector('input[name="csrf_token"]').value;
+<!-- ───────────────── Advanced‑panel JS (updated 2024‑07‑20) ───────────────── -->
+<script>
+  /* DOM helpers */
+  const advBtn      = document.getElementById('open-adv');
+  const advPanel    = document.getElementById('adv-panel');
+  const advBack     = document.getElementById('adv-back');
+  const advCat      = document.getElementById('adv-category');
+  const advItem     = document.getElementById('adv-item');   // outbound
+  const advSize     = document.getElementById('adv-size');   // outbound
+  const advDirOut   = document.getElementById('adv-dir-out'); // local toggle
+  const advDirIn    = document.getElementById('adv-dir-in');
+  const advName     = document.getElementById('adv-name');   // inbound
+  const advWeight   = document.getElementById('adv-weight'); // inbound
+  const advWunit    = document.getElementById('adv-wunit');  // inbound
+  const advQty      = document.getElementById('adv-qty');
+  const advAdd      = document.getElementById('adv-add-line');
+  const advLines    = document.getElementById('adv-lines');
+  const advDone     = document.getElementById('adv-done');
+  const advMode     = document.getElementById('advanced-mode');
+  const manifestId  = document.getElementById('manifest-id');
+  const rbForm      = document.getElementById('rb-form');
+  let   pendingIds  = [];
 
-    const showError = msg => showToast(msg, 'error');
+  /* grab CSRF token once for all AJAX calls */
+  const csrfToken   = document.querySelector('input[name="csrf_token"]').value;
 
-    /* ── live‑stock util ────────────────────────────────────── */
-    async function fetchInventory () {
+  const showError = msg => showToast(msg, 'error');
+
+  /* ── live‑stock util ────────────────────────────────────── */
+  async function fetchInventory () {
+    try {
+      const d = await fetch("{{ url_for('inventory.inventory_advance_data') }}")
+                        .then(r => r.json());
+      inventoryAdvancedData = d;
+    } catch {/* ignore network hiccup */ }
+  }
+  /* background refresh every 15 s */
+  setInterval(fetchInventory, 15_000);
+
+  /* ──────────────────────────────────────────────────────────
+     Helper: switch ADV panel UI according to dir ("inbound"/"outbound")
+  ────────────────────────────────────────────────────────── */
+  function applyAdvDirUI (dir) {
+    const outbound = (dir === 'outbound');
+    document.body.dataset.advDir = dir;              // remember current mode
+
+    /* show / hide the two groups of widgets */
+    document.querySelectorAll('.adv-out').forEach(el => el.style.display = outbound ? '' : 'none');
+    document.querySelectorAll('.adv-in' ).forEach(el => el.style.display = outbound ? 'none' : '');
+
+    /* enable / disable fields appropriately */
+    if (outbound) {
+      [advItem, advSize, advQty].forEach(el => el.disabled = true);
+      advQty.value = '';
+    } else {
+      [advName, advWeight, advWunit, advQty].forEach(el => el.disabled = false);
+      advName.value   = '';
+      advWeight.value = '';
+      advQty.value    = '';
+    }
+  }
+
+  /* open panel */
+  function startAdvanced () {
+    const dir = document.querySelector('input[name="direction"]:checked').value;
+
+    const mid = ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g,
+      c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16));
+
+    manifestId.value   = mid;
+    advMode.value      = '1';
+    pendingIds         = [];
+    advLines.innerHTML = '';
+    advDone.disabled   = true;
+
+    if (inventoryAdvancedData?.categories) {
+      advCat.innerHTML = '<option value="">Category…</option>' +
+        inventoryAdvancedData.categories
+          .map(c => `<option value="${c.id}">${c.display_name}</option>`)
+          .join('');
+    } else {
+      return showError('Inventory data not loaded. Please wait and try again.');
+    }
+
+    /* sync the local toggle & widgets */
+    advDirOut.checked = (dir === 'outbound');
+    advDirIn.checked  = (dir === 'inbound');
+    applyAdvDirUI(dir);
+    rbForm.style.display = 'none';
+    advPanel.style.display = 'block';
+  }
+  advBtn.addEventListener('click', startAdvanced);
+
+  /* cancel panel */
+  advBack.addEventListener('click', async () => {
+    for (const eid of pendingIds) {
       try {
-        const d = await fetch("{{ url_for('inventory.inventory_advance_data') }}")
-                          .then(r => r.json());
-        inventoryAdvancedData = d;
-      } catch {/* ignore network hiccup */ }
+        await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
+          method:'POST',
+          body: new URLSearchParams({
+            csrf_token:  csrfToken,
+            action:      'delete',
+            entry_id:    eid
+          })
+        });
+      } catch {/* ignore */ }
     }
-    /* background refresh every 15 s */
-    setInterval(fetchInventory, 15_000);
+    advPanel.style.display = 'none';
+    rbForm.style.display   = '';
+  });
 
-    /* ──────────────────────────────────────────────────────────
-       Helper: switch ADV panel UI according to dir ("inbound"/"outbound")
-    ────────────────────────────────────────────────────────── */
-    function applyAdvDirUI (dir) {
-      const outbound = (dir === 'outbound');
-      document.body.dataset.advDir = dir;              // remember current mode
+  /* ── keep both direction toggles in sync ───────────────────────── */
+  function syncFromAdvToggle () {
+    const dir = advDirOut.checked ? 'outbound' : 'inbound';
+    /* flip the main radios */
+    dirRadios.find(r => r.value === dir).checked = true;
+    applyDirUI();               // refresh outside UI
+    applyAdvDirUI(dir);         // refresh inside UI
+  }
+  advDirOut.addEventListener('change', syncFromAdvToggle);
+  advDirIn .addEventListener('change', syncFromAdvToggle);
 
-      /* show / hide the two groups of widgets */
-      document.querySelectorAll('.adv-out').forEach(el => el.style.display = outbound ? '' : 'none');
-      document.querySelectorAll('.adv-in' ).forEach(el => el.style.display = outbound ? 'none' : '');
-
-      /* enable / disable fields appropriately */
-      if (outbound) {
-        [advItem, advSize, advQty, advAdd].forEach(el => el.disabled = true);
-        advQty.value = '';
-      } else {
-        [advName, advWeight, advWunit, advQty].forEach(el => el.disabled = false);
-        advName.value   = '';
-        advWeight.value = '';
-        advQty.value    = '';
-        advAdd.disabled = true;
-      }
-    }
-
-    /* open panel */
-    function startAdvanced () {
-      const dir = document.querySelector('input[name="direction"]:checked').value;
-
-      const mid = ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g,
-        c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16));
-
-      manifestId.value   = mid;
-      advMode.value      = '1';
-      pendingIds         = [];
-      advLines.innerHTML = '';
-      advDone.disabled   = true;
-
-      if (inventoryAdvancedData?.categories) {
-        advCat.innerHTML = '<option value="">Category…</option>' +
-          inventoryAdvancedData.categories
-            .map(c => `<option value="${c.id}">${c.display_name}</option>`)
-            .join('');
-      } else {
-        return showError('Inventory data not loaded. Please wait and try again.');
-      }
-
-      /* sync the local toggle & widgets */
+  /* when the MAIN toggle changes while Adv is open, mirror it */
+  dirRadios.forEach(r => r.addEventListener('change', () => {
+    if (advPanel.style.display === 'block') {
+      const dir = r.value;
       advDirOut.checked = (dir === 'outbound');
       advDirIn.checked  = (dir === 'inbound');
       applyAdvDirUI(dir);
-      rbForm.style.display = 'none';
-      advPanel.style.display = 'block';
     }
-    advBtn.addEventListener('click', startAdvanced);
+  }));
 
-    /* cancel panel */
-    advBack.addEventListener('click', async () => {
-      for (const eid of pendingIds) {
-        try {
-          await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
-            method:'POST',
-            body: new URLSearchParams({
-              csrf_token:  csrfToken,
-              action:      'delete',
-              entry_id:    eid
-            })
-          });
-        } catch {/* ignore */ }
-      }
-      advPanel.style.display = 'none';
-      rbForm.style.display   = '';
-    });
+  /* cascaded selects */
+  /* ---------- Category select ---------- */
+  advCat.addEventListener('change', () => {
+    const cid      = advCat.value;
+    const outbound = (document.body.dataset.advDir === 'outbound');
 
-    /* ── keep both direction toggles in sync ───────────────────────── */
-    function syncFromAdvToggle () {
-      const dir = advDirOut.checked ? 'outbound' : 'inbound';
-      /* flip the main radios */
-      dirRadios.find(r => r.value === dir).checked = true;
-      applyDirUI();               // refresh outside UI
-      applyAdvDirUI(dir);         // refresh inside UI
+    if (outbound) {
+      /* OUTBOUND: cascade to Item‑dropdown */
+      advItem.disabled = false;
+      advItem.innerHTML = '<option value="">Item…</option>' +
+        (inventoryAdvancedData.items?.[cid] || [])
+          .map(i => `<option>${i}</option>`).join('');
+      [advSize, advQty].forEach(el => el.disabled = true);
     }
-    advDirOut.addEventListener('change', syncFromAdvToggle);
-    advDirIn .addEventListener('change', syncFromAdvToggle);
+  });
 
-    /* when the MAIN toggle changes while Adv is open, mirror it */
-    dirRadios.forEach(r => r.addEventListener('change', () => {
-      if (advPanel.style.display === 'block') {
-        const dir = r.value;
-        advDirOut.checked = (dir === 'outbound');
-        advDirIn.checked  = (dir === 'inbound');
-        applyAdvDirUI(dir);
-      }
-    }));
+  /* ---------- Item select (OUTBOUND only) ---------- */
+  advItem.addEventListener('change', () => {
+    if (document.body.dataset.advDir !== 'outbound') return;
+    const cid = advCat.value, it = advItem.value;
+    advSize.disabled = false;
+    advSize.innerHTML = '<option value="">Size…</option>' +
+      (inventoryAdvancedData.sizes?.[cid]?.[it] || [])
+        .map(s => {
+          const a = inventoryAdvancedData.avail?.[cid]?.[it]?.[String(s)] ?? 0;
+          return `<option value="${s}">${s} lb (${a} avail)</option>`;
+        })
+        .join('');
+    advQty.disabled = true;
+  });
 
-    /* cascaded selects */
-    /* ---------- Category select ---------- */
-    advCat.addEventListener('change', () => {
-      const cid      = advCat.value;
-      const outbound = (document.body.dataset.advDir === 'outbound');
+  /* ---------- Size select (OUTBOUND only) ---------- */
+  advSize.addEventListener('change', () => {
+    if (document.body.dataset.advDir !== 'outbound') return;
+    // now that size is chosen, allow qty entry
+    advQty.disabled = false;
+  });
 
-      if (outbound) {
-        /* OUTBOUND: cascade to Item‑dropdown */
-        advItem.disabled = false;
-        advItem.innerHTML = '<option value="">Item…</option>' +
-          (inventoryAdvancedData.items?.[cid] || [])
-            .map(i => `<option>${i}</option>`).join('');
-        [advSize, advQty, advAdd].forEach(el => el.disabled = true);
-      } else {
-        /* INBOUND: no further cascading, just (re)check form completeness */
-        checkInboundReady();
-      }
-    });
+  /* add line */
+  advAdd.addEventListener('click', async () => {
+    const dirNow = document.querySelector('input[name="direction"]:checked').value;
 
-    /* ---------- Item select (OUTBOUND only) ---------- */
-    advItem.addEventListener('change', () => {
-      if (document.body.dataset.advDir !== 'outbound') return;
-      const cid = advCat.value, it = advItem.value;
-      advSize.disabled = false;
-      advSize.innerHTML = '<option value="">Size…</option>' +
-        (inventoryAdvancedData.sizes?.[cid]?.[it] || [])
-          .map(s => {
-            const a = inventoryAdvancedData.avail?.[cid]?.[it]?.[String(s)] ?? 0;
-            return `<option value="${s}">${s} lb (${a} avail)</option>`;
-          })
-          .join('');
-      advQty.disabled = advAdd.disabled = true;
-    });
-
-    /* ---------- Size select (OUTBOUND only) ---------- */
-    advSize.addEventListener('change', () => {
-      if (document.body.dataset.advDir !== 'outbound') return;
-      // now that size is chosen, allow qty entry
-      advQty.disabled = false;
-      // re‑evaluate whether “Add” can light up
-      checkOutboundReady();
-    });
-
-    /* helper to enable the “Add” button whenever all four outbound fields are non‑empty */
-    function checkOutboundReady() {
-      if (document.body.dataset.advDir !== 'outbound') return;
-      const q = +advQty.value;
-      advAdd.disabled = !(
-           advCat.value    // category chosen
-        && advItem.value   // item chosen
-        && advSize.value   // size chosen
-        && q > 0           // positive qty
-      );
+    // client-side validation
+    if (dirNow === 'outbound') {
+      if (!advCat.value)    return showToast('Please select a category','error');
+      if (!advItem.value)   return showToast('Please select an item','error');
+      if (!advSize.value)   return showToast('Please select a size','error');
+      if (!advQty.value || isNaN(advQty.value) || +advQty.value <= 0)
+        return showToast('Please enter a valid quantity','error');
+    } else {
+      if (!advCat.value)                 return showToast('Please select a category','error');
+      if (!advName.value.trim())         return showToast('Please enter an item name','error');
+      if (!advWeight.value || isNaN(advWeight.value) || +advWeight.value <= 0)
+        return showToast('Please enter a valid weight','error');
+      if (!advQty.value || isNaN(advQty.value) || +advQty.value <= 0)
+        return showToast('Please enter a valid quantity','error');
     }
 
-    // Run on both input *and* change so spinners and manual edits both count:
-    advQty .addEventListener('input',  checkOutboundReady);
-    advQty .addEventListener('change', checkOutboundReady);
+    /* track all categories used in this manifest so we can auto‑fill “Cargo Type” */
+    if (!window._rbCategories) window._rbCategories = new Set();
 
-    // And live‑wire the other two selects for completeness:
-    advCat .addEventListener('change', checkOutboundReady);
-    advItem.addEventListener('change', checkOutboundReady);
-
-    /* ---------- enable Add for INBOUND ---------- */
-    function checkInboundReady() {
-      const ok = (
-           advCat.value                          // category chosen
-        && advName.value.trim()                   // name filled
-        && +advWeight.value   > 0                 // positive weight
-        && +advQty.value      > 0                 // positive qty
-      );
-      advAdd.disabled = !ok;
+    const params = new URLSearchParams({
+      csrf_token:  csrfToken,
+      action:      'add',
+      manifest_id: manifestId.value,
+      /* 'outbound' → server recognises & slices to 'out'
+         anything else → inbound; explicitly send 'in'   */
+      direction:   (dirNow === 'outbound' ? 'outbound' : 'in'),
+      category:    advCat.value,
+    });
+    if (dirNow === 'outbound') {                     /* pick FROM stock */
+      params.append('item', advItem.value);
+      params.append('size', advSize.value);
+      params.append('qty',  advQty.value);
+    } else {                                         /* inbound shipment */
+      params.append('name',   advName.value.trim());
+      params.append('weight', advWeight.value);
+      params.append('qty',    advQty.value);
     }
 
-    // wire it to both typing *and* spinner clicks…
-    [advName, advWeight, advQty].forEach(el => {
-      el.addEventListener('input',  checkInboundReady);
-      el.addEventListener('change', checkInboundReady);
-    });
-
-    // and re‑run whenever they change the category
-    advCat.addEventListener('change', checkInboundReady);
-
-    // if you ever allow toggling direction while the panel is open,
-    // you can also do:
-    advDirIn .addEventListener('change', checkInboundReady);
-    advDirOut.addEventListener('change', checkInboundReady);
-
-    /* add line */
-    advAdd.addEventListener('click', async () => {
-      /* track all categories used in this manifest so we can auto‑fill “Cargo Type” */
-      if (!window._rbCategories) window._rbCategories = new Set();
-
-      const dirNow = document.querySelector('input[name="direction"]:checked').value;
-      const params = new URLSearchParams({
-        csrf_token:  csrfToken,
-        action:      'add',
-        manifest_id: manifestId.value,
-        /* 'outbound' → server recognises & slices to 'out'
-           anything else → inbound; explicitly send 'in'   */
-        direction:   (dirNow === 'outbound' ? 'outbound' : 'in'),
-        category:    advCat.value,
+    let resp;
+    try {
+      resp = await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
+        method:'POST',
+        body: params
       });
-      if (dirNow === 'outbound') {                     /* pick FROM stock */
-        params.append('item', advItem.value);
-        params.append('size', advSize.value);
-        params.append('qty',  advQty.value);
-      } else {                                         /* inbound shipment */
-        params.append('name',   advName.value.trim());
-        params.append('weight', advWeight.value);
-        params.append('qty',    advQty.value);
-      }
+    } catch { return showError('Network error.'); }
 
-      let resp;
-      try {
-        resp = await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
-          method:'POST',
-          body: params
-        });
-      } catch { return showError('Network error.'); }
+    const j = await resp.json();
+    if (!resp.ok) return showError(j.message || 'Error adding line');
 
-      const j = await resp.json();
-      if (!resp.ok) return showError(j.message || 'Error adding line');
+    pendingIds.push(j.entry_id);
 
-      pendingIds.push(j.entry_id);
-
-      /* ------------- chip UI ------------- */
-      const chip = document.createElement('div');
-      chip.style.cssText =
-        'padding:0.25em 0.5em; background:#eee; border-radius:4px; white-space:pre;';
-      chip.textContent =
-        `${j.sanitized}\n${j.wpu} lb × ${j.qty}\n≈ ${j.total} lb`;
-      const rm = document.createElement('button');
-      rm.textContent = '❌';
-      rm.style.cssText = 'margin-left:0.25em; background:none; border:none; color:#c33; font-size:1rem; cursor:pointer;';
-      rm.addEventListener('click', async () => {
-        try {
-          await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
-            method:'POST',
-            body: new URLSearchParams({
-              csrf_token: csrfToken,
-              action:      'delete',
-              manifest_id: manifestId.value,
-              entry_id:    j.entry_id
-            })
-          });
-        } catch {/* ignore */ }
-        chip.remove();
-        pendingIds = pendingIds.filter(x => x !== j.entry_id);
-        advDone.disabled = !pendingIds.length;
-      });
-      chip.append(rm);
-      advLines.append(chip);
-
-      /* update main form totals / remarks */
-      const cw  = document.getElementById('cargo_weight');
-      const rmf = document.getElementById('remarks');
-      cw.value   = (+cw.value || 0) + j.total;
-      rmf.value += `${j.sanitized} ${j.wpu} lb×${j.qty}; `;
-
-      /* ── NEW : auto‑fill Cargo Type field ───────────────────────────── */
-      const catId   = advCat.value;
-      const catName =
-          inventoryAdvancedData.categories
-            .find(c => String(c.id) === catId)?.display_name || catId;
-
-      window._rbCategories.add(catName);
-      document.getElementById('cargo_type').value =
-          window._rbCategories.size === 1 ? catName : 'Mixed';
-
-      /* ----------------------------------------------------------
-         OUTBOUND only: update in‑memory availability + dropdown
-      ---------------------------------------------------------- */
-      const cid      = advCat.value;
-      const it       = advItem.value;
-      const sz       = String(advSize.value);
-      const qtyUsed  = Number(advQty.value || 0);
-
-      if (dirNow === 'outbound' &&
-          !isNaN(qtyUsed) &&
-          inventoryAdvancedData.avail?.[cid]?.[it]?.[sz] !== undefined) {
-        inventoryAdvancedData.avail[cid][it][sz] =
-          Math.max(0, inventoryAdvancedData.avail[cid][it][sz] - qtyUsed);
-      }
-
-      advSize.innerHTML = '<option value="">Size…</option>' +
-        (inventoryAdvancedData.sizes?.[cid]?.[it] || [])
-          .map(s => {
-            const a = inventoryAdvancedData.avail?.[cid]?.[it]?.[String(s)] ?? 0;
-            return `<option value="${s}">${s} lb (${a} avail)</option>`;
-          })
-          .join('');
-
-      advQty.value = '';
-      advAdd.disabled = true;
-      advDone.disabled = false;
-    });
-
-    /* commit */
-    advDone.addEventListener('click', async () => {
+    /* ------------- chip UI ------------- */
+    const chip = document.createElement('div');
+    chip.style.cssText =
+      'padding:0.25em 0.5em; background:#eee; border-radius:4px; white-space:pre;';
+    chip.textContent =
+      `${j.sanitized}\n${j.wpu} lb × ${j.qty}\n≈ ${j.total} lb`;
+    const rm = document.createElement('button');
+    rm.textContent = '❌';
+    rm.style.cssText = 'margin-left:0.25em; background:none; border:none; color:#c33; font-size:1rem; cursor:pointer;';
+    rm.addEventListener('click', async () => {
       try {
         await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
           method:'POST',
           body: new URLSearchParams({
             csrf_token: csrfToken,
-            action:      'commit',
-            manifest_id: manifestId.value
+            action:      'delete',
+            manifest_id: manifestId.value,
+            entry_id:    j.entry_id
           })
         });
-      } catch { return showError('Network error committing manifest.'); }
-      advPanel.style.display = 'none';
-      rbForm.style.display   = '';
+      } catch {/* ignore */ }
+      chip.remove();
+      pendingIds = pendingIds.filter(x => x !== j.entry_id);
+      advDone.disabled = !pendingIds.length;
     });
-  </script>
+    chip.append(rm);
+    advLines.append(chip);
+
+    /* update main form totals / remarks */
+    const cw  = document.getElementById('cargo_weight');
+    const rmf = document.getElementById('remarks');
+    cw.value   = (+cw.value || 0) + j.total;
+    rmf.value += `${j.sanitized} ${j.wpu} lb×${j.qty}; `;
+
+    /* ── NEW : auto‑fill Cargo Type field ───────────────────────────── */
+    const catId   = advCat.value;
+    const catName =
+        inventoryAdvancedData.categories
+          .find(c => String(c.id) === catId)?.display_name || catId;
+
+    window._rbCategories.add(catName);
+    document.getElementById('cargo_type').value =
+        window._rbCategories.size === 1 ? catName : 'Mixed';
+
+    /* ----------------------------------------------------------
+       OUTBOUND only: update in‑memory availability + dropdown
+    ---------------------------------------------------------- */
+    const cid      = advCat.value;
+    const it       = advItem.value;
+    const sz       = String(advSize.value);
+    const qtyUsed  = Number(advQty.value || 0);
+
+    if (dirNow === 'outbound' &&
+        !isNaN(qtyUsed) &&
+        inventoryAdvancedData.avail?.[cid]?.[it]?.[sz] !== undefined) {
+      inventoryAdvancedData.avail[cid][it][sz] =
+        Math.max(0, inventoryAdvancedData.avail[cid][it][sz] - qtyUsed);
+    }
+
+    advSize.innerHTML = '<option value="">Size…</option>' +
+      (inventoryAdvancedData.sizes?.[cid]?.[it] || [])
+        .map(s => {
+          const a = inventoryAdvancedData.avail?.[cid]?.[it]?.[String(s)] ?? 0;
+          return `<option value="${s}">${s} lb (${a} avail)</option>`;
+        })
+        .join('');
+
+    advQty.value = '';
+    advDone.disabled = false;
+  });
+
+  /* commit */
+  advDone.addEventListener('click', async () => {
+    try {
+      await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
+        method:'POST',
+        body: new URLSearchParams({
+          csrf_token: csrfToken,
+          action:      'commit',
+          manifest_id: manifestId.value
+        })
+      });
+    } catch { return showError('Network error committing manifest.'); }
+    advPanel.style.display = 'none';
+    rbForm.style.display   = '';
+  });
+</script>
+
 
 {% endblock %}
