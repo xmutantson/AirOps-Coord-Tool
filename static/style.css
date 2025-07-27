@@ -872,3 +872,10 @@ body.cw-active #cargo-tools-panel {
   cursor:pointer;
 }
 .btn.yellow:hover{ filter: brightness(1.03); }
+/* Floating "Exit Role" action (bottom-right) */
+.wg-exit {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 1000;
+}

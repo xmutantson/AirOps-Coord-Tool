@@ -39,4 +39,12 @@
   {% else %}
     <p><em>No cargo requests at the moment.</em></p>
   {% endif %}
+<form id="wg-exit-form"
+      class="wg-exit"
+      method="post"
+      action="{{ url_for('wargame_exit_role') }}"
+      onsubmit="return confirm('Exit your Wargame role and choose a new one?');">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <button type="submit" class="btn btn-yellow">Exit Role</button>
+</form>
 {% endblock %}

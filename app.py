@@ -35,6 +35,7 @@ from flask_limiter.errors import RateLimitExceeded
 import uuid
 
 from flask_wtf import CSRFProtect
+from flask_wtf.csrf import generate_csrf
 from markupsafe import escape
 
 import sqlite3, csv, io, re, os, json
@@ -312,9 +313,26 @@ def inject_globals():
       'show_debug': request.cookies.get('show_debug_logs','no')=='yes',
       'admin_unlocked': session.get('admin_unlocked', False),
       'distance_unit': request.cookies.get('distance_unit','nm'),
-      'generate_callsign': generate_random_callsign
+      'generate_callsign': generate_random_callsign,
+      # Jinja: {{ csrf_token() }} for plain HTML forms
+      'csrf_token': generate_csrf,
+      # Current Wargame role-epoch (used to invalidate stale role cookies)
+      'wargame_role_epoch': lambda: get_wargame_role_epoch()
     }
 
+# ─── Wargame role-epoch helpers ──────────────────────────────────────────────
+def get_wargame_role_epoch() -> str:
+    """Return the current epoch; create one if missing."""
+    row = dict_rows("SELECT value FROM preferences WHERE name='wargame_role_epoch'")
+    if row:
+        return row[0]['value']
+    ep = uuid.uuid4().hex
+    set_preference('wargame_role_epoch', ep)
+    return ep
+
+def bump_wargame_role_epoch() -> None:
+    """Rotate epoch so all existing role cookies become stale."""
+    set_preference('wargame_role_epoch', uuid.uuid4().hex)
 
 # ─── Session-Salt Helpers ───────────────────────────────────────────
 def get_session_salt():
@@ -3584,6 +3602,9 @@ def admin():
                 # also clear the browser cookie
                 resp.delete_cookie('wargame_role', path='/')
 
+                # Invalidate all existing role cookies globally
+                bump_wargame_role_epoch()
+
                 flash("🕹️ Wargame mode activated; all live‑ops & Wargame data wiped.", "success")
                 return resp
 
@@ -3603,6 +3624,9 @@ def admin():
                 resp.delete_cookie('wargame_emails_read', path='/')
                 resp.delete_cookie('wargame_role',      path='/')
                 session.pop('wargame_role', None)
+
+                # Also invalidate roles when turning Wargame off
+                bump_wargame_role_epoch()
 
                 flash("🕹️ Wargame mode deactivated; all Wargame data cleared.", "info")
                 return resp
@@ -3697,17 +3721,20 @@ def wargame_index():
         return redirect(url_for('dashboard'))
 
     # 2) have they already chosen a role?
-    role = request.cookies.get('wargame_role')
-    if not role:
+    server_epoch = get_wargame_role_epoch()
+    role         = request.cookies.get('wargame_role')
+    role_epoch   = request.cookies.get('wargame_role_epoch')
+    if (not role) or (role_epoch != server_epoch):
         # fetch supervisor’s last‐saved settings
         row = dict_rows(
             "SELECT value FROM preferences WHERE name='wargame_settings'"
         )
         settings = json.loads(row[0]['value'] or '{}') if row else {}
-        return render_template(
-            'wargame_choose_role.html',
-            settings=settings
-        )
+        # clear any stale role for this client
+        session.pop('wargame_role', None)
+        resp = make_response(render_template('wargame_choose_role.html', settings=settings))
+        resp.delete_cookie('wargame_role', path='/')
+        return resp
 
     # 3) if they have a role, send them to their dashboard
     return redirect(url_for(f"wargame_{role}_dashboard"))
@@ -3737,6 +3764,18 @@ def wargame_choose_role():
     session['wargame_role'] = role
     resp = make_response(redirect(url_for(f"wargame_{role}_dashboard")))
     resp.set_cookie('wargame_role', role, max_age=ONE_YEAR, samesite='Lax')
+    # carry the current epoch so we can invalidate on the next recycle
+    resp.set_cookie('wargame_role_epoch', get_wargame_role_epoch(), max_age=ONE_YEAR, samesite='Lax')
+    return resp
+
+@app.post('/wargame/exit_role')
+def wargame_exit_role():
+    """Clear this client’s role cookie/session and send them to the chooser."""
+    session.pop('wargame_role', None)
+    resp = make_response(redirect(url_for('wargame_index')))
+    resp.delete_cookie('wargame_role', path='/')
+    # do not touch the epoch cookie; it’s used for global invalidation
+    flash("You’ve exited your Wargame role. Please choose a new role.", "info")
     return resp
 
 # ───────────────────────────────────────────────────────────
