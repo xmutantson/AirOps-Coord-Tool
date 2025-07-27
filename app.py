@@ -2053,39 +2053,39 @@ def configure_wargame_jobs():
     to the Supervisor’s settings in preferences.wargame_settings.
     """
     with _CONFIGURE_WG_LOCK:
-        # Clear any existing jobs (running or not). Ignore errors for idempotency.
+        # Clear any existing jobs (idempotent)
         try:
             scheduler.remove_all_jobs()
         except Exception:
             pass
 
-        # always dispatch due radio messages every minute
+        # Always dispatch due radio messages every minute
         scheduler.add_job(
             func=process_radio_schedule,
             trigger='interval',
             seconds=60,
             id='job_radio_dispatch',
-            replace_existing=True
+            replace_existing=True,
         )
 
-    # load supervisor settings
-    settings_row = dict_rows(
-        "SELECT value FROM preferences WHERE name='wargame_settings'"
-    )
-    settings = json.loads(settings_row[0]['value'] or '{}')
+        # Load supervisor settings
+        settings_row = dict_rows(
+            "SELECT value FROM preferences WHERE name='wargame_settings'"
+        )
+        settings = json.loads(settings_row[0]['value'] or '{}') if settings_row else {}
 
-    # schedule radio message generation
-    radio_rate = float(settings.get('radio_rate', 0) or 0)
+        # Radio message generation
+        radio_rate = float(settings.get('radio_rate', 0) or 0)
         if radio_rate > 0:
             scheduler.add_job(
                 func=generate_radio_message,
                 trigger='interval',
                 seconds=3600.0 / radio_rate,
                 id='job_radio',
-                replace_existing=True
+                replace_existing=True,
             )
 
-    # schedule inventory batches (separate inbound/outbound so we don't duplicate plane work)
+        # Inventory batches (outbound)
         inv_out_rate = float(settings.get('inv_out_rate', settings.get('inv_rate', 0) or 0) or 0)
         if inv_out_rate > 0:
             scheduler.add_job(
@@ -2093,8 +2093,10 @@ def configure_wargame_jobs():
                 trigger='interval',
                 seconds=3600.0 / inv_out_rate,
                 id='job_inventory_out',
-                replace_existing=True
+                replace_existing=True,
             )
+
+        # Inventory batches (inbound)
         inv_in_rate = float(settings.get('inv_in_rate', settings.get('inv_rate', 0) or 0) or 0)
         if inv_in_rate > 0:
             scheduler.add_job(
@@ -2102,10 +2104,10 @@ def configure_wargame_jobs():
                 trigger='interval',
                 seconds=3600.0 / inv_in_rate,
                 id='job_inventory_in',
-                replace_existing=True
+                replace_existing=True,
             )
 
-    # schedule ramp requests (appear on Wargame → Ramp)
+        # Ramp requests
         ramp_rate = float(settings.get('ramp_rate', 0) or 0)
         if ramp_rate > 0:
             scheduler.add_job(
@@ -2113,23 +2115,21 @@ def configure_wargame_jobs():
                 trigger='interval',
                 seconds=3600.0 / ramp_rate,
                 id='job_ramp_requests',
-                replace_existing=True
+                replace_existing=True,
             )
 
-    # No auto-publish of inbound flights: trainees must create them via the Radio parser.
-
-    # generate *radio* confirmations for flights we sent to remote airports
+        # Remote confirmations (always on)
         scheduler.add_job(
             func=process_remote_confirmations,
             trigger='interval',
             seconds=60,
             id='job_remote_confirm',
-            replace_existing=True
+            replace_existing=True,
         )
 
-    # start the scheduler if not already running
-    if scheduler.state != STATE_RUNNING:
-        scheduler.start()
+        # Start the scheduler if not already running
+        if scheduler.state != STATE_RUNNING:
+            scheduler.start()
 
 # ───────────────── routes ─────────────────────────────────
 
