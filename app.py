@@ -338,8 +338,13 @@ def set_session_salt(salt: str):
 ### thread-once guard
 _distance_thread_started = False
 
-@app.before_first_request
-def _ensure_wargame_scheduler():
+_wg_scheduler_inited = False
+@app.before_request
+def _ensure_wargame_scheduler_once():
+    """Flask 3.x: run Wargame scheduler init once on the first actual request."""
+    global _wg_scheduler_inited
+    if _wg_scheduler_inited:
+        return
     try:
         if get_preference('wargame_mode') == 'yes':
             initialize_airfield_callsigns()
@@ -347,6 +352,9 @@ def _ensure_wargame_scheduler():
     except Exception:
         # don't block the app if scheduler init fails
         pass
+    finally:
+        # Mark checked either way; Admin toggle will (re)configure explicitly.
+        _wg_scheduler_inited = True
 
 @app.before_request
 def maybe_start_distances():
