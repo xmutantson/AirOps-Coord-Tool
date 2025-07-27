@@ -42,7 +42,8 @@ import sqlite3, csv, io, re, os, json
 from datetime import datetime, timedelta
 import threading, time, socket, math
 from urllib.request import urlopen
-import queue
+from queue import Queue, Empty
+from threading import Lock
 
 from functools import lru_cache
 
@@ -4653,6 +4654,59 @@ def inventory_delete(entry_id):
 
 # register the inventory blueprint
 app.register_blueprint(inventory_bp)
+
+# ───────────────────────────────────────────────────────────
+#  Server‑Sent Events for Wargame Inventory refresh
+#    • Per‑client bounded queues (non‑blocking publish)
+#    • 25s heartbeat so channels stay alive and stale clients prune
+# ───────────────────────────────────────────────────────────
+_sse_clients = set()
+_sse_lock = Lock()
+
+def _inventory_event_stream():
+    q = Queue(maxsize=10)                 # bounded → publisher never blocks
+    with _sse_lock:
+        _sse_clients.add(q)
+    try:
+        # Connected comment line keeps some proxies happy
+        yield ": connected\n\n"
+        while True:
+            try:
+                payload = q.get(timeout=25)   # wake at least every 25s
+                yield f"event: inv_commit\ndata: {payload}\n\n"
+            except Empty:
+                # heartbeat to keep waitress channel alive & detect disconnects
+                yield ": keepalive\n\n"
+    finally:
+        with _sse_lock:
+            _sse_clients.discard(q)
+
+def publish_inventory_event(data=None):
+    """
+    Broadcast an inventory refresh notification to connected SSE clients.
+    Non‑blocking: drops messages for overfull client queues.
+    """
+    if data is None:
+        data = {}
+    msg = json.dumps(data, separators=(',', ':'))
+    stale = []
+    with _sse_lock:
+        for q in list(_sse_clients):
+            try:
+                q.put_nowait(msg)
+            except Exception:
+                stale.append(q)
+        for q in stale:
+            _sse_clients.discard(q)
+
+@app.get('/inventory/events')
+def inventory_events():
+    headers = {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+    }
+    return Response(stream_with_context(_inventory_event_stream()), headers=headers)
 
 # ───────────────────────────────────────────────────────────
 if __name__=="__main__":

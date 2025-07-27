@@ -123,20 +123,16 @@ document.addEventListener('DOMContentLoaded', ()=> {
 
 <!-- on‑demand toast helper (pages may call window.showToast) -->
 <script>
-/* If back‑end flashes are already on the page the first <script> animates
-   them.  This helper covers the *run‑time* case: JS code wants to spawn its
-   own toast after the DOM is ready. */
 if (typeof window.showToast !== 'function') {
   window.showToast = function (msg, type = 'info', ms = 3000) {
     const wrap = document.getElementById('toast-container');
-    if (!wrap) { alert(msg); return; }          /* graceful fallback */
+    if (!wrap) { alert(msg); return; }
 
     const t = document.createElement('div');
     t.className = `toast ${type}`;
     t.textContent = msg;
     wrap.appendChild(t);
 
-    /* mimic the existing entrance / exit animation */
     requestAnimationFrame(() => t.classList.add('show'));
     setTimeout(() => t.classList.add('hide'), ms);
     t.addEventListener('transitionend', e => {
@@ -148,10 +144,11 @@ if (typeof window.showToast !== 'function') {
 }
 </script>
 
+{# NOTE: We intentionally exclude the Inventory Wargame dashboard from the global auto-reload,
+   because it uses SSE to refresh precisely on changes. #}
 {% if wargame_mode and request.endpoint in [
       'wargame_radio_dashboard',
       'wargame_ramp_dashboard',
-      'wargame_inventory_dashboard',
       'wargame_super_dashboard'
     ] %}
 <script>

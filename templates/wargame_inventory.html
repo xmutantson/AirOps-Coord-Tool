@@ -101,10 +101,16 @@
   let reconnectTimer = null;
   let reloading = false;
 
+  function cleanup() {
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    if (es) { try { es.close(); } catch(_) {} es = null; }
+  }
+
   function debounceReload() {
     if (reloading) return;
     reloading = true;
-    setTimeout(() => { window.location.reload(); }, 200);
+    cleanup();                              // close SSE before reload
+    setTimeout(() => { window.location.reload(); }, 50);
   }
 
   function connect() {
@@ -119,14 +125,6 @@
     } catch (e) {
       cleanup();
       scheduleReconnect();
-    }
-  }
-
-  function cleanup() {
-    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-    if (es) {
-      try { es.close(); } catch (_) {}
-      es = null;
     }
   }
 

@@ -34,7 +34,7 @@
     </tbody>
   </table>
 
-  <!-- Exit role (kept in normal flow; positioning via global .wg-exit-form CSS) -->
+  <!-- Exit role -->
   <form class="wg-exit-form" method="post"
         action="{{ url_for('wargame_exit_role') }}"
         onsubmit="return confirm('Exit your role and choose a new one?');">
@@ -43,7 +43,7 @@
   </form>
 </div>
 
-<!-- Email viewer (centered, draggable via header bar only) -->
+<!-- Email viewer -->
 <dialog id="emailDialog" class="wg-modal" aria-modal="true">
   <form method="dialog" class="email-modal">
     <div id="wgModalDrag" class="wg-modal-header">
@@ -58,7 +58,7 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function () {
-  if (window.__wgRadioInit) return;    // one-time init guard
+  if (window.__wgRadioInit) return;
   window.__wgRadioInit = true;
 
   const dlg      = document.getElementById('emailDialog');
@@ -71,6 +71,7 @@ document.addEventListener('DOMContentLoaded', function () {
   const EPOCH  = {{ epoch|default(0) }};
   const COOKIE = 'wargame_emails_read_' + EPOCH;
 
+  /* ── Cookie helpers ───────────────────────────────────────── */
   function getCookie(name) {
     const m = document.cookie.match(new RegExp('(?:^|;\\s*)' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '=([^;]*)'));
     return m ? decodeURIComponent(m[1]) : '';
@@ -78,18 +79,55 @@ document.addEventListener('DOMContentLoaded', function () {
   function setCookie(name, value) {
     document.cookie = name + '=' + encodeURIComponent(value) + '; Max-Age=31536000; Path=/; SameSite=Lax';
   }
+
+  /* ── Range codec (back‑compatible with comma‑separated ids) ─ */
+  function mergeRanges(ranges){
+    if (!ranges.length) return [];
+    ranges.sort((a,b)=> (a[0]-b[0]) || (a[1]-b[1]));
+    const out=[ranges[0].slice()];
+    for(let i=1;i<ranges.length;i++){
+      const [s,e]=ranges[i], last=out[out.length-1];
+      if (s<=last[1]+1) last[1]=Math.max(last[1],e);
+      else out.push([s,e]);
+    }
+    return out;
+  }
+  function parseRanges(str){
+    if (!str) return [];
+    const parts = str.split(',').map(s=>s.trim()).filter(Boolean);
+    const ranges=[];
+    for (const p of parts){
+      if (/^\d+$/.test(p)){ const v=+p; ranges.push([v,v]); }
+      else{
+        const m=p.match(/^(\d+)-(\d+)$/);
+        if (m){ const a=+m[1], b=+m[2]; ranges.push([Math.min(a,b), Math.max(a,b)]); }
+      }
+    }
+    return mergeRanges(ranges);
+  }
+  function encodeRanges(ranges){
+    return ranges.map(([s,e])=> s===e ? String(s) : `${s}-${e}`).join(',');
+  }
+  function contains(ranges, id){
+    id = +id;
+    return ranges.some(([s,e]) => id>=s && id<=e);
+  }
+  function addId(ranges, id){
+    id = +id;
+    return mergeRanges([...ranges, [id,id]]);
+  }
+
   function markRead(id, row) {
     const current = getCookie(COOKIE);
-    const set = new Set((current ? current.split(',') : []).filter(Boolean));
-    set.add(String(id));
-    setCookie(COOKIE, Array.from(set).join(','));
+    const ranges  = parseRanges(current);
+    const next    = encodeRanges(addId(ranges, id));
+    setCookie(COOKIE, next);
     if (row) row.classList.add('read');
   }
 
   function openModal() {
-    // center, then show
     dlg.style.left = '50%';
-    dlg.style.top = '50%';
+    dlg.style.top  = '50%';
     dlg.style.transform = 'translate(-50%, -50%)';
     if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', 'open');
   }
@@ -111,7 +149,7 @@ document.addEventListener('DOMContentLoaded', function () {
         openModal();
         markRead(id, row);
       })
-      .catch(() => { /* swallow; keep UI responsive */ });
+      .catch(() => {});
   }
 
   // Drag only by the header bar
@@ -119,7 +157,6 @@ document.addEventListener('DOMContentLoaded', function () {
     let dragging = false, startX = 0, startY = 0, startLeft = 0, startTop = 0;
 
     dragBar.addEventListener('mousedown', (ev) => {
-      // measure current box while centered, then "pin" it
       let box = dlg.getBoundingClientRect();
       dlg.style.left = box.left + 'px';
       dlg.style.top  = box.top  + 'px';
@@ -159,12 +196,12 @@ document.addEventListener('DOMContentLoaded', function () {
     openEmail(reopen, link ? link.closest('tr') : null);
   })();
 
-  // Apply “read” class from cookie (persists across reloads)
+  // Apply “read” class from range cookie
   (function applyReadState() {
-    const seen = new Set((getCookie(COOKIE) || '').split(',').filter(Boolean));
-    if (seen.size === 0) return;
+    const ranges = parseRanges(getCookie(COOKIE) || '');
+    if (!ranges.length) return;
     document.querySelectorAll('a.open-email[data-email-id]').forEach(a => {
-      if (seen.has(String(a.dataset.emailId))) {
+      if (contains(ranges, a.dataset.emailId)) {
         const tr = a.closest('tr');
         if (tr) tr.classList.add('read');
       }
