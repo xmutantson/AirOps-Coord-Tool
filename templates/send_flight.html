@@ -1,26 +1,3 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Send Flight {{ flight['id'] }}</title>
-  <style>
-    body{font-family:sans-serif;margin:20px}
-    button{margin-right:8px;padding:6px 12px}
-    pre{background:#f4f4f4;padding:10px;border:1px solid #ccc;white-space:pre-wrap}
-    .copy-feedback {
-      margin-left: 8px;
-      color: green;
-      font-weight: bold;
-      opacity: 0;
-      transition: opacity 0.2s ease-in-out;
-    }
-    .copy-feedback.visible {
-      opacity: 1;
-    }
-  </style>
-</head>
-<body>
-
 {% extends "base.html" %}
 {% block title %}Send Flight {{ flight['id'] }} – Aircraft Ops{% endblock %}
 {% block content %}
@@ -85,5 +62,3 @@ function fallbackCopy(text, cb) {
 </script>
 
 {% endblock %}
-</body>
-</html>

@@ -1,0 +1,87 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="container wargame-radio">
+  <h1>📨 Radio Operator Inbox</h1>
+  <table class="winlink-inbox">
+    <thead>
+      <tr>
+        <th>Date / Time (UTC)</th>
+        <th>Msg ID</th>
+        <th>Size (bytes)</th>
+        <th>Source</th>
+        <th>Sender</th>
+        <th>Recipient</th>
+        <th>Subject</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for email in emails %}
+      <tr class="{% if not email.read %}unread{% endif %}">
+        <td>{{ email.generated_at }}</td>
+        <td>{{ email.message_id }}</td>
+        <td>{{ email.size_bytes }}</td>
+        <td>{{ email.source }}</td>
+        <td>{{ email.sender }}</td>
+        <td>{{ email.recipient }}</td>
+        <td>
+          <a href="#" class="open-email" data-id="{{ email.id }}">
+            {{ email.subject }}
+          </a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <!-- modal window -->
+  <div id="email-modal" class="modal" style="display:none;">
+    <div class="modal-window">
+      <button class="close-modal">✖</button>
+      <pre id="email-content"></pre>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+<!-- inline script to handle modal open/close and mark‐read cookie -->
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  const modal    = document.getElementById('email-modal');
+  const content  = document.getElementById('email-content');
+  const closeBtn = modal.querySelector('.close-modal');
+
+  document.querySelectorAll('.open-email').forEach(link => {
+    link.addEventListener('click', async e => {
+      e.preventDefault();
+      const id = link.dataset.id;
+      const res  = await fetch(
+        `{{ url_for('fetch_wargame_email', email_id=0) }}`.replace('0', id)
+      );
+      const data = await res.json();
+      content.textContent = `Subject: ${data.subject}\n\n${data.body}`;
+      modal.style.display = 'flex';
+      if (window.blockRefresh) window.blockRefresh(true);
+
+      // mark as read
+      let seen = (document.cookie.match(/(?:^|; )wargame_emails_read=([^;]+)/)||[])[1]||'';
+      let ids  = seen ? seen.split(',') : [];
+      if (!ids.includes(id)) {
+        ids.push(id);
+        document.cookie =
+          `wargame_emails_read=${ids.join(',')}; Path=/; Max-Age=${60*60*24*365}`;
+      }
+      link.closest('tr').classList.remove('unread');
+    });
+  });
+
+  function closeModal(){
+    modal.style.display = 'none';
+    if (window.blockRefresh) {
+      window.blockRefresh(false);
+      if (window.requestRefreshIfPending) window.requestRefreshIfPending();
+    }
+  }
+  closeBtn.addEventListener('click', closeModal);
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+});
+</script>

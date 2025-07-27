@@ -1,0 +1,53 @@
+{# templates/wargame_inventory.html #}
+{% extends "base.html" %}
+{% block content %}
+  <h1>Wargame – Inventory Specialist</h1>
+
+  {% if incoming_deliveries %}
+    <h2>Incoming Deliveries (log via <code>direction=in</code>)</h2>
+    <div class="card-container">
+      {% for b in incoming_deliveries %}
+        <div class="card">
+          <p><strong>Requested:</strong> {{ b.created_at }}</p>
+          <ul>
+            {% for ln in b.lines %}
+              <li class="item {% if ln.qty_done >= ln.qty_required %}done{% endif %}">
+                {{ ln.name }} {{ ln.size_lb|int }} lb × {{ ln.qty_required }}
+                {% if ln.qty_done > 0 %}
+                  <span> — logged {{ ln.qty_done }}/{{ ln.qty_required }}</span>
+                {% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p><em>No inbound deliveries waiting.</em></p>
+  {% endif %}
+
+  <hr class="separator" />
+
+  {% if outgoing_requests %}
+    <h2>Outbound Requests (log via <code>direction=out</code>)</h2>
+    <div class="card-container">
+      {% for b in outgoing_requests %}
+        <div class="card">
+          <p><strong>Requested:</strong> {{ b.created_at }}</p>
+          <ul>
+            {% for ln in b.lines %}
+              <li class="item {% if ln.qty_done >= ln.qty_required %}done{% endif %}">
+                {{ ln.name }} {{ ln.size_lb|int }} lb × {{ ln.qty_required }}
+                {% if ln.qty_done > 0 %}
+                  <span> — logged {{ ln.qty_done }}/{{ ln.qty_required }}</span>
+                {% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p><em>No outbound requests waiting.</em></p>
+  {% endif %}
+{% endblock %}

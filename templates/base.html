@@ -10,8 +10,12 @@
                  user-scalable=no">
   <title>{% block title %}{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+
+  {# Auto-refresh only on Wargame dashboards #}
+{# auto-refresh for Wargame pages is JS-driven so we can pause while modals are open #}
 </head>
-<body class="{{ active }}">
+
+<body class="{{ active }}{% if wargame_mode %} wargame{% endif %}">
 
 {# collect all flashes exactly once #}
 {% set _all_flashes = get_flashed_messages(with_categories=true) %}
@@ -25,31 +29,43 @@
   {% endfor %}
 </div>
 
-  {% if active not in ['login','setup'] %}
+{% if active not in ['login','setup'] %}
   <header>
     <nav class="main-nav">
-      <a href="{{ url_for('dashboard') }}"                        class="{% if active=='dashboard' %}active{% endif %}">Dashboard</a>
-      <a href="{{ url_for('radio') }}"                            class="{% if active=='radio' %}active{% endif %}">Radio</a>
-      <a href="{{ url_for('ramp_boss') }}"                        class="{% if active=='ramp_boss' %}active{% endif %}">Ramp Boss</a>
-      <a href="{{ url_for('inventory.inventory_overview') }}"     class="{{ 'active' if active=='inventory' }}">Inventory</a>
-      <a href="{{ url_for('preferences') }}"                      class="{% if active=='preferences' %}active{% endif %}">Preferences</a>
+      <a href="{{ url_for('dashboard') }}"
+         class="{% if active=='dashboard' %}active{% endif %}">Dashboard</a>
+      <a href="{{ url_for('radio') }}"
+         class="{% if active=='radio' %}active{% endif %}">Radio</a>
+      <a href="{{ url_for('ramp_boss') }}"
+         class="{% if active=='ramp_boss' %}active{% endif %}">Ramp Boss</a>
+      <a href="{{ url_for('inventory.inventory_overview') }}"
+         class="{% if active=='inventory' %}active{% endif %}">Inventory</a>
+      <a href="{{ url_for('preferences') }}"
+         class="{% if active=='preferences' %}active{% endif %}">Preferences</a>
       {% if embedded_name and embedded_url %}
-      <a href="{{ url_for('embedded') }}"                         class="{% if active=='embedded' %}active{% endif %}">{{ embedded_name }}</a>
+        <a href="{{ url_for('embedded') }}"
+           class="{% if active=='embedded' %}active{% endif %}">{{ embedded_name }}</a>
+      {% endif %}
+      {# Show Wargame tab only when training mode is on #}
+      {% if wargame_mode %}
+        <a href="{{ url_for('wargame') }}"
+           class="{% if active=='wargame' %}active{% endif %}">Wargame</a>
       {% endif %}
       {% if admin_unlocked %}
-      <a href="{{ url_for('admin') }}"                            class="{% if active=='admin' %}active{% endif %}">Admin</a>
+        <a href="{{ url_for('admin') }}"
+           class="{% if active=='admin' %}active{% endif %}">Admin</a>
       {% endif %}
     </nav>
   </header>
-  {% endif %}
+{% endif %}
 
-  <main class="container">
-    {% block content %}{% endblock %}
-  </main>
+<main class="container">
+  {% block content %}{% endblock %}
+</main>
 
-  <footer>
-    © {{ current_year }} Kameron Markham (KG7VSN)
-  </footer>
+<footer>
+  © {{ current_year }} Kameron Markham (KG7VSN)
+</footer>
 
 <!-- ── 30 s heartbeat: paint body.red when server unreachable ── -->
 <script>
@@ -67,12 +83,11 @@
       document.body.classList.toggle('offline', !r.ok);
 
       // but only auto-redirect stale sessions when *not* on login or setup
-      const onAuthPage = 
+      const onAuthPage =
         document.body.classList.contains('login') ||
         document.body.classList.contains('setup');
 
       if (!onAuthPage && r.redirected) {
-
         window.location.href = r.url;
         return;
       }
@@ -131,6 +146,33 @@ if (typeof window.showToast !== 'function') {
   };
 }
 </script>
+
+{% if wargame_mode and request.endpoint in [
+      'wargame_radio_dashboard',
+      'wargame_ramp_dashboard',
+      'wargame_inventory_dashboard',
+      'wargame_super_dashboard'
+    ] %}
+<script>
+(function(){
+  var blocked = false;
+  var pending = false;
+  window.blockRefresh = function(on){ blocked = !!on; };
+  window.requestRefreshIfPending = function(){
+    if (pending && !blocked) { pending = false; location.reload(); }
+  };
+  function tick(){
+    setTimeout(function(){
+      if (blocked){ pending = true; tick(); return; }
+      location.reload();
+    }, 30000);
+  }
+  tick();
+})();
+</script>
+{% endif %}
+
+{% block scripts %}{% endblock %}
 
 </body>
 </html>

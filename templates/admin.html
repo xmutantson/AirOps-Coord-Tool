@@ -57,6 +57,11 @@
       <option value="no"  {% if show_debug_logs=='no'  %}selected{% endif %}>No</option>
       <option value="yes" {% if show_debug_logs=='yes' %}selected{% endif %}>Yes</option>
     </select>
+    <label>Wargame Mode:</label>
+    <select name="toggle_wargame" onchange="this.form.submit()">
+      <option value="off" {% if not wargame_mode %}selected{% endif %}>Off</option>
+      <option value="on"  {% if wargame_mode     %}selected{% endif %}>On</option>
+    </select>
   </form>
 
   <!-- ── Change App Password ──────────────────────────── -->

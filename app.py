@@ -15,6 +15,9 @@ flask.Markup = _Markup
 import werkzeug.urls
 werkzeug.urls.url_encode = werkzeug.urls.urlencode
 
+import random, string
+import atexit
+
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
@@ -44,7 +47,12 @@ from functools import lru_cache
 from zeroconf import Zeroconf, ServiceInfo, NonUniqueNameException
 import fcntl
 import struct
-import socket
+
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.schedulers.base import STATE_RUNNING
+
+# Cookie lifetime convenience (shared across routes)
+ONE_YEAR = 31_536_000  # seconds
 
 #-----------mDNS section--------------
 # ─── low-level: ask the kernel for an iface’s IPv4 ─────────────────
@@ -79,11 +87,15 @@ def get_lan_ip() -> str:
         pass
 
     # 3) last-ditch UDP trick:
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.connect(("8.8.8.8", 80))
-    ip = s.getsockname()[0]
-    s.close()
-    return ip
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        # Final fallback: loopback (still lets Flask run)
+        return "127.0.0.1"
 
 # ─── mDNS registration & context injection ──────────────────────
 
@@ -153,6 +165,8 @@ app.config['ENV']   = 'production'
 app.secret_key = secret
 CSRFProtect(app)
 DB_FILE = os.path.join(os.path.dirname(__file__), "data", "aircraft_ops.db")
+# Ensure DB directory exists (first-run safety)
+os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024
 limiter = Limiter(
@@ -161,62 +175,146 @@ limiter = Limiter(
     default_limits=["1000 per hour"]
 )
 
+# Constants: Only these ICAO4 codes will be used in Wargame Mode
+HARDCODED_AIRFIELDS = [
+    "0W7","0S9","13W","1RL","CYNJ","KALW","KBDN","KBFI",
+    "KBLI","KBVS","KCLM","KHQM","KOKH","KSHN","KUAO",
+    "S60","W10","WN08"
+]
+
+# Wargame cargo catalog (weights in pounds)
+WARGAME_ITEMS = {
+    'ammo': [100, 200],
+    'antennas': [5, 10],
+    'bandages': [2, 5, 10],
+    'batteries': [10, 25, 50],
+    'beans': [10, 25, 50, 60],
+    'bleach': [10, 20],
+    'boots': [5, 10],
+    'camp stoves': [10, 25],
+    'canned food': [15, 30],
+    'chainsaws': [12, 20],
+    'chargers': [5, 10],
+    'clothing': [10, 20],
+    'diapers': [10, 20],
+    'diesel': [40, 55],
+    'flour': [5, 20],
+    'formula': [5, 10],
+    'gauze': [2, 5, 10],
+    'gasoline': [40, 55],
+    'generators': [45, 80],
+    'gloves': [1, 5],
+    'heaters': [25, 50],
+    'hygiene kits': [5, 10],
+    'lumber': [20, 40, 60],
+    'masks': [1, 2, 5],
+    'medkits': [2, 5],
+    'mres': [10, 20],
+    'nails': [5, 10, 25],
+    'oats': [5, 20],
+    'ppe kits': [5, 10],
+    'propane': [20, 40],
+    'rice': [5, 20, 60],
+    'rope': [5, 10, 20],
+    'salt': [5, 20],
+    'saline': [10, 20],
+    'sanitizer': [5, 10],
+    'sat phones': [5, 8],
+    'soap': [5, 10],
+    'solar panels': [20, 40],
+    'sugar': [5, 20],
+    'tarps': [5, 10, 20],
+    'tents': [15, 30],
+    'tool kits': [10, 20],
+    'vhf radios': [5, 10],
+    'water': [10, 20, 50],
+    'ham': [20, 40],
+}
+
+def generate_random_callsign():
+    """
+    Generate a US‑FCC style callsign:
+      • Prefix: 'K', 'N', or 'W', optionally followed by one letter A–Z
+      • Number: always '7'
+      • Suffix: 1–3 letters A–Z
+      • Total length: 4–6 characters
+    """
+    # 1) Decide prefix length (1 or 2)
+    first = random.choice(['K', 'N', 'W'])
+    if random.choice([True, False]):
+        prefix = first
+        p_len = 1
+    else:
+        prefix = first + random.choice(string.ascii_uppercase)
+        p_len = 2
+
+    # 2) Compute valid suffix length range so total length ∈ [4,6]:
+    #    prefix_len + 1 (for '7') + suffix_len between 4 and 6
+    min_suf = max(1, 4 - (p_len + 1))
+    max_suf = min(3, 6 - (p_len + 1))
+    suffix_len = random.randint(min_suf, max_suf)
+
+    # 3) Generate suffix
+    suffix = ''.join(random.choices(string.ascii_uppercase, k=suffix_len))
+
+    return f"{prefix}7{suffix}"
+
+def generate_tail_number():
+    """US N-number: 'N' + 4–5 digits (first digit non‑zero)."""
+    length = random.choice([4, 5])
+    first  = random.choice('123456789')
+    rest   = ''.join(random.choices('0123456789', k=length-1))
+    return f"N{first}{rest}"
+
+# ── PREFLIGHT: pregenerate mapping AF→callsign ─────────────────
+AIRFIELD_CALLSIGNS: dict[str,str] = {}
+
+def initialize_airfield_callsigns():
+    """On Wargame start, assign each HARDCODED_AIRFIELD a random callsign."""
+    global AIRFIELD_CALLSIGNS
+    AIRFIELD_CALLSIGNS = {
+        af: generate_random_callsign()
+        for af in HARDCODED_AIRFIELDS
+    }
+
 # advertise our webapp on mDNS:
 MDNS_NAME, HOST_IP = register_mdns("rampops", 5150)
 
 @app.context_processor
-def inject_debug_pref():
-    # expose as `show_debug` (bool) in **all** templates
+def inject_globals():
+    # batch‑fetch all needed prefs in one go
+    prefs = dict_rows("""
+      SELECT name, value
+        FROM preferences
+       WHERE name IN (
+         'wargame_mode',
+         'embedded_url',
+         'embedded_name',
+         'enable_1090_distances',
+         'code_format',
+         'session_salt'
+       )
+    """)
+    prefs = {p['name']: p['value'] for p in prefs}
+
     return {
-        'show_debug': request.cookies.get('show_debug_logs','no') == 'yes'
+      'wargame_mode': prefs.get('wargame_mode') == 'yes',
+      'wargame_role': session.get('wargame_role') or request.cookies.get('wargame_role',''),
+      'embedded_url': prefs.get('embedded_url',''),
+      'embedded_name': prefs.get('embedded_name',''),
+      'enable_1090_distances': prefs.get('enable_1090_distances')=='yes',
+      'mdns_name': MDNS_NAME,
+      'mdns_reason': globals().get('MDNS_REASON', ''),
+      'host_ip': HOST_IP,
+      'now': datetime.utcnow,
+      'current_year': datetime.utcnow().year,
+      'hide_tbd': request.cookies.get('hide_tbd','yes')=='yes',
+      'show_debug': request.cookies.get('show_debug_logs','no')=='yes',
+      'admin_unlocked': session.get('admin_unlocked', False),
+      'distance_unit': request.cookies.get('distance_unit','nm'),
+      'generate_callsign': generate_random_callsign
     }
 
-@app.context_processor
-def inject_now():
-    from datetime import datetime
-    return {'now': datetime.utcnow}
-
-@app.context_processor
-def inject_network_info():
-    return {
-        'mdns_name'  : MDNS_NAME,    # may be ''
-        'mdns_reason': MDNS_REASON,  # '' on success
-        'host_ip'    : HOST_IP,
-    }
-
-@app.context_processor
-def inject_hide_pref():
-    """
-    Expose `hide_tbd` to all Jinja templates so
-    our macros can conditionally blank out TBD cells.
-    """
-    return {
-        'hide_tbd': request.cookies.get('hide_tbd','yes') == 'yes'
-    }
-
-@app.context_processor
-def inject_admin_flag():
-    """
-    Expose `admin_unlocked` to all templates so we can
-    conditionally show the Admin tab.
-    """
-    return {'admin_unlocked': session.get('admin_unlocked', False)}
-
-# ── Optional Embedded-Tab Config ─────────────────────────────
-@app.context_processor
-def inject_embed_config():
-    # load the two new preferences from DB
-    rows = dict_rows("SELECT value FROM preferences WHERE name='embedded_url'")
-    embedded_url  = rows[0]['value'] if rows else ''
-    rows = dict_rows("SELECT value FROM preferences WHERE name='embedded_name'")
-    embedded_name = rows[0]['value'] if rows else ''
-    rows = dict_rows("SELECT value FROM preferences WHERE name='enable_1090_distances'")
-    enable_1090_distances = (rows and rows[0]['value']=='yes')
-    return {
-        'embedded_url':  embedded_url,
-        'embedded_name': embedded_name,
-        'enable_1090_distances': enable_1090_distances
-    }
 
 # ─── Session-Salt Helpers ───────────────────────────────────────────
 def get_session_salt():
@@ -237,15 +335,18 @@ def set_session_salt(salt: str):
               SET value=excluded.value
         """, (salt,))
 
-# ── optional distance‐unit pref for dashboard ───────────────
-@app.context_processor
-def inject_distance_pref():
-    # per-browser preference, default nautical miles
-    unit = request.cookies.get('distance_unit','nm')
-    return {'distance_unit': unit}
-
 ### thread-once guard
 _distance_thread_started = False
+
+@app.before_first_request
+def _ensure_wargame_scheduler():
+    try:
+        if get_preference('wargame_mode') == 'yes':
+            initialize_airfield_callsigns()
+            configure_wargame_jobs()
+    except Exception:
+        # don't block the app if scheduler init fails
+        pass
 
 @app.before_request
 def maybe_start_distances():
@@ -364,7 +465,96 @@ def init_db():
             FOREIGN KEY(category_id) REFERENCES inventory_categories(id)
           )
         """)
-
+        # ───────────────────── Wargame Mode schema ─────────────────────
+        c.execute("""
+          CREATE TABLE IF NOT EXISTS wargame_emails (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            generated_at  TEXT    NOT NULL,
+            message_id    TEXT    NOT NULL,
+            size_bytes    INTEGER NOT NULL,
+            source        TEXT    NOT NULL,
+            sender        TEXT    NOT NULL,
+            recipient     TEXT    NOT NULL,
+            subject       TEXT    NOT NULL,
+            body          TEXT    NOT NULL
+          )
+        """)
+        c.execute("""
+          CREATE TABLE IF NOT EXISTS wargame_metrics (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type     TEXT    NOT NULL,
+            delta_seconds  REAL    NOT NULL,
+            recorded_at    TEXT    NOT NULL,
+            key            TEXT
+          )
+        """)
+        # ── inbound scheduling for ramp arrivals ────────────────────
+        c.execute("""
+          CREATE TABLE IF NOT EXISTS wargame_inbound_schedule (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            tail_number      TEXT    NOT NULL,
+            airfield_takeoff TEXT    NOT NULL,
+            airfield_landing TEXT    NOT NULL,
+            scheduled_at     TEXT    NOT NULL,
+            eta              TEXT    NOT NULL,
+            cargo_type       TEXT    NOT NULL,
+            cargo_weight     REAL    NOT NULL
+          )
+        """)
+        c.execute("""
+          CREATE TABLE IF NOT EXISTS wargame_radio_schedule (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            generated_at   TEXT    NOT NULL,   -- original ts
+            scheduled_for  TEXT    NOT NULL,   -- when to show to Radio
+            message_id     TEXT    NOT NULL,
+            size_bytes     INTEGER NOT NULL,
+            source         TEXT    NOT NULL,
+            sender         TEXT    NOT NULL,
+            recipient      TEXT    NOT NULL,
+            subject        TEXT    NOT NULL,
+            body           TEXT    NOT NULL
+          )
+        """)
+        # default preferences for Wargame Mode
+        c.execute("""
+          INSERT OR IGNORE INTO preferences(name,value)
+          VALUES
+            ('wargame_mode',     'no'),
+            ('wargame_settings', '{}')
+        """)
+        c.execute("""
+          CREATE TABLE IF NOT EXISTS wargame_tasks (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            role       TEXT    NOT NULL CHECK(role IN ('radio','ramp','inventory')),
+            kind       TEXT    NOT NULL,                         -- e.g. inbound/outbound
+            key        TEXT    NOT NULL,                         -- e.g. 'msg:<id>' or 'flight:<id>'
+            gen_at     TEXT    NOT NULL,                         -- generation timestamp
+            sched_for  TEXT,                                     -- optional (radio batch anchor)
+            created_at TEXT    NOT NULL,
+            UNIQUE(role, kind, key)
+          )
+        """)
+        # ── Wargame Inventory batches (truck-like) ─────────────────────
+        c.execute("""
+          CREATE TABLE IF NOT EXISTS wargame_inventory_batches (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            direction    TEXT    NOT NULL CHECK(direction IN ('in','out')),
+            created_at   TEXT    NOT NULL,
+            manifest     TEXT    NOT NULL,
+            satisfied_at TEXT
+          )
+        """)
+        c.execute("""
+          CREATE TABLE IF NOT EXISTS wargame_inventory_batch_items (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id      INTEGER NOT NULL,
+            name          TEXT    NOT NULL,
+            size_lb       REAL    NOT NULL,
+            qty_required  INTEGER NOT NULL,
+            qty_done      INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY(batch_id) REFERENCES wargame_inventory_batches(id)
+          )
+        """)
 
 # ───────────────────────────────────────────────────────────
 #  schema migrations – run on every start or after DB reset
@@ -384,7 +574,8 @@ def run_migrations():
         ("eta",              "TEXT"),
         ("cargo_type",       "TEXT"),
         ("cargo_weight",     "TEXT"),
-        ("remarks",          "TEXT")
+        ("remarks",          "TEXT"),
+        ("sent_time",        "TEXT")
     ]:
         ensure_column("flights", col, typ)
 
@@ -405,6 +596,32 @@ def run_migrations():
     ensure_column("inventory_entries", "pending",    "INTEGER DEFAULT 0")
     ensure_column("inventory_entries", "pending_ts", "TEXT")
     ensure_column("inventory_entries", "session_id", "TEXT")
+
+    # wargame_metrics.key for linking metrics to entities (e.g., flight:<id>)
+    ensure_column("wargame_metrics", "key", "TEXT")
+    ensure_column("flights", "cargo_weight_real", "REAL")
+
+    # Wargame: hold cargo manifest on inbound schedule so it becomes flight.remarks
+    ensure_column("wargame_inbound_schedule", "manifest", "TEXT")
+
+    # ── Wargame: start Ramp‑inbound SLA when Radio publishes an inbound flight ──
+    with sqlite3.connect(DB_FILE) as c:
+        c.execute("""
+          CREATE TRIGGER IF NOT EXISTS wg_start_ramp_inbound_sla
+          AFTER INSERT ON flights
+          WHEN NEW.direction='inbound'
+               AND NEW.is_ramp_entry=0
+               AND (SELECT value FROM preferences WHERE name='wargame_mode')='yes'
+          BEGIN
+            INSERT OR IGNORE INTO wargame_tasks
+              (role, kind, key, gen_at, sched_for, created_at)
+            VALUES
+              ('ramp','inbound','flight:' || NEW.id,
+               strftime('%Y-%m-%dT%H:%M:%f', 'now'),
+               NULL,
+               strftime('%Y-%m-%dT%H:%M:%f', 'now'));
+          END;
+        """)
 
 def cleanup_pending():
     """Purge any pending inventory‐entries older than 15 minutes."""
@@ -594,6 +811,142 @@ def seed_default_categories():
 seed_default_categories()
 
 # ───────────────── helper funcs ──────────────────────────
+
+def _create_tables_wargame_ramp_requests(c):
+    # Air‑cargo requests that appear on Wargame → Ramp dashboard
+    c.execute("""
+      CREATE TABLE IF NOT EXISTS wargame_ramp_requests (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at       TEXT    NOT NULL,
+        destination      TEXT    NOT NULL,
+        requested_weight REAL    NOT NULL,
+        manifest         TEXT,
+        satisfied_at     TEXT
+      )""")
+
+# Ensure clean shutdown (useful in dev / reloader)
+def _shutdown_scheduler():
+    try:
+        if scheduler.state == STATE_RUNNING: scheduler.shutdown(wait=False)
+    except Exception: pass
+atexit.register(_shutdown_scheduler)
+
+def get_preference(name: str) -> str | None:
+    """Fetch a single preference value (or None if not set)."""
+    rows = dict_rows("SELECT value FROM preferences WHERE name=?", (name,))
+    return rows[0]['value'] if rows else None
+
+def set_preference(name: str, value: str) -> None:
+    """Upsert a preference."""
+    with sqlite3.connect(DB_FILE) as c:
+        c.execute("""
+            INSERT INTO preferences(name,value)
+            VALUES(?,?)
+            ON CONFLICT(name) DO UPDATE
+              SET value = excluded.value
+        """, (name, value))
+
+def clear_embedded_preferences() -> None:
+    """Remove any embedded‑tab prefs and reset distances off."""
+    with sqlite3.connect(DB_FILE) as c:
+        c.execute("DELETE FROM preferences WHERE name IN ('embedded_url','embedded_name')")
+        # ensure the distances flag is off
+        c.execute("""
+            INSERT INTO preferences(name,value)
+            VALUES('enable_1090_distances','no')
+            ON CONFLICT(name) DO UPDATE
+              SET value = excluded.value
+        """)
+
+def hhmm_from_iso(iso_str: str) -> str:
+    """Convert an ISO8601 string to HHMM, fallback to 'TBD' if parse fails."""
+    try:
+        return datetime.fromisoformat(iso_str).strftime('%H%M')
+    except Exception:
+        return 'TBD'
+
+@app.route('/wargame/radio/email/<int:email_id>')
+def fetch_wargame_email(email_id):
+    """Return the subject+body for one wargame email (JSON)."""
+    row = dict_rows("SELECT subject, body FROM wargame_emails WHERE id=?", (email_id,))
+    if not row:
+        return jsonify({}), 404
+    return jsonify(subject=row[0]['subject'], body=row[0]['body'])
+
+def choose_ramp_direction_with_balance() -> str:
+    """
+    Steer the ramp generator toward a 50/50 inbound/outbound mix within
+    ±balance_pct, considering expected inbound that hasn't appeared yet.
+    """
+    # settings
+    srow = dict_rows("SELECT value FROM preferences WHERE name='wargame_settings'")
+    settings = json.loads(srow[0]['value'] or '{}') if srow else {}
+    band_pct = float(settings.get('balance_pct', 20))  # e.g., 20 => ±20%
+    band = max(0.0, min(0.5, band_pct / 100.0))       # clamp to [0, 50%]
+    target = 0.5
+
+    # window (optional; defaults to last 60 minutes if not present)
+    window_min = int(settings.get('balance_window_min', 60))
+    since = (datetime.utcnow() - timedelta(minutes=window_min)).isoformat()
+    now_iso = datetime.utcnow().isoformat()
+
+    with sqlite3.connect(DB_FILE) as c:
+        c.row_factory = sqlite3.Row
+
+        # 1) Current visible ramp flights by direction
+        cur = c.execute("""
+            SELECT direction, COUNT(*) AS cnt
+              FROM flights
+             WHERE is_ramp_entry=1
+               AND timestamp >= ?
+             GROUP BY direction
+        """, (since,))
+        counts = {r['direction']: r['cnt'] for r in cur.fetchall()}
+        inbound_current  = counts.get('inbound', 0)
+        outbound_current = counts.get('outbound', 0)
+
+        # 2) Future inbound already scheduled (radio or confirmations already queued)
+        inbound_scheduled = c.execute("""
+            SELECT COUNT(*) AS n
+              FROM wargame_inbound_schedule
+             WHERE eta > ?
+        """, (now_iso,)).fetchone()['n']
+
+        # 3) Outbounds sent but not yet turned into inbound schedule (confirmation pending)
+        pending_confirms = c.execute("""
+            SELECT COUNT(*) AS n
+              FROM flights f
+             WHERE f.is_ramp_entry=1
+               AND f.direction='outbound'
+               AND f.sent=1
+               AND f.complete=0
+               AND NOT EXISTS (
+                     SELECT 1
+                       FROM wargame_inbound_schedule s
+                      WHERE s.tail_number      = f.tail_number
+                        AND s.airfield_takeoff = f.airfield_landing
+                        AND s.airfield_landing = f.airfield_takeoff
+                   )
+        """).fetchone()['n']
+
+    inbound_expected = inbound_current + inbound_scheduled + pending_confirms
+    total_expected   = inbound_expected + outbound_current
+    frac_inbound = (inbound_expected / total_expected) if total_expected > 0 else target
+
+    lower = target - band
+    upper = target + band
+
+    if frac_inbound > upper:
+        return 'outbound'  # too inbound-heavy → push outbound
+    if frac_inbound < lower:
+        return 'inbound'   # too outbound-heavy → push inbound
+
+    # Inside the band: mild bias toward the center to avoid drift/oscillation
+    # Probability of choosing inbound pulls toward target.
+    d = (target - frac_inbound)
+    p_inbound = max(0.1, min(0.9, 0.5 + d))  # clamp a bit for randomness
+    return 'inbound' if random.random() < p_inbound else 'outbound'
+
 def dict_rows(sql, params=()):
     with sqlite3.connect(DB_FILE) as c:
         c.row_factory = sqlite3.Row
@@ -971,6 +1324,754 @@ def purge_blank_flights() -> None:
                AND (IFNULL(remarks          ,'') =  '')
             """
         )
+        _create_tables_wargame_ramp_requests(c)
+
+# ── CORE WARGAME SCHEDULER & JOBS ──────────────────────────
+scheduler = BackgroundScheduler()
+
+# ── Helpers for radio callsigns ───────────────────────────
+def get_airfield_callsign(af):
+    """Map an airfield to a persistent random callsign."""
+    if af not in AIRFIELD_CALLSIGNS:
+        AIRFIELD_CALLSIGNS[af] = generate_random_callsign()
+    return AIRFIELD_CALLSIGNS[af]
+
+# Insert a pending task only if it does not already exist
+def wargame_task_start_once(role: str, kind: str, key: str, gen_at: str, sched_for: str | None = None) -> None:
+    rows = dict_rows(
+        "SELECT 1 FROM wargame_tasks WHERE role=? AND kind=? AND key=?",
+        (role, kind, key)
+    )
+    if rows:
+        return
+    wargame_task_start(role=role, kind=kind, key=key, gen_at=gen_at, sched_for=sched_for)
+
+
+def generate_radio_message():
+    """Enqueue a synthetic radio email into the schedule (batch or immediate)."""
+    now   = datetime.utcnow()
+    ts    = now.isoformat()
+    msg_id = uuid.uuid4().hex
+
+    # pick a non‑origin airfield for the sender; choose a plausible destination
+    pref   = dict_rows("SELECT value FROM preferences WHERE name='default_origin'")
+    origin = (pref[0]['value'].strip().upper() if pref and pref[0]['value'] else None)
+    choices = [af for af in HARDCODED_AIRFIELDS if af != origin]
+    af = random.choice(choices) if choices else random.choice(HARDCODED_AIRFIELDS)
+    callsign = get_airfield_callsign(af)
+    tail     = generate_tail_number()
+    dest = origin or random.choice([x for x in HARDCODED_AIRFIELDS if x != af])
+
+    # Respect Radio max-pending (only tasks that are visible to the operator)
+    settings_row = dict_rows("SELECT value FROM preferences WHERE name='wargame_settings'")
+    settings  = json.loads(settings_row[0]['value'] or '{}') if settings_row else {}
+    max_radio = int(settings.get('max_radio', 3) or 3)
+    now_iso   = now.isoformat()
+    due_cnt = dict_rows("""
+      SELECT COUNT(*) AS c
+        FROM wargame_tasks
+       WHERE role='radio' AND kind='inbound'
+         AND (sched_for IS NULL OR sched_for <= ?)
+    """, (now_iso,))[0]['c'] or 0
+    if due_cnt >= max_radio:
+        return
+
+    # build realistic times & Air Ops subject with a hidden WG tag
+    tko_hhmm = now.strftime('%H%M')
+    eta_hhmm = (now + timedelta(minutes=random.randint(12, 45))).strftime('%H%M')
+
+    size    = random.randint(500, 2000)
+    manifest, total_wt, cargo_type = generate_cargo_manifest()
+    subject = (
+        f"Air Ops: {tail} | {af} to {dest} | "
+        f"took off {tko_hhmm} | ETA {eta_hhmm} [WGID:{msg_id}]"
+    )
+
+    notes = ["Auto-generated Wargame traffic."]
+    if manifest:
+        notes.append(f"Manifest: {manifest}")
+    body = "\n".join([
+        f"Cargo Type: {cargo_type}",
+        (f"Total Weight of the Cargo: {int(total_wt)} lbs"
+         if total_wt else "Total Weight of the Cargo: none"),
+        "",
+        "Additional notes/comments:",
+        *[f"  {line}" for line in notes],
+        f"WGID:{msg_id}",
+        "",
+        "{DART Aircraft Takeoff Report, rev. 2024-05-14}"
+    ])
+
+    # read Supervisor’s settings
+    settings_row = dict_rows(
+        "SELECT value FROM preferences WHERE name='wargame_settings'"
+    )
+    settings    = json.loads(settings_row[0]['value'] or '{}') if settings_row else {}
+    use_batch   = settings.get('radio_use_batch',   'no')  == 'yes'
+    batch_delay_s = 300 if use_batch else 0
+    scheduled_for = (now + timedelta(seconds=batch_delay_s)).isoformat()
+
+    # start a pending Radio-inbound task now; sched_for is used for batch semantics
+    wargame_task_start(
+        role='radio',
+        kind='inbound',
+        key=f"msg:{msg_id}",
+        gen_at=ts,
+        sched_for=scheduled_for
+    )
+
+    with sqlite3.connect(DB_FILE) as c:
+        # 1) enqueue for the Radio dashboard
+        c.execute("""
+          INSERT INTO wargame_radio_schedule
+            (generated_at, scheduled_for,
+             message_id, size_bytes,
+             source, sender, recipient, subject, body)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+          ts, scheduled_for,
+          msg_id, size,
+          af, callsign, 'OPERATOR', subject, body
+        ))
+
+def extract_wgid_from_text(subject: str, body: str) -> str | None:
+    """Return WGID hex if present in subject+body, else None."""
+    m = re.search(r'\bWGID:([a-f0-9]{16,})\b', f"{subject}\n{body}", re.I)
+    return m.group(1) if m else None
+
+def wargame_finish_radio_inbound_if_tagged(subject: str, body: str) -> None:
+    """If message carries a WGID and Wargame is on, finish the radio-inbound task."""
+    if get_preference('wargame_mode') != 'yes':
+        return
+    wgid = extract_wgid_from_text(subject, body)
+    if wgid:
+        try:
+            wargame_task_finish('radio', 'inbound', f"msg:{wgid}")
+        except Exception:
+            pass  # be defensive; this should never break operator flow
+
+def wargame_finish_radio_outbound(fid: int) -> None:
+    """Finish radio‑outbound metric when the operator marks the flight as sent."""
+    if get_preference('wargame_mode') == 'yes':
+        try:
+            wargame_task_finish('radio', 'outbound', key=f"flight:{fid}")
+        except Exception:
+            pass
+
+def wargame_start_radio_outbound(fid: int) -> None:
+    """Start radio‑outbound metric for a new outbound ramp flight."""
+    if get_preference('wargame_mode') == 'yes':
+        try:
+            wargame_task_start_once('radio', 'outbound', key=f"flight:{fid}", gen_at=datetime.utcnow().isoformat())
+        except Exception:
+            pass
+
+def wargame_finish_ramp_inbound(fid: int) -> None:
+    """Finish ramp‑inbound metric when an arrival is logged/updated."""
+    if get_preference('wargame_mode') == 'yes':
+        try:
+            wargame_task_finish('ramp', 'inbound', key=f"flight:{fid}")
+        except Exception:
+            pass
+
+def wargame_start_ramp_inbound(fid: int, started_at: str | None = None) -> None:
+    """Start ramp‑inbound timer when an inbound cue appears for this flight."""
+    if get_preference('wargame_mode') == 'yes':
+        wargame_task_start(
+            role='ramp',
+            kind='inbound',
+            key=f"flight:{fid}",
+            gen_at=(started_at or datetime.utcnow().isoformat())
+        )
+
+def process_radio_schedule():
+    """
+    Every minute: move due messages into wargame_emails.
+    (Metrics are finalized when the operator actually submits to the parser.)
+    """
+    now_iso = datetime.utcnow().isoformat()
+    settings_row = dict_rows("SELECT value FROM preferences WHERE name='wargame_settings'")
+    settings  = json.loads(settings_row[0]['value'] or '{}') if settings_row else {}
+    max_radio = int(settings.get('max_radio', 3) or 3)
+    visible = dict_rows("""
+      SELECT COUNT(*) AS c
+        FROM wargame_tasks
+       WHERE role='radio' AND kind='inbound'
+         AND (sched_for IS NULL OR sched_for <= ?)
+    """, (now_iso,))[0]['c'] or 0
+    allow = max(0, max_radio - visible)
+    if allow <= 0:
+        return
+
+    due = dict_rows(
+        "SELECT * FROM wargame_radio_schedule WHERE scheduled_for <= ? ORDER BY scheduled_for ASC LIMIT ?",
+        (now_iso, allow)
+    )
+
+    for r in due:
+        with sqlite3.connect(DB_FILE) as c:
+            c.execute("""
+              INSERT INTO wargame_emails
+                (generated_at, message_id, size_bytes,
+                 source, sender, recipient, subject, body)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+              r['generated_at'], r['message_id'], r['size_bytes'],
+              r['source'],       r['sender'],     r['recipient'],
+              r['subject'],      r['body']
+            ))
+            c.execute("DELETE FROM wargame_radio_schedule WHERE id=?", (r['id'],))
+
+def generate_cargo_manifest():
+    """
+    Returns: (manifest_str, total_weight_lbs, cargo_type)
+      • 70% chance to include cargo
+      • manifest lines are deduped by (name,size), summed quantities
+      • lines sorted alphabetically by item name, then size asc
+      • cargo_type is 'Mixed' when present, else 'none'
+    """
+    if random.random() >= 0.70:
+        return ("", 0.0, "none")
+
+    # choose 1..5 unique (name,size) pairs across the full catalog
+    pairs = [(n, s) for n, sizes in WARGAME_ITEMS.items() for s in sizes]
+    picks = random.sample(pairs, k=random.randint(1, 5))
+
+    # aggregate quantities per (name,size)
+    agg = {}
+    for name, size in picks:
+        qty = random.randint(1, 12)
+        agg[(name, size)] = agg.get((name, size), 0) + qty
+
+    total = 0.0
+    lines = []
+    for (name, size) in sorted(agg.keys(), key=lambda t: (t[0], t[1])):
+        qty = agg[(name, size)]
+        lines.append(f"{name} {size} lb×{qty}")
+        total += size * qty
+
+    return ("; ".join(lines), float(total), "Mixed")
+
+def generate_ramp_request():
+    """
+    Generate a cargo *request* destined to a remote airport (appears on
+    Wargame → Ramp as a cue card). Ramp Boss will satisfy it by creating
+    an outbound flight in the normal Ramp UI.
+    """
+    ts = datetime.utcnow().isoformat()
+    # choose destination ≠ our origin (if set)
+    pref   = dict_rows("SELECT value FROM preferences WHERE name='default_origin'")
+    origin = (pref[0]['value'].strip().upper() if pref and pref[0]['value'] else None)
+    choices = [af for af in HARDCODED_AIRFIELDS if af != origin] or HARDCODED_AIRFIELDS[:]
+    destination = random.choice(choices)
+
+    manifest, total_wt, _ = generate_cargo_manifest()
+    if not total_wt:
+        # guarantee non-zero ask
+        total_wt = random.choice([200, 400, 600])
+
+    with sqlite3.connect(DB_FILE) as c:
+        c.execute("""
+          INSERT INTO wargame_ramp_requests(created_at, destination, requested_weight, manifest)
+          VALUES (?,?,?,?)
+        """, (ts, destination, float(total_wt), manifest or ''))
+
+def _parse_manifest(manifest: str):
+    """
+    Return list of dicts: [{'name':str,'size_lb':float,'qty':int}, ...]
+    Accepts 'tarps 10 lb×3; water 20 lb×2' and minor variants (x, lbs, spaces).
+    """
+    items = []
+    for part in (manifest or '').split(';'):
+        t = part.strip()
+        if not t: continue
+        # greedy name, then number + 'lb'/'lbs', then 'x' or '×' qty
+        m = re.search(r'^(?P<name>.+?)\s+(?P<size>\d+(?:\.\d+)?)\s*lb[s]?\s*[×x]\s*(?P<qty>\d+)\s*$', t, re.I)
+        if not m:
+            # fallback: just a weight → treat as one line with qty=1 and name=t
+            m2 = re.search(r'^(?P<name>.+?)\s+(?P<size>\d+(?:\.\d+)?)\s*lb[s]?\s*$', t, re.I)
+            if m2:
+                items.append({'name': m2.group('name').strip(), 'size_lb': float(m2.group('size')), 'qty': 1})
+            continue
+        items.append({
+            'name': m.group('name').strip(),
+            'size_lb': float(m.group('size')),
+            'qty': int(m.group('qty'))
+        })
+    return items
+
+def _create_inventory_batch(direction: str, manifest: str, created_at: str | None = None):
+    """Insert a batch + items; return batch_id."""
+    created_at = created_at or datetime.utcnow().isoformat()
+    items = _parse_manifest(manifest)
+    if not items:
+        return None
+    with sqlite3.connect(DB_FILE) as c:
+        cur = c.execute("""
+          INSERT INTO wargame_inventory_batches(direction, created_at, manifest)
+          VALUES(?,?,?)
+        """, (direction, created_at, manifest))
+        bid = cur.lastrowid
+        for it in items:
+            c.execute("""
+              INSERT INTO wargame_inventory_batch_items
+                (batch_id, name, size_lb, qty_required, qty_done)
+              VALUES (?,?,?,?,0)
+            """, (bid, it['name'], it['size_lb'], it['qty']))
+    return bid
+
+def reconcile_inventory_batches(session_id: str) -> None:
+    """
+    For the just-committed /inventory session:
+      • Attribute entries to the most-complete pending batch of the same direction.
+      • Prefer item-level match (name+size); fallback to weight-based allocation.
+      • When a batch completes, set satisfied_at and write one inventory SLA metric.
+    """
+    with sqlite3.connect(DB_FILE) as c:
+        c.row_factory = sqlite3.Row
+        entries = c.execute("""
+            SELECT id, direction, quantity, total_weight, COALESCE(NULLIF(raw_name,''), '') AS raw_name
+              FROM inventory_entries
+             WHERE session_id=? AND pending=0
+        """, (session_id,)).fetchall()
+        if not entries:
+            return
+        now_ts = datetime.utcnow().isoformat()
+
+        def load_batches(direction: str):
+            bs = c.execute("""
+                SELECT id, created_at
+                  FROM wargame_inventory_batches
+                 WHERE direction=? AND satisfied_at IS NULL
+            """, (direction,)).fetchall()
+            out = []
+            for b in bs:
+                items = c.execute("""
+                    SELECT id, name, size_lb, qty_required, qty_done
+                      FROM wargame_inventory_batch_items
+                     WHERE batch_id=?
+                """, (b['id'],)).fetchall()
+                remain = sum(1 for it in items if it['qty_done'] < it['qty_required'])
+                out.append({'b': b, 'items': items, 'remain': remain})
+            return out
+
+        def pick_most_complete(cands):
+            if not cands:
+                return None
+            # fewest remaining lines, then oldest
+            cands.sort(key=lambda r: (r['remain'], r['b']['created_at']))
+            return cands[0]
+
+        def close_if_complete(batch_id: int, created_at: str):
+            items_now = c.execute("""
+                SELECT qty_required, qty_done
+                  FROM wargame_inventory_batch_items
+                 WHERE batch_id=?
+            """, (batch_id,)).fetchall()
+            if all(x['qty_done'] >= x['qty_required'] for x in items_now):
+                c.execute("UPDATE wargame_inventory_batches SET satisfied_at=? WHERE id=?",
+                          (now_ts, batch_id))
+                delta = (datetime.fromisoformat(now_ts) - datetime.fromisoformat(created_at)).total_seconds()
+                c.execute("""
+                  INSERT INTO wargame_metrics(event_type, delta_seconds, recorded_at, key)
+                  VALUES ('inventory', ?, ?, ?)
+                """, (delta, now_ts, f"invbatch:{batch_id}"))
+
+        def apply_item(direction: str, name: str, size_lb: float, qty: int):
+            if qty <= 0:
+                return
+            cands = []
+            for r in load_batches(direction):
+                for it in r['items']:
+                    if it['name'].lower() == name.lower() and abs(it['size_lb'] - size_lb) < 1e-6:
+                        if it['qty_done'] < it['qty_required']:
+                            cands.append(r)
+                            break
+            pick = pick_most_complete(cands)
+            if not pick:
+                return
+            for it in pick['items']:
+                if it['name'].lower() == name.lower() and abs(it['size_lb'] - size_lb) < 1e-6:
+                    remaining = it['qty_required'] - it['qty_done']
+                    inc = min(qty, remaining)
+                    if inc > 0:
+                        c.execute("UPDATE wargame_inventory_batch_items SET qty_done=qty_done+? WHERE id=?",
+                                  (inc, it['id']))
+                    break
+            close_if_complete(pick['b']['id'], pick['b']['created_at'])
+
+        def apply_weight(direction: str, total_wt: float):
+            if total_wt <= 0:
+                return
+            pick = pick_most_complete(load_batches(direction))
+            if not pick:
+                return
+            remaining = total_wt
+            for it in pick['items']:
+                need = it['qty_required'] - it['qty_done']
+                if need <= 0:
+                    continue
+                fit_qty = min(need, int(remaining // max(it['size_lb'], 1e-6)))
+                if fit_qty > 0:
+                    c.execute("UPDATE wargame_inventory_batch_items SET qty_done=qty_done+? WHERE id=?",
+                              (fit_qty, it['id']))
+                    remaining -= fit_qty * it['size_lb']
+                if remaining < 1e-6:
+                    break
+            close_if_complete(pick['b']['id'], pick['b']['created_at'])
+
+        for e in entries:
+            parsed = _parse_manifest(e['raw_name'])
+            if parsed:
+                for it in parsed:
+                    q = int(e['quantity'] or it['qty'] or 1)
+                    # try item match; if nothing moved, consume by weight for that line
+                    before = dict_rows("""
+                        SELECT qty_done FROM wargame_inventory_batch_items
+                        WHERE name=? AND ABS(size_lb-?)<1e-6
+                        ORDER BY id DESC LIMIT 1
+                    """, (it['name'], float(it['size_lb'])))
+                    apply_item(e['direction'], it['name'], float(it['size_lb']), q)
+                    # crude check: if no matching item existed anywhere, weight-fallback
+                    if not before:
+                        apply_weight(e['direction'], float(it['size_lb']) * q)
+            else:
+                apply_weight(e['direction'], float(e['total_weight'] or 0.0))
+
+def generate_inventory_outbound_request():
+    """Generate a multi-line outbound request batch (to be fulfilled by Inventory)."""
+    ts = datetime.utcnow().isoformat()
+    settings_row = dict_rows("SELECT value FROM preferences WHERE name='wargame_settings'")
+    settings  = json.loads(settings_row[0]['value'] or '{}') if settings_row else {}
+    max_inv   = int(settings.get('max_inventory', 3) or 3)
+    # only count UNSATISFIED outbound batches as 'pending'
+    pending = dict_rows("""
+      SELECT COUNT(*) AS c FROM wargame_inventory_batches
+       WHERE direction='out' AND satisfied_at IS NULL
+    """)[0]['c'] or 0
+    if pending >= max_inv:
+        return
+    combos = random.sample([(n,s) for n,szs in WARGAME_ITEMS.items() for s in szs],
+                           k=random.randint(2,6))
+    lines = []
+    for name, size in combos:
+        qty = random.randint(1,5)
+        lines.append(f"{name} {size} lb×{qty}")
+    manifest = '; '.join(lines)
+    _create_inventory_batch('out', manifest, ts)
+
+def generate_inventory_inbound_delivery():
+    """Generate a multi-line inbound delivery batch (stuff 'arrived' that must be logged)."""
+    ts = datetime.utcnow().isoformat()
+    settings_row = dict_rows("SELECT value FROM preferences WHERE name='wargame_settings'")
+    settings  = json.loads(settings_row[0]['value'] or '{}') if settings_row else {}
+    max_inv   = int(settings.get('max_inventory', 3) or 3)
+    pending = dict_rows("""
+      SELECT COUNT(*) AS c FROM wargame_inventory_batches
+       WHERE direction='in' AND satisfied_at IS NULL
+    """)[0]['c'] or 0
+    if pending >= max_inv:
+        return
+    combos = random.sample([(n,s) for n,szs in WARGAME_ITEMS.items() for s in szs],
+                           k=random.randint(2,6))
+    lines = []
+    for name, size in combos:
+        qty = random.randint(1,5)
+        lines.append(f"{name} {size} lb×{qty}")
+    manifest = '; '.join(lines)
+    _create_inventory_batch('in', manifest, ts)
+
+def generate_ramp_flight():
+    """Generate a ramp flight with detailed cargo line items (no metrics here).
+       If outbound, start the Radio‑outbound timer so SLA runs until operator marks 'sent'."""
+    ts         = datetime.utcnow().isoformat()          # ISO for metrics
+    direction  = choose_ramp_direction_with_balance()
+    tail       = generate_tail_number()
+    dep, arr   = random.sample(HARDCODED_AIRFIELDS, 2)
+    tko_hhmm   = datetime.utcnow().strftime('%H%M')     # HHMM for dashboard fields
+    eta_hhmm   = (datetime.utcnow() + timedelta(minutes=random.randint(15,90))).strftime('%H%M')
+
+    combos = random.sample([(n,s) for n,szs in WARGAME_ITEMS.items() for s in szs],
+                           k=random.randint(1,9))
+    lines, total_wt = [], 0
+    for name, size in combos:
+        qty = random.randint(1,9)
+        lines.append(f"{name} {size} lb×{qty}")
+        total_wt += size * qty
+    remarks = '; '.join(lines)
+
+    with sqlite3.connect(DB_FILE) as c:
+        cur = c.execute("""
+          INSERT INTO flights
+            (tail_number, airfield_takeoff, airfield_landing,
+             takeoff_time, eta, cargo_type, cargo_weight, cargo_weight_real,
+             is_ramp_entry, direction, complete, remarks)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?)
+        """, (tail, dep, arr, tko_hhmm, eta_hhmm, 'Mixed', total_wt, float(total_wt), direction, remarks))
+
+        fid = cur.lastrowid
+
+    # If this is an outbound request, start the Radio‑outbound timer now.
+    if direction == 'outbound' and get_preference('wargame_mode') == 'yes':
+        wargame_start_radio_outbound(fid)
+        # Also start Ramp outbound SLA (runs until ramp marks complete)
+        try:
+            wargame_task_start('ramp', 'outbound', key=f"flight:{fid}", gen_at=ts)
+        except Exception: pass
+
+def process_inbound_schedule():
+    """Every minute: publish due inbound flights into `flights` and start a ramp‑inbound timer."""
+    now = datetime.utcnow().isoformat()
+    settings_row = dict_rows("SELECT value FROM preferences WHERE name='wargame_settings'")
+    settings  = json.loads(settings_row[0]['value'] or '{}') if settings_row else {}
+    max_ramp  = int(settings.get('max_ramp', 3) or 3)
+    pend = dict_rows("""
+      SELECT COUNT(*) AS c FROM wargame_tasks
+       WHERE role='ramp' AND kind='inbound'
+    """)[0]['c'] or 0
+    allow = max(0, max_ramp - pend)
+    if allow <= 0:
+        return
+    due = dict_rows("""
+      SELECT * FROM wargame_inbound_schedule
+       WHERE eta <= ?
+       ORDER BY eta ASC
+       LIMIT ?
+    """, (now, allow))
+
+    for r in due:
+        tko_hhmm = hhmm_from_iso(r['scheduled_at'])
+        eta_hhmm = hhmm_from_iso(r['eta'])
+        # Dedup: prefer updating any existing open leg with same identity
+        existing = dict_rows("""
+          SELECT id, remarks FROM flights
+           WHERE complete=0
+             AND tail_number=? AND airfield_takeoff=? AND airfield_landing=? AND takeoff_time=?
+           ORDER BY id DESC LIMIT 1
+        """, (r['tail_number'], r['airfield_takeoff'], r['airfield_landing'], tko_hhmm))
+        if existing:
+            fid = existing[0]['id']
+            with sqlite3.connect(DB_FILE) as c:
+                c.execute("""
+                  UPDATE flights
+                     SET eta=?, cargo_type=?, cargo_weight=?, cargo_weight_real=?,
+                         direction='inbound'
+                   WHERE id=?
+                """, (eta_hhmm, r['cargo_type'], r['cargo_weight'],
+                      float(r['cargo_weight'] or 0.0), fid))
+            if r['manifest'] and not (existing[0]['remarks'] or '').strip():
+                with sqlite3.connect(DB_FILE) as c:
+                    c.execute("UPDATE flights SET remarks=? WHERE id=?", (r['manifest'], fid))
+        else:
+            with sqlite3.connect(DB_FILE) as c:
+                cur = c.execute("""
+                  INSERT INTO flights
+                    (tail_number, airfield_takeoff, airfield_landing,
+                     takeoff_time, eta, cargo_type, cargo_weight, cargo_weight_real,
+                     is_ramp_entry, direction, complete, remarks)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'inbound', 0, ?)
+                """, (
+                  r['tail_number'], r['airfield_takeoff'], r['airfield_landing'],
+                  tko_hhmm, eta_hhmm, r['cargo_type'], r['cargo_weight'],
+                  float(r['cargo_weight'] or 0.0),
+                  r.get('manifest','') or ''
+                ))
+                fid = cur.lastrowid
+        # start ramp inbound SLA when the cue card becomes visible
+        wargame_start_ramp_inbound(fid, started_at=now)
+
+        with sqlite3.connect(DB_FILE) as c:
+            c.execute("DELETE FROM wargame_inbound_schedule WHERE id=?", (r['id'],))
+
+
+def process_remote_confirmations():
+    """
+    Every minute: for outbound flights we sent >5 min ago (and still not complete),
+    enqueue a *radio email* that confirms landing at the remote airport.
+    No auto‑creating inbound flights; Radio parses & updates the dashboard.
+    """
+    now       = datetime.utcnow()
+    cutoff    = (now - timedelta(minutes=5)).isoformat()
+    delivery  = now.isoformat()  # visible to Radio immediately
+
+    pending = dict_rows("""
+      SELECT id, tail_number, airfield_takeoff, airfield_landing, sent_time
+        FROM flights
+       WHERE is_ramp_entry=1
+         AND direction='outbound'
+         AND sent=1
+         AND complete=0
+         AND sent_time <= ?
+         AND NOT EXISTS (
+               SELECT 1
+                 FROM wargame_tasks t
+                WHERE t.role='radio' AND t.kind='confirm_gen'
+                  AND t.key = 'flight:' || flights.id
+            )
+    """, (cutoff,))
+
+    for f in pending:
+        msg_id = uuid.uuid4().hex
+        # Compose a subject Radio can parse: includes "landed HHMM"
+        landed_hhmm = datetime.utcnow().strftime('%H%M')
+        subject = (
+          f"Air Ops: {f['tail_number']} landed {landed_hhmm} at {f['airfield_landing']} "
+          f"from {f['airfield_takeoff']} [WGID:{msg_id}]"
+        )
+        body = (
+          "Arrival confirmation from remote airport.\n"
+          f"Tail: {f['tail_number']}\n"
+          f"From: {f['airfield_takeoff']}\n"
+          f"To: {f['airfield_landing']}\n"
+          f"WGID:{msg_id}\n"
+        )
+        with sqlite3.connect(DB_FILE) as c:
+            # Start radio inbound SLA for this message (batch semantics handled by dispatcher)
+            wargame_task_start('radio','inbound', key=f"msg:{msg_id}",
+                               gen_at=datetime.utcnow().isoformat(), sched_for=delivery)
+            # Guard to avoid re‑generating this confirm again
+            wargame_task_start('radio','confirm_gen', key=f"flight:{f['id']}",
+                               gen_at=datetime.utcnow().isoformat())
+            # Schedule into the radio inbox
+            c.execute("""
+              INSERT INTO wargame_radio_schedule
+                (generated_at, scheduled_for, message_id, size_bytes,
+                 source, sender, recipient, subject, body)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+              datetime.utcnow().isoformat(), delivery, msg_id,
+              random.randint(400,1200),
+              f['airfield_landing'],  # source
+              get_airfield_callsign(f['airfield_landing']),  # sender callsign at remote
+              'OPERATOR',
+              subject, body
+            ))
+
+def wargame_task_start(role: str, kind: str, key: str, gen_at: str, sched_for: str | None = None) -> None:
+    """Create or refresh a pending Wargame task anchor."""
+    with sqlite3.connect(DB_FILE) as c:
+        c.execute("""
+          INSERT INTO wargame_tasks(role,kind,key,gen_at,sched_for,created_at)
+          VALUES(?,?,?,?,?,?)
+          ON CONFLICT(role,kind,key) DO UPDATE SET
+            gen_at     = excluded.gen_at,
+            sched_for  = excluded.sched_for,
+            created_at = excluded.created_at
+        """, (role, kind, key, gen_at, sched_for, datetime.utcnow().isoformat()))
+
+def wargame_task_finish(role: str, kind: str, key: str) -> bool:
+    """
+    Resolve a pending Wargame task into a finalized metric.
+    Returns True if a task was found & recorded; False if no pending task existed.
+    """
+    rows = dict_rows(
+        "SELECT gen_at, sched_for FROM wargame_tasks WHERE role=? AND kind=? AND key=?",
+        (role, kind, key)
+    )
+    if not rows:
+        return False
+
+    now       = datetime.utcnow()
+    now_iso   = now.isoformat()
+    gen_dt    = datetime.fromisoformat(rows[0]['gen_at'])
+    sched_for = rows[0]['sched_for']
+
+    # Radio inbound uses batch semantics; others are simple now - gen_at.
+    if role == 'radio' and kind == 'inbound':
+        srow = dict_rows("SELECT value FROM preferences WHERE name='wargame_settings'")
+        settings    = json.loads(srow[0]['value'] or '{}') if srow else {}
+        use_batch   = (settings.get('radio_use_batch','no')   == 'yes')
+        count_batch = (settings.get('radio_count_batch','yes') == 'yes')
+        anchor_dt   = (datetime.fromisoformat(sched_for)
+                       if (use_batch and not count_batch and sched_for)
+                       else gen_dt)
+    else:
+        anchor_dt = gen_dt
+
+    delta = (now - anchor_dt).total_seconds()
+
+    with sqlite3.connect(DB_FILE) as c:
+        c.execute("""
+          INSERT INTO wargame_metrics(event_type, delta_seconds, recorded_at, key)
+          VALUES (?, ?, ?, ?)
+        """, (role, delta, now_iso, key))
+        c.execute("DELETE FROM wargame_tasks WHERE role=? AND kind=? AND key=?",
+                  (role, kind, key))
+    return True
+
+def configure_wargame_jobs():
+    """
+    (Re)configure all Wargame-mode background jobs according
+    to the Supervisor’s settings in preferences.wargame_settings.
+    """
+    # clear out any existing jobs
+    scheduler.remove_all_jobs()
+
+    # always dispatch due radio messages every minute
+    scheduler.add_job(
+        func=process_radio_schedule,
+        trigger='interval',
+        seconds=60,
+        id='job_radio_dispatch'
+    )
+
+    # load supervisor settings
+    settings_row = dict_rows(
+        "SELECT value FROM preferences WHERE name='wargame_settings'"
+    )
+    settings = json.loads(settings_row[0]['value'] or '{}')
+
+    # schedule radio message generation
+    radio_rate = float(settings.get('radio_rate', 0) or 0)
+    if radio_rate > 0:
+        scheduler.add_job(
+            func=generate_radio_message,
+            trigger='interval',
+            seconds=3600.0 / radio_rate,
+            id='job_radio'
+        )
+
+    # schedule inventory batches (separate inbound/outbound so we don't duplicate plane work)
+    inv_out_rate = float(settings.get('inv_out_rate', settings.get('inv_rate', 0) or 0) or 0)
+    if inv_out_rate > 0:
+        scheduler.add_job(
+            func=generate_inventory_outbound_request,
+            trigger='interval',
+            seconds=3600.0 / inv_out_rate,
+            id='job_inventory_out'
+        )
+    inv_in_rate = float(settings.get('inv_in_rate', settings.get('inv_rate', 0) or 0) or 0)
+    if inv_in_rate > 0:
+        scheduler.add_job(
+            func=generate_inventory_inbound_delivery,
+            trigger='interval',
+            seconds=3600.0 / inv_in_rate,
+            id='job_inventory_in'
+        )
+
+    # schedule ramp requests (appear on Wargame → Ramp)
+    ramp_rate = float(settings.get('ramp_rate', 0) or 0)
+    if ramp_rate > 0:
+        scheduler.add_job(
+            func=generate_ramp_request,
+            trigger='interval',
+            seconds=3600.0 / ramp_rate,
+            id='job_ramp_requests'
+        )
+
+    # No auto-publish of inbound flights: trainees must create them via the Radio parser.
+
+    # generate *radio* confirmations for flights we sent to remote airports
+    scheduler.add_job(
+        func=process_remote_confirmations,
+        trigger='interval',
+        seconds=60,
+        id='job_remote_confirm'
+    )
+
+    # start the scheduler if not already running
+    if scheduler.state != STATE_RUNNING:
+        scheduler.start()
 
 # ───────────────── routes ─────────────────────────────────
 
@@ -1075,6 +2176,9 @@ def radio():
               p.get('remarks','')
             ))
 
+            # ✅ Wargame: finish Radio‑inbound metric if this message came from the generator
+            wargame_finish_radio_inbound_if_tagged(subj, body)
+
             # 2) landing-report?
             # look for “landed HHMM” (allow “09:53” or “0953”)
             lm = re.search(r'\blanded\s*(\d{1,2}:?\d{2})\b', subj, re.I)
@@ -1099,16 +2203,15 @@ def radio():
                       VALUES (?,?,?)
                     """, (match['id'], datetime.utcnow().isoformat(), json.dumps(before)))
 
-                    old_rem = match['remarks'] or ''
-                    new_rem = f"{old_rem} / Arrived {arrival}" if old_rem else f"Arrived {arrival}"
+                    old_rem = (match.get('remarks') or '').strip()
+                    new_rem = (f"{old_rem} / Arrived {arrival}" if old_rem else f"Arrived {arrival}")
+                    # close the matching flight; keep `sent` as-is (do not reset it)
                     c.execute("""
                       UPDATE flights
-                         SET eta=?, complete=1, sent=0, remarks=?
+                         SET eta=?, complete=1, remarks=?
                        WHERE id=?
-                    """, (arrival, new_rem, match['id']))
-
-                    # ── make the change visible to the SELECT below
-                    c.commit()
+                    """, (arr_hhmm, new_rem, match['id']))
+                    c.commit()  # ensure subsequent reads see the closure
 
                     # ── JSON reply for XHR caller (blue success row) ──
                     if is_ajax:
@@ -1447,10 +2550,16 @@ def dashboard_table_partial():
             id DESC
         """
 
-    # Open a DB cursor for streaming
-    conn = sqlite3.connect(DB_FILE)
+    # Open a DB cursor for streaming (explicitly configure and close later)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     conn.row_factory = sqlite3.Row
+    try:
+        # Align ad‑hoc connection behavior with init_db() expectations
+        conn.execute("PRAGMA busy_timeout=5000;")
+    except Exception:
+        pass
     raw_cursor = conn.execute(sql, params)
+
 
     def gen_rows():
         for r in raw_cursor:
@@ -1510,8 +2619,22 @@ def dashboard_table_partial():
 
     stream.enable_buffering(5)   # flush up to 5 rows at a time
 
-    # wrap in stream_with_context so url_for() (and other request/api) works
-    return Response(stream_with_context(stream), mimetype='text/html')
+    # Wrap in stream_with_context so url_for() works, and explicitly
+    # close cursor/connection when the response finishes (or client disconnects)
+    resp = Response(stream_with_context(stream), mimetype='text/html')
+
+    @resp.call_on_close
+    def _close_streaming_handles():
+        try:
+            raw_cursor.close()
+        except Exception:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    return resp
 
 @app.route('/_radio_table')
 def radio_table_partial():
@@ -1573,7 +2696,10 @@ def radio_table_partial():
 # --- Radio message detail / copy-paste helper ---------------------------
 @app.route('/radio_detail/<int:fid>')
 def radio_detail(fid):
-    flight     = dict_rows("SELECT * FROM flights WHERE id=?", (fid,))[0]
+    rows = dict_rows("SELECT * FROM flights WHERE id=?", (fid,))
+    if not rows:
+        return ("Not found", 404)
+    flight = rows[0]
     callsign   = request.cookies.get('operator_call', 'YOURCALL').upper()
     include_test = request.cookies.get('include_test','yes') == 'yes'
 
@@ -1628,21 +2754,39 @@ def radio_detail(fid):
         active='radio'
     )
 
-@app.post('/mark_sent/<int:fid>')
-def mark_sent(fid):
+@app.route('/mark_sent/<int:fid>', methods=['POST'])
+@app.route('/mark_sent/<int:flight_id>', methods=['POST'])  # temporary compat
+def mark_sent(fid=None, flight_id=None):
+    fid = fid or flight_id
     """Flag a flight as sent and snapshot its state (+ operator callsign)."""
     callsign = request.cookies.get('operator_call', 'YOURCALL').upper()
+    now_ts   = datetime.utcnow().isoformat()
 
     with sqlite3.connect(DB_FILE) as c:
         before = dict_rows("SELECT * FROM flights WHERE id=?", (fid,))[0]
-        before['operator_call'] = callsign          # ← add to history blob
+        prev_sent = int(before.get('sent') or 0)
+        before['operator_call'] = callsign
 
         c.execute("""
             INSERT INTO flight_history(flight_id, timestamp, data)
             VALUES (?,?,?)
-        """, (fid, datetime.utcnow().isoformat(), json.dumps(before)))
+        """, (fid, now_ts, json.dumps(before)))
 
-        c.execute("UPDATE flights SET sent = 1 WHERE id = ?", (fid,))
+        # also stamp the time so background acks can key off it
+        c.execute("UPDATE flights SET sent = 1, sent_time = ? WHERE id = ?", (now_ts, fid))
+
+    # finalize SLA on the first transition 0 -> 1
+    if prev_sent == 0:
+        # if this is an outbound flight, finish Radio‑outbound SLA
+        try:
+            row = dict_rows("SELECT direction FROM flights WHERE id=?", (fid,))
+            if row and (row[0]['direction'] == 'outbound'):
+                wargame_finish_radio_outbound(fid)
+            else:
+                # inbound: this is the landing confirmation being sent
+                wargame_task_finish('radio','landing', key=f"flight:{fid}")
+        except Exception:
+            pass
 
     flash(f"Flight {fid} marked as sent.")
     return redirect(url_for('radio'))
@@ -1677,6 +2821,19 @@ def ramp_boss():
 
         # ---------- out-bound ----------
         if direction == 'outbound':
+            # Capture previous completion state (0/1) if this is an update.
+            # We do this BEFORE any UPDATE so we can detect a 0->1 transition later.
+            prev_complete = 0
+            try:
+                fid_form = request.form.get('id')
+                if fid_form:
+                    row_prev = dict_rows("SELECT complete FROM flights WHERE id=?", (int(fid_form),))
+                    if row_prev:
+                        prev_complete = int(row_prev[0]['complete'] or 0)
+            except Exception:
+                # Best-effort only; default to 0 on any parse/lookup failure
+                prev_complete = 0
+
             data['takeoff_time'] = hhmm_norm(request.form['dep_time'])
             data['eta']          = hhmm_norm(request.form['eta'])
 
@@ -1696,6 +2853,24 @@ def ramp_boss():
                           (fid, datetime.utcnow().isoformat(), json.dumps(data)))
                 # mark this as a NEW insert
                 action = 'new'
+
+            # WARGAME: start Radio‑outbound SLA (once; until operator marks “sent”)
+            wargame_start_radio_outbound(fid)
+            # WARGAME: start Ramp‑outbound SLA (once; creation time)
+            try:
+                wargame_task_start_once('ramp', 'outbound', key=f"flight:{fid}", gen_at=datetime.utcnow().isoformat())
+            except Exception:
+                pass
+
+            # If operator just marked this outbound complete, finalize Ramp‑outbound SLA.
+            # We detect a 0 -> 1 transition using the pre‑update prev_complete captured above.
+            try:
+                row_now = dict_rows("SELECT complete FROM flights WHERE id=?", (fid,))
+                now_complete = int(row_now[0]['complete'] or 0) if row_now else 0
+                if now_complete == 1 and prev_complete == 0:
+                    wargame_task_finish('ramp', 'outbound', key=f"flight:{fid}")
+            except Exception:
+                pass
 
         # ---------- in-bound ----------
         else:  # direction == 'inbound'
@@ -1754,9 +2929,60 @@ def ramp_boss():
                                  VALUES (?,?,?)""",
                               (fid, datetime.utcnow().isoformat(), json.dumps(data)))
 
+            # Route to Radio outbox: Ramp has now touched this record
+            with sqlite3.connect(DB_FILE) as c:
+                c.execute("UPDATE flights SET is_ramp_entry=1, sent=0 WHERE id=?", (fid,))
+
+            # Start Radio "landing notice" SLA once (avoid resetting on later edits)
+            pending = dict_rows(
+                "SELECT 1 FROM wargame_tasks WHERE role='radio' AND kind='landing' AND key=?",
+                (f"flight:{fid}",)
+            )
+            if not pending:
+                wargame_task_start(
+                    role='radio',
+                    kind='landing',
+                    key=f"flight:{fid}",
+                    gen_at=datetime.utcnow().isoformat()
+                )
+
+            # Close Ramp inbound SLA (arrival was handled)
+            wargame_finish_ramp_inbound(fid)
+
         # ── at this point we have `fid` of the row we inserted/updated ──
         # fetch it back in full
         row = dict_rows("SELECT * FROM flights WHERE id=?", (fid,))[0]
+        # If this outbound satisfies a Ramp Request, mark it satisfied
+        if row.get('direction') == 'outbound':
+            try:
+                # compute numeric weight (prefer REAL column if present)
+                wt = row.get('cargo_weight_real')
+                if wt is None:
+                    cw = (row.get('cargo_weight') or '').lower()
+                    if cw.endswith('lbs'): cw = cw[:-3]
+                    if cw.endswith('lb'):  cw = cw[:-2]
+                    wt = float(cw.strip() or 0)
+                # find oldest open request with same destination and <= weight
+                req = dict_rows("""
+                  SELECT id, requested_weight
+                    FROM wargame_ramp_requests
+                   WHERE satisfied_at IS NULL
+                     AND destination = ?
+                   ORDER BY created_at ASC
+                   LIMIT 1
+                """, (row['airfield_landing'],))
+                if req and wt >= float(req[0]['requested_weight'] or 0):
+                    rid = req[0]['id']
+                    with sqlite3.connect(DB_FILE) as c:
+                        c.execute("UPDATE wargame_ramp_requests SET satisfied_at=? WHERE id=?",
+                                  (datetime.utcnow().isoformat(), rid))
+                        # (optional) metric: request SLA
+                        c.execute("""
+                          INSERT INTO wargame_metrics(event_type, delta_seconds, recorded_at, key)
+                          VALUES ('ramp', ?, ?, ?)
+                        """, (0, datetime.utcnow().isoformat(), f"rampreq:{rid}"))
+            except Exception:
+                pass
         row['action'] = action
 
         # if this was XHR (our AJAX), return JSON instead of redirect:
@@ -1880,7 +3106,7 @@ def inventory_advance_line():
             """, (
               cat_id, raw, sanitized,
               wpu, qty, total,
-              direction[:3], ts, 1, ts, mid
+              ('in' if direction.startswith('in') else 'out'), ts, 1, ts, mid
             ))
             eid = cur.lastrowid
 
@@ -1905,9 +3131,30 @@ def inventory_advance_line():
         return jsonify(success=(cur.rowcount>0)), (404 if cur.rowcount==0 else 200)
 
     elif action == 'commit':
-        # clear pending = 0 for this manifest
+        # mark all session rows committed
         with sqlite3.connect(DB_FILE) as c:
+            c.row_factory = sqlite3.Row
+            rows = c.execute("""
+              SELECT id, timestamp
+                FROM inventory_entries
+               WHERE session_id=? AND pending=1
+            """, (mid,)).fetchall()
             c.execute("UPDATE inventory_entries SET pending=0 WHERE session_id=?", (mid,))
+
+        # Wargame: batch‑level SLA via reconciliation; Legacy: per‑entry timers
+        if get_preference('wargame_mode') == 'yes':
+            reconcile_inventory_batches(mid)
+        else:
+            now_ts = datetime.utcnow().isoformat()
+            with sqlite3.connect(DB_FILE) as c:
+                for r in rows:
+                    created_dt = datetime.fromisoformat(r['timestamp'])
+                    delta = (datetime.utcnow() - created_dt).total_seconds()
+                    c.execute("""
+                      INSERT INTO wargame_metrics(event_type, delta_seconds, recorded_at)
+                      VALUES ('inventory', ?, ?)
+                    """, (delta, now_ts))
+
         return jsonify(success=True)
 
     return jsonify(success=False), 400
@@ -2253,39 +3500,91 @@ def preferences():
     )
 
 # ───────────────────────────────────────────────────────────
-#  Admin dashboard - only when unlocked
+#  Admin dashboard - only when unlocked (plus Wargame mode)
 # ───────────────────────────────────────────────────────────
 @app.route('/admin', methods=['GET', 'POST'])
 def admin():
-    # only session-backed admin
+    # only session‑backed admin
     if not session.get('admin_unlocked'):
         return redirect(url_for('preferences'))
 
-    ONE_YEAR = 31_536_000  # seconds
-
     if request.method == 'POST':
-        # ── Exit Admin Mode button ───────────────────
+        # ── Exit Admin Mode ────────────────────────────────
         if 'exit_admin' in request.form:
             session.pop('admin_unlocked', None)
             flash("🔒 Admin mode locked.", "info")
             return redirect(url_for('preferences'))
 
-        # ─── Invalidate All Sessions + Clear Password ────────────
+        # ── Toggle Wargame Mode ────────────────────────────
+        if 'toggle_wargame' in request.form:
+            on          = (request.form.get('toggle_wargame') == 'on')
+            current_on  = (get_preference('wargame_mode') == 'yes')
+            if on == current_on:
+                flash(f"Wargame mode already {'active' if on else 'off'}. No changes made.", "info")
+                return redirect(url_for('admin'))
+            set_preference('wargame_mode', 'yes' if on else 'no')
+
+            # List of all tables we want to completely purge on activation/deactivation
+            WARGAME_TABLES = [
+              'flights',
+              'incoming_messages',
+              'flight_history',
+              'wargame_emails',
+              'wargame_metrics',
+              'wargame_inbound_schedule',
+              'wargame_radio_schedule',
+              'wargame_tasks',
+              'inventory_entries'
+            ]
+
+            if on:
+                # 1) wipe live‑ops & wargame state
+                with sqlite3.connect(DB_FILE) as c:
+                    for tbl in WARGAME_TABLES:
+                        c.execute(f"DELETE FROM {tbl}")
+
+                # 2) regenerate callsigns and wire up the scheduler
+                initialize_airfield_callsigns()
+                configure_wargame_jobs()
+
+                # 3) clear any stale role
+                session.pop('wargame_role', None)
+                resp = redirect(url_for('wargame_index'))
+                # also clear the browser cookie
+                resp.delete_cookie('wargame_role', path='/')
+
+                flash("🕹️ Wargame mode activated; all live‑ops & Wargame data wiped.", "success")
+                return resp
+
+            else:
+                # 1) tear down scheduler
+                scheduler.remove_all_jobs()
+
+                # 2) purge wargame tables
+                with sqlite3.connect(DB_FILE) as c:
+                    for tbl in WARGAME_TABLES:
+                        c.execute(f"DELETE FROM {tbl}")
+
+                # 3) clear any stale cookies
+                resp = redirect(url_for('admin'))
+                resp.delete_cookie('wargame_emails_read', path='/')
+                resp.delete_cookie('wargame_role',      path='/')
+                session.pop('wargame_role', None)
+
+                flash("🕹️ Wargame mode deactivated; all Wargame data cleared.", "info")
+                return resp
+
+        # ── Invalidate Sessions + Clear App Password ───────
         if 'invalidate_sessions' in request.form:
-            # 1) rotate session_salt so all existing sessions die
             new_salt = uuid.uuid4().hex
             set_session_salt(new_salt)
-
-            # 2) delete the stored app password → force first-time setup
             with sqlite3.connect(DB_FILE) as c:
                 c.execute("DELETE FROM preferences WHERE name='app_password'")
-
             flash(
               "🔑 All sessions invalidated and password cleared – " +
               "please set a new password now.",
               "info"
             )
-            # send everyone (including this user) to setup
             return redirect(url_for('setup'))
 
         # ── Change App Password ─────────────────────────────
@@ -2293,85 +3592,313 @@ def admin():
             new_pw     = request.form.get('new_password','')
             confirm_pw = request.form.get('confirm_password','')
             if new_pw and new_pw == confirm_pw:
-                # store the new hash
                 set_app_password_hash(generate_password_hash(new_pw))
                 flash("Application password updated.", "success")
             else:
                 flash("Passwords must match.", "error")
             return redirect(url_for('admin'))
 
-        # ── Embedded‑Tab: Clear both entries ────────────────────
+        # ── Clear Embedded‑Tab Settings ────────────────────
         if 'clear_embedded' in request.form:
-            with sqlite3.connect(DB_FILE) as c:
-                c.execute(
-                  "DELETE FROM preferences WHERE name IN ('embedded_url','embedded_name')"
-                )
-                c.execute(
-                  "INSERT OR REPLACE INTO preferences(name,value) VALUES('enable_1090_distances','no')"
-                )
-            flash("Embedded-tab removed.", "info")
+            clear_embedded_preferences()
+            flash("Embedded‑tab removed.", "info")
             return redirect(url_for('admin'))
 
-        # ── Embedded‑Tab: auto‑save URL/name/dist‑flag on any change ──
+        # ── Save Embedded‑Tab URL / Name / Distances Flag ──
         if any(k in request.form for k in ('embedded_url','embedded_name','enable_1090_distances')):
             url  = request.form.get('embedded_url','').strip()
             name = request.form.get('embedded_name','').strip()
             if url and name:
-                dist_val = 'yes' if request.form.get('enable_1090_distances')=='on' else 'no'
-                with sqlite3.connect(DB_FILE) as c:
-                    c.execute("""
-                      INSERT INTO preferences(name,value)
-                      VALUES('embedded_url',?)
-                      ON CONFLICT(name) DO UPDATE SET value=excluded.value
-                    """, (url,))
-                    c.execute("""
-                      INSERT INTO preferences(name,value)
-                      VALUES('embedded_name',?)
-                      ON CONFLICT(name) DO UPDATE SET value=excluded.value
-                    """, (name,))
-                    c.execute("""
-                      INSERT INTO preferences(name,value)
-                      VALUES('enable_1090_distances',?)
-                      ON CONFLICT(name) DO UPDATE SET value=excluded.value
-                    """, (dist_val,))
-                flash("Embedded‑tab settings (and 1090‑distances) saved.", "info")
+                set_preference('embedded_url', url)
+                set_preference('embedded_name', name)
+                set_preference(
+                  'enable_1090_distances',
+                   'yes' if request.form.get('enable_1090_distances')=='on' else 'no'
+                )
+                flash("Embedded‑tab settings saved.", "info")
             else:
                 flash("Both URL and label are required.", "error")
             return redirect(url_for('admin'))
 
-        # ── Update Default Origin (DB) ───────────────
+        # ── Update Default Origin (still in both Admin & Preferences) ──
         if 'default_origin' in request.form:
             val = escape(request.form['default_origin'].strip().upper())
-            with sqlite3.connect(DB_FILE) as c:
-                c.execute("""
-                    INSERT INTO preferences(name, value)
-                    VALUES('default_origin', ?)
-                    ON CONFLICT(name) DO UPDATE
-                      SET value = excluded.value
-                """, (val,))
+            set_preference('default_origin', val)
 
-        # ── Update Show Debug Logs cookie ────────────
+        # ── Show Debug Logs cookie ─────────────────────────
         resp = make_response(redirect(url_for('admin')))
         if 'show_debug_logs' in request.form:
             resp.set_cookie(
-                'show_debug_logs',
-                request.form['show_debug_logs'],
-                max_age=ONE_YEAR,
-                samesite='Lax'
+              'show_debug_logs',
+              request.form['show_debug_logs'],
+              max_age=ONE_YEAR,
+              samesite='Lax'
             )
-
-        flash('Admin settings saved', 'info')
+        flash("Admin settings saved.", "info")
         return resp
 
-    # GET → render the page
-    pref = dict_rows("SELECT value FROM preferences WHERE name='default_origin'")
-    default_origin = pref[0]['value'] if pref else ''
-    show_debug = request.cookies.get('show_debug_logs', 'no')
+    # ── GET: fetch current settings ─────────────────────────────
+    default_origin        = get_preference('default_origin') or ''
+    show_debug_logs       = request.cookies.get('show_debug_logs','no')
+    wargame_mode          = get_preference('wargame_mode') == 'yes'
+    embedded_url          = get_preference('embedded_url') or ''
+    embedded_name         = get_preference('embedded_name') or ''
+    enable_1090_distances = get_preference('enable_1090_distances') == 'yes'
+
     return render_template(
-        'admin.html',
-        active='admin',
-        default_origin=default_origin,
-        show_debug_logs=show_debug
+      'admin.html',
+      active='admin',
+      default_origin=default_origin,
+      show_debug_logs=show_debug_logs,
+      wargame_mode=wargame_mode,
+      embedded_url=embedded_url,
+      embedded_name=embedded_name,
+      enable_1090_distances=enable_1090_distances
+    )
+
+@app.route('/wargame')
+def wargame_index():
+    # 1) ensure wargame mode is active
+    wm = dict_rows("SELECT value FROM preferences WHERE name='wargame_mode'")
+    if not (wm and wm[0]['value'] == 'yes'):
+        return redirect(url_for('dashboard'))
+
+    # 2) have they already chosen a role?
+    role = request.cookies.get('wargame_role')
+    if not role:
+        # fetch supervisor’s last‐saved settings
+        row = dict_rows(
+            "SELECT value FROM preferences WHERE name='wargame_settings'"
+        )
+        settings = json.loads(row[0]['value'] or '{}') if row else {}
+        return render_template(
+            'wargame_choose_role.html',
+            settings=settings
+        )
+
+    # 3) if they have a role, send them to their dashboard
+    return redirect(url_for(f"wargame_{role}_dashboard"))
+
+@app.route('/wargame/choose_role', methods=['POST'])
+def wargame_choose_role():
+    """Handle the initial Wargame Role selection (and, if Supervisor, save settings)."""
+    role = request.form.get('role')
+    allowed = ['radio', 'ramp', 'inventory', 'super']
+    if role not in allowed:
+        flash("Invalid Wargame role selected.", "error")
+        return redirect(url_for('wargame'))
+
+    # If the Exercise Supervisor picked this role, capture all extra settings
+    if role == 'super':
+        settings = {k: v for k, v in request.form.items() if k != 'role'}
+        # Normalize toggles: if absent, treat as 'no'
+        for k in ('radio_use_batch', 'radio_count_batch'):
+            settings[k] = 'yes' if settings.get(k) == 'yes' else 'no'
+        with sqlite3.connect(DB_FILE) as c:
+            c.execute("""
+              INSERT INTO preferences(name, value)
+              VALUES('wargame_settings', ?)
+              ON CONFLICT(name) DO UPDATE SET value=excluded.value
+            """, (json.dumps(settings),))
+
+    session['wargame_role'] = role
+    resp = make_response(redirect(url_for(f"wargame_{role}_dashboard")))
+    resp.set_cookie('wargame_role', role, max_age=ONE_YEAR, samesite='Lax')
+    return resp
+
+# ───────────────────────────────────────────────────────────
+#  WARGAME: Radio Operator Inbox
+# ───────────────────────────────────────────────────────────
+@app.route('/wargame/radio')
+def wargame_radio_dashboard():
+    # 1) ensure wargame mode
+    wm = dict_rows("SELECT value FROM preferences WHERE name='wargame_mode'")
+    if not (wm and wm[0]['value']=='yes'):
+        return redirect(url_for('dashboard'))
+
+    # 2) fetch all generated e‑mails, newest first
+    emails = dict_rows("""
+      SELECT id, generated_at, message_id, size_bytes,
+             source, sender, recipient, subject
+        FROM wargame_emails
+       ORDER BY generated_at DESC
+    """)
+
+    # 3) determine “read” state from a single cookie bitmask
+    seen = request.cookies.get('wargame_emails_read','')  # e.g. "1,4,7"
+    seen_ids = set(int(i) for i in seen.split(',') if i.isdigit())
+    for e in emails:
+        e['read'] = (e['id'] in seen_ids)
+
+    return render_template(
+      'wargame_radio.html',
+      emails=emails,
+      active='wargame'
+    )
+
+
+# ───────────────────────────────────────────────────────────
+#  WARGAME: Ramp Boss “Cue Cards”
+# ───────────────────────────────────────────────────────────
+@app.route('/wargame/ramp')
+def wargame_ramp_dashboard():
+    wm = dict_rows("SELECT value FROM preferences WHERE name='wargame_mode'")
+    if not (wm and wm[0]['value']=='yes'):
+        return redirect(url_for('dashboard'))
+
+    # Arrived cargo (inbound legs)
+    arrivals = dict_rows("""
+      SELECT id, timestamp, tail_number,
+             airfield_takeoff, airfield_landing,
+             takeoff_time, eta, cargo_type,
+             COALESCE(cargo_weight_real,
+                      CASE
+                        WHEN cargo_weight LIKE '%lb%' THEN CAST(REPLACE(REPLACE(cargo_weight,' lbs',''),' lb','') AS REAL)
+                        ELSE CAST(cargo_weight AS REAL)
+                      END) AS cargo_weight,
+             remarks
+        FROM flights
+       WHERE is_ramp_entry=0
+         AND direction='inbound'
+       ORDER BY id DESC
+    """)
+
+    # Cargo requests waiting to be satisfied by creating an outbound flight
+    raw_reqs = dict_rows("""
+      SELECT id, created_at, destination, requested_weight, manifest
+        FROM wargame_ramp_requests
+       WHERE satisfied_at IS NULL
+       ORDER BY created_at ASC
+    """)
+    # Shape to match the existing template (field names)
+    requests = [{
+      'timestamp': r['created_at'],
+      'airfield_landing': r['destination'],
+      'cargo_weight': r['requested_weight'],
+      'cargo_type': 'Mixed',
+      'proposed_tail': '',
+      'remarks': r['manifest'] or '—'
+    } for r in raw_reqs]
+
+    return render_template(
+      'wargame_ramp.html',
+      arrivals=arrivals,
+      requests=requests,
+      active='wargame'
+    )
+
+
+# ───────────────────────────────────────────────────────────
+#  WARGAME: Inventory Specialist “Cue Cards”
+# ───────────────────────────────────────────────────────────
+@app.route('/wargame/inventory')
+def wargame_inventory_dashboard():
+    wm = dict_rows("SELECT value FROM preferences WHERE name='wargame_mode'")
+    if not (wm and wm[0]['value']=='yes'):
+        return redirect(url_for('dashboard'))
+
+    # Pending batches (in/out)
+    incoming_deliveries = dict_rows("""
+      SELECT id, created_at, manifest
+        FROM wargame_inventory_batches
+       WHERE direction='in' AND satisfied_at IS NULL
+       ORDER BY created_at ASC
+    """)
+    outgoing_requests = dict_rows("""
+      SELECT id, created_at, manifest
+        FROM wargame_inventory_batches
+       WHERE direction='out' AND satisfied_at IS NULL
+       ORDER BY created_at ASC
+    """)
+    def lines_for(bid):
+        return dict_rows("""
+          SELECT name, size_lb, qty_required, qty_done
+            FROM wargame_inventory_batch_items
+           WHERE batch_id=?
+        """, (bid,))
+
+    return render_template(
+      'wargame_inventory.html',
+      incoming_deliveries=[{**b, 'lines': lines_for(b['id'])} for b in incoming_deliveries],
+      outgoing_requests=[{**b, 'lines': lines_for(b['id'])} for b in outgoing_requests],
+      active='wargame'
+    )
+
+
+# ───────────────────────────────────────────────────────────
+#  WARGAME: Exercise Supervisor Dashboard
+# ───────────────────────────────────────────────────────────
+@app.route('/wargame/super')
+def wargame_super_dashboard():
+    wm = dict_rows("SELECT value FROM preferences WHERE name='wargame_mode'")
+    if not (wm and wm[0]['value']=='yes'):
+        return redirect(url_for('dashboard'))
+
+    # 1) per‑role delay metrics
+    metrics = {}
+    for role in ('radio','ramp','inventory'):
+        row = dict_rows(f"""
+            SELECT
+              AVG(delta_seconds) AS avg,
+              MIN(delta_seconds) AS min,
+              MAX(delta_seconds) AS max
+            FROM wargame_metrics
+           WHERE event_type=?
+        """, (role,))[0]
+        metrics[role] = {
+          'avg': round(row['avg'] or 0,2),
+          'min': row['min'] or 0,
+          'max': row['max'] or 0
+        }
+
+    # 2) throughput over the past hour
+    cutoff = (datetime.utcnow() - timedelta(hours=1)).isoformat()
+
+    # 2a) flights moved = ramp completions in the last hour
+    frow = dict_rows("""
+      SELECT COUNT(*) AS cnt
+        FROM wargame_metrics
+       WHERE event_type='ramp'
+         AND recorded_at >= ?
+         AND key LIKE 'flight:%'
+    """, (cutoff,))[0]
+    flights_per_hour = frow['cnt'] or 0
+
+    # 2b) cargo moved = sum(cargo_weight) for those ramp completions
+    # key format is "flight:<id>"
+    crow = dict_rows("""
+      SELECT SUM(
+               COALESCE(f.cargo_weight_real,
+                        CASE
+                          WHEN f.cargo_weight LIKE '%lb%' THEN CAST(REPLACE(REPLACE(f.cargo_weight,' lbs',''),' lb','') AS REAL)
+                          ELSE CAST(f.cargo_weight AS REAL)
+                        END)
+             ) AS sum_wt
+        FROM wargame_metrics wm
+        JOIN flights f
+          ON f.id = CAST(SUBSTR(wm.key, 8) AS INTEGER)
+       WHERE wm.event_type='ramp'
+         AND wm.recorded_at >= ?
+         AND wm.key LIKE 'flight:%'
+    """, (cutoff,))[0]
+    # round to 1 decimal place
+    cargo_per_hour = round(crow['sum_wt'] or 0, 1)
+
+    stats = {
+      'cargo_per_hour': cargo_per_hour,
+      'flights_per_hour': flights_per_hour
+    }
+
+    # 3) read‑only difficulty settings
+    js = dict_rows("SELECT value FROM preferences WHERE name='wargame_settings'")
+    settings = json.loads(js[0]['value']) if js else {}
+
+    return render_template(
+      'wargame_super.html',
+      metrics=metrics,
+      stats=stats,
+      settings=settings,
+      active='wargame'
     )
 
 @app.route('/embedded')

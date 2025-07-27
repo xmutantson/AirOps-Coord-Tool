@@ -1,0 +1,42 @@
+{# templates/wargame_ramp.html #}
+{% extends "base.html" %}
+{% block content %}
+  <h1>Wargame – Ramp Boss</h1>
+
+  {% if arrivals %}
+    <h2>Arrived Cargo</h2>
+    <div class="card-container">
+      {% for a in arrivals %}
+        <div class="card">
+          <p><strong>Timestamp (UTC):</strong> {{ a.timestamp }}</p>
+          <p><strong>Tail #:</strong> {{ a.tail_number }}</p>
+          <p><strong>Route:</strong> {{ a.airfield_takeoff }} → {{ a.airfield_landing }}</p>
+          <p><strong>Cargo:</strong> {{ a.cargo_weight }} lb {{ a.cargo_type }}</p>
+          <p><strong>Remarks:</strong> {{ a.remarks or '—' }}</p>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p><em>No arrivals at the moment.</em></p>
+  {% endif %}
+
+  <hr class="separator" />
+
+  {% if requests %}
+    <h2>Cargo Requests</h2>
+    <div class="card-container">
+      {% for r in requests %}
+        <div class="card">
+          <p><strong>Timestamp (UTC):</strong> {{ r.timestamp }}</p>
+          <p><strong>Destination:</strong> {{ r.airfield_landing }}</p>
+          <p><strong>Quantity:</strong> {{ r.cargo_weight }} lb</p>
+          <p><strong>Type:</strong> {{ r.cargo_type }}</p>
+          <p><strong>Assigned Tail #:</strong> {{ r.proposed_tail or '—' }}</p>
+          <p><strong>Remarks:</strong> {{ r.remarks or '—' }}</p>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p><em>No cargo requests at the moment.</em></p>
+  {% endif %}
+{% endblock %}

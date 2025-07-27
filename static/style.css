@@ -14,6 +14,16 @@
   --font-sans: 'Segoe UI', Roboto, Arial, sans-serif;
   --highlight-yellow: #FFF9C4;  /* pale yellow */
 }
+/* ── Wargame Mode header coloring ─────────────────────────────────── */
+body.wargame header {
+  background: #FFF59D;
+}
+body.wargame .main-nav a {
+  color: #333;
+}
+body.wargame .main-nav a.active {
+  background: #FFF9C4;
+}
 * {
   box-sizing: border-box;
   margin: 0;
@@ -388,7 +398,7 @@ body.preferences .flashes li.db_reset {
   color: #663300;
 }
 
-# default-origin “fade red” animation (Preferences only)
+/* default-origin “fade red” animation (Preferences only) */
 @keyframes fadeRed {
   from { background-color: #ff9999; }
   to   { background-color: white; }
@@ -448,7 +458,7 @@ body.radio     .container #radio-table     > table {
   padding: 0 1rem; /* optional gutter */
 }
 
-#faux-header and clock, same line alignment
+/* Faux header and clock: same line alignment */
 /* ── Page-header faux-header ───────────────────────── */
 .page-header-bar {
   display: flex;
@@ -764,4 +774,60 @@ body.cw-active #cargo-tools-panel {
     width: 100%;
     padding: 1rem;
   }
+}
+/* separator between metrics */
+.metrics-overview {
+  display: flex;
+  align-items: center;
+}
+.metrics-overview .delimiter {
+  width: 1px;
+  background: #ccc;
+  height: 4rem;
+  margin: 0 1rem;
+}
+
+/* inbox modal */
+.modal {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.modal-window {
+  background: #fff;
+  padding: 1rem;
+  border-radius: 4px;
+  width: 80%;
+  max-width: 600px;
+  position: relative;
+}
+.modal-window .close-modal {
+  position: absolute;
+  top: .5rem; right: .5rem;
+  background: none; border: none; font-size: 1.2rem;
+  cursor: pointer;
+}
+.card-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+.card {
+  border: 1px solid #ccc;
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  background: #fafafa;
+  width: 280px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+.card ul { margin: .5rem 0 0 1rem; }
+.card .item.done { opacity: .55; text-decoration: line-through; }
+.separator {
+  margin: 2rem 0;
+  border: none;
+  border-top: 1px solid #ddd;
 }

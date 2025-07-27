@@ -1,0 +1,49 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="container wargame-super">
+  <h1>🎛️ Exercise Supervisor Dashboard</h1>
+
+  <div class="metrics-overview">
+    <div class="metric">
+      <h2>Radio Delay (s)</h2>
+      <p>Avg: {{ metrics.radio.avg }}</p>
+      <p>Min: {{ metrics.radio.min }}</p>
+      <p>Max: {{ metrics.radio.max }}</p>
+    </div>
+    <div class="delimiter"></div>
+    <div class="metric">
+      <h2>Ramp Delay (s)</h2>
+      <p>Avg: {{ metrics.ramp.avg }}</p>
+      <p>Min: {{ metrics.ramp.min }}</p>
+      <p>Max: {{ metrics.ramp.max }}</p>
+    </div>
+    <div class="delimiter"></div>
+    <div class="metric">
+      <h2>Inventory Delay (s)</h2>
+      <p>Avg: {{ metrics.inventory.avg }}</p>
+      <p>Min: {{ metrics.inventory.min }}</p>
+      <p>Max: {{ metrics.inventory.max }}</p>
+    </div>
+  </div>
+
+  <section>
+    <h2>Throughput Rates</h2>
+    <p>Total Cargo Moved: <strong>{{ stats.cargo_per_hour }} lbs/hr</strong></p>
+    <p>Total Flights Handled: <strong>{{ stats.flights_per_hour }}/hr</strong></p>
+  </section>
+
+  <section>
+    <h2>Difficulty Settings (read‑only)</h2>
+    <table class="data-table">
+      <tbody>
+        {% for key, val in settings.items() %}
+        <tr>
+          <td>{{ key }}</td>
+          <td>{{ val }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+{% endblock %}
