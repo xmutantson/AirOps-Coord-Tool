@@ -1375,6 +1375,7 @@ def purge_blank_flights() -> None:
 
 # ── CORE WARGAME SCHEDULER & JOBS ──────────────────────────
 scheduler = BackgroundScheduler()
+_CONFIGURE_WG_LOCK = threading.Lock()
 
 # ── Helpers for radio callsigns ───────────────────────────
 def get_airfield_callsign(af):
@@ -2051,16 +2052,21 @@ def configure_wargame_jobs():
     (Re)configure all Wargame-mode background jobs according
     to the Supervisor’s settings in preferences.wargame_settings.
     """
-    # clear out any existing jobs
-    scheduler.remove_all_jobs()
+    with _CONFIGURE_WG_LOCK:
+        # Clear any existing jobs (running or not). Ignore errors for idempotency.
+        try:
+            scheduler.remove_all_jobs()
+        except Exception:
+            pass
 
-    # always dispatch due radio messages every minute
-    scheduler.add_job(
-        func=process_radio_schedule,
-        trigger='interval',
-        seconds=60,
-        id='job_radio_dispatch'
-    )
+        # always dispatch due radio messages every minute
+        scheduler.add_job(
+            func=process_radio_schedule,
+            trigger='interval',
+            seconds=60,
+            id='job_radio_dispatch',
+            replace_existing=True
+        )
 
     # load supervisor settings
     settings_row = dict_rows(
@@ -2070,51 +2076,56 @@ def configure_wargame_jobs():
 
     # schedule radio message generation
     radio_rate = float(settings.get('radio_rate', 0) or 0)
-    if radio_rate > 0:
-        scheduler.add_job(
-            func=generate_radio_message,
-            trigger='interval',
-            seconds=3600.0 / radio_rate,
-            id='job_radio'
-        )
+        if radio_rate > 0:
+            scheduler.add_job(
+                func=generate_radio_message,
+                trigger='interval',
+                seconds=3600.0 / radio_rate,
+                id='job_radio',
+                replace_existing=True
+            )
 
     # schedule inventory batches (separate inbound/outbound so we don't duplicate plane work)
-    inv_out_rate = float(settings.get('inv_out_rate', settings.get('inv_rate', 0) or 0) or 0)
-    if inv_out_rate > 0:
-        scheduler.add_job(
-            func=generate_inventory_outbound_request,
-            trigger='interval',
-            seconds=3600.0 / inv_out_rate,
-            id='job_inventory_out'
-        )
-    inv_in_rate = float(settings.get('inv_in_rate', settings.get('inv_rate', 0) or 0) or 0)
-    if inv_in_rate > 0:
-        scheduler.add_job(
-            func=generate_inventory_inbound_delivery,
-            trigger='interval',
-            seconds=3600.0 / inv_in_rate,
-            id='job_inventory_in'
-        )
+        inv_out_rate = float(settings.get('inv_out_rate', settings.get('inv_rate', 0) or 0) or 0)
+        if inv_out_rate > 0:
+            scheduler.add_job(
+                func=generate_inventory_outbound_request,
+                trigger='interval',
+                seconds=3600.0 / inv_out_rate,
+                id='job_inventory_out',
+                replace_existing=True
+            )
+        inv_in_rate = float(settings.get('inv_in_rate', settings.get('inv_rate', 0) or 0) or 0)
+        if inv_in_rate > 0:
+            scheduler.add_job(
+                func=generate_inventory_inbound_delivery,
+                trigger='interval',
+                seconds=3600.0 / inv_in_rate,
+                id='job_inventory_in',
+                replace_existing=True
+            )
 
     # schedule ramp requests (appear on Wargame → Ramp)
-    ramp_rate = float(settings.get('ramp_rate', 0) or 0)
-    if ramp_rate > 0:
-        scheduler.add_job(
-            func=generate_ramp_request,
-            trigger='interval',
-            seconds=3600.0 / ramp_rate,
-            id='job_ramp_requests'
-        )
+        ramp_rate = float(settings.get('ramp_rate', 0) or 0)
+        if ramp_rate > 0:
+            scheduler.add_job(
+                func=generate_ramp_request,
+                trigger='interval',
+                seconds=3600.0 / ramp_rate,
+                id='job_ramp_requests',
+                replace_existing=True
+            )
 
     # No auto-publish of inbound flights: trainees must create them via the Radio parser.
 
     # generate *radio* confirmations for flights we sent to remote airports
-    scheduler.add_job(
-        func=process_remote_confirmations,
-        trigger='interval',
-        seconds=60,
-        id='job_remote_confirm'
-    )
+        scheduler.add_job(
+            func=process_remote_confirmations,
+            trigger='interval',
+            seconds=60,
+            id='job_remote_confirm',
+            replace_existing=True
+        )
 
     # start the scheduler if not already running
     if scheduler.state != STATE_RUNNING:
