@@ -1,60 +1,55 @@
-{% extends 'base.html' %}
-{% block content %}
-<div class="container wargame-super">
-  <h1>🎛️ Exercise Supervisor Dashboard</h1>
+{% extends "base.html" %}
+{% block title %}Wargame · Exercise Supervisor{% endblock %}
 
-  <div class="metrics-overview">
+{% block content %}
+<div class="container">
+  <h1>Wargame — Exercise Supervisor</h1>
+
+  <!-- Centered delay tiles with throughput on the same row (right) -->
+  <div class="super-metrics">
     <div class="metric">
-      <h2>Radio Delay (s)</h2>
-      <p>Avg: {{ metrics.radio.avg }}</p>
-      <p>Min: {{ metrics.radio.min }}</p>
-      <p>Max: {{ metrics.radio.max }}</p>
+      <h3>Radio delays</h3>
+      <div>Avg {{ metrics.radio.avg }} s, Min {{ metrics.radio.min }} s, Max {{ metrics.radio.max }} s</div>
     </div>
-    <div class="delimiter"></div>
     <div class="metric">
-      <h2>Ramp Delay (s)</h2>
-      <p>Avg: {{ metrics.ramp.avg }}</p>
-      <p>Min: {{ metrics.ramp.min }}</p>
-      <p>Max: {{ metrics.ramp.max }}</p>
+      <h3>Ramp delays</h3>
+      <div>Avg {{ metrics.ramp.avg }} s, Min {{ metrics.ramp.min }} s, Max {{ metrics.ramp.max }} s</div>
     </div>
-    <div class="delimiter"></div>
     <div class="metric">
-      <h2>Inventory Delay (s)</h2>
-      <p>Avg: {{ metrics.inventory.avg }}</p>
-      <p>Min: {{ metrics.inventory.min }}</p>
-      <p>Max: {{ metrics.inventory.max }}</p>
+      <h3>Inventory delays</h3>
+      <div>Avg {{ metrics.inventory.avg }} s, Min {{ metrics.inventory.min }} s, Max {{ metrics.inventory.max }} s</div>
+    </div>
+    <div class="metric throughput" style="margin-left:auto;">
+      <h3>Throughput (last hour)</h3>
+      <div>{{ stats.flights_per_hour }} flights / {{ stats.cargo_per_hour }} lb</div>
     </div>
   </div>
 
-  <section>
-    <h2>Throughput Rates</h2>
-    <p>Total Cargo Moved: <strong>{{ stats.cargo_per_hour }} lbs/hr</strong></p>
-    <p>Total Flights Handled: <strong>{{ stats.flights_per_hour }}/hr</strong></p>
-  </section>
+  <h2 style="margin-top:1.25rem;">Difficulty settings</h2>
+  {% set pretty = {
+    'Radio message rate (per hour)': settings.get('radio_rate', 0),
+    'Radio: batch inbox': 'Yes' if settings.get('radio_use_batch') == 'yes' else 'No',
+    'Radio: count batch toward cap': 'Yes' if settings.get('radio_count_batch') == 'yes' else 'No',
+    'Inventory batch rate (per hour)': settings.get('inv_rate', 0),
+    'Ramp request rate (per hour)': settings.get('ramp_rate', 0),
+    'Inbound/outbound balance band (±%)': settings.get('balance_pct', 20),
+    'Max simultaneous Radio items': settings.get('max_radio', 3),
+    'Max simultaneous Ramp cue cards': settings.get('max_ramp', 3),
+    'Max simultaneous Inventory batches': settings.get('max_inventory', 3)
+  } %}
+  <table class="table wg-settings">
+    <tbody>
+    {% for label, val in pretty.items() %}
+      <tr><th>{{ label }}</th><td>{{ val }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
 
-  <section>
-    <h2>Difficulty Settings (read‑only)</h2>
-    <table class="data-table">
-      <tbody>
-        {% for key, val in settings.items() %}
-        {% if key != 'csrf_token' %}
-        <tr>
-          <td>{{ key }}</td>
-          <td>{{ val }}</td>
-        </tr>
-        {% endif %}
-        {% endfor %}
-      </tbody>
-    </table>
-  </section>
+  <!-- Exit role (kept in normal flow; positioning via global .wg-exit-form CSS) -->
+  <form class="wg-exit-form" method="post"
+        action="{{ url_for('wargame_exit_role') }}"
+        onsubmit="return confirm('Exit your role and choose a new one?');">
+    <button type="submit" class="btn btn-yellow">Exit role</button>
+  </form>
 </div>
-
-<form id="wg-exit-form"
-      class="wg-exit"
-      method="post"
-      action="{{ url_for('wargame_exit_role') }}"
-      onsubmit="return confirm('Exit your Wargame role and choose a new one?');">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <button type="submit" class="btn btn-yellow">Exit Role</button>
-</form>
 {% endblock %}

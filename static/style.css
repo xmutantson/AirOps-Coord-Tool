@@ -1,34 +1,27 @@
 /* ===============================================================
-   Variables & Reset
+   Variables, Base, Reset
    =============================================================== */
 :root {
-  --brand: #000;             /* black text and accents     */
-  --accent: #F29F05;         /* warm amber for buttons     */
-  --bg: #F5F7FA;             /* light background           */
-  --fg: #333;                /* main text                  */
-  --muted: #666;             /* secondary text             */
-  --table-head-bg: #2A2A2A;  /* table header background    */
-  --table-head-fg: #F5F5F5;  /* table header text          */
-  --radius: 6px;             /* border-radius everywhere   */
-  --spacing: 1rem;           /* global spacing unit        */
+  --brand: #000;                 /* black text and accents     */
+  --accent: #F29F05;             /* warm amber for buttons     */
+  --bg: #F5F7FA;                 /* light background           */
+  --fg: #333;                    /* main text                  */
+  --muted: #666;                 /* secondary text             */
+
+  --table-head-bg: #2A2A2A;      /* table header background    */
+  --table-head-fg: #F5F5F5;      /* table header text          */
+
+  --radius: 6px;                 /* border-radius everywhere   */
+  --spacing: 1rem;               /* global spacing unit        */
   --font-sans: 'Segoe UI', Roboto, Arial, sans-serif;
-  --highlight-yellow: #FFF9C4;  /* pale yellow */
+
+  --highlight-yellow: #FFF9C4;   /* pale yellow feedback       */
 }
-/* ── Wargame Mode header coloring ─────────────────────────────────── */
-body.wargame header {
-  background: #FFF59D;
-}
-body.wargame .main-nav a {
-  color: #333;
-}
-body.wargame .main-nav a.active {
-  background: #FFF9C4;
-}
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; }
+
 body {
   font-family: var(--font-sans);
   background: var(--bg);
@@ -36,23 +29,53 @@ body {
   line-height: 1.6;
 }
 
+/* ── iOS: prevent auto-zoom on focus ─────────────────────────── */
+input, textarea, select { font-size: 16px; }
+
 /* ===============================================================
-   Sticky Header & Nav
+   Wargame banner treatment (header/nav color shift)
+   =============================================================== */
+body.wargame header { background: #FFF59D; }
+body.wargame .main-nav a { color: #333; }
+body.wargame .main-nav a.active { background: #FFF9C4; }
+
+/* ===============================================================
+   Sticky Header, Footer, and Main Container
    =============================================================== */
 header {
   background: var(--table-head-bg);
   padding: 0.5rem 0;
   position: fixed;
-  top:      0;
-  left:     0;
-  right:    0;
+  top: 0; left: 0; right: 0;
   z-index: 1000;
 }
-main.container {
-  /* leave room for header + footer */
-  padding-top:    3.5rem;  /* adjust to your header’s height */
-  padding-bottom: 2.5rem;  /* adjust to your footer’s height */
+
+footer {
+  text-align: center;
+  padding: calc(var(--spacing) / 2);
+  color: var(--muted);
+  font-size: 0.9em;
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  background: var(--bg);
+  z-index: 1000;
 }
+
+main.container {
+  /* leave room for sticky header + footer */
+  padding-top: 3.5rem;   /* match header height */
+  padding-bottom: 2.5rem;/* match footer height */
+}
+
+.container {
+  max-width: 1600px;
+  margin: var(--spacing) auto;
+  padding: 0 var(--spacing);
+}
+
+/* ===============================================================
+   Navigation
+   =============================================================== */
 .main-nav {
   display: flex;
   justify-content: center;
@@ -73,49 +96,43 @@ main.container {
 }
 
 /* ===============================================================
-   Layout Container
-   =============================================================== */
-.container {
-  max-width: 1600px;
-  margin: var(--spacing) auto;
-  padding: 0 var(--spacing);
-}
-
-/* ===============================================================
    Tables
    =============================================================== */
 table {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
-  background: white;
+  background: #fff;
   box-shadow: 0 2px 6px rgba(0,0,0,0.1);
   border-radius: var(--radius);
   overflow: hidden;
   margin-top: var(--spacing);
 }
-th, td {
-  padding: 0.75em 1em;
-  text-align: left;
-  border-bottom: 1px solid #eee;
+thead { background: var(--table-head-bg); color: var(--table-head-fg); }
+th, td { padding: 0.75em 1em; text-align: left; border-bottom: 1px solid #eee; }
+tbody tr:hover { background: rgba(30,144,255,0.05); }
+
+/* Row feedback/highlights */
+tr.yellow-border { background-color: var(--highlight-yellow); }
+tr.green-border  { background-color: #81C784; }
+.red-border      { background-color: #f8d7da; }
+.blue-border     { background-color: #bbdefb; }
+.grey-border     { background-color: #cccccc; }
+
+/* Full-bleed helpers for dashboard/radio tables */
+.full-bleed,
+body.dashboard .container #dashboard-table > table,
+body.radio     .container #radio-table     > table,
+#incoming-feedback,
+#rb-feedback-container > table {
+  position: relative;
+  left: 50%;
+  width: 100vw;
+  margin-left: -50vw;
+  margin-right: -50vw;
+  box-sizing: border-box;
+  padding: 0 1rem; /* gutter */
 }
-thead {
-  background: var(--table-head-bg);
-  color: var(--table-head-fg);
-}
-tbody tr:hover {
-  background: rgba(30,144,255,0.05);
-}
-/* turn the “yellow-border” marker class into a full-row highlight */
-tr.yellow-border {
-  background-color: var(--highlight-yellow);
-}
-/* pale green highlight for feedback rows */
-tr.green-border {
-  background-color: #81C784;
-}
-/* static/style.css */
-.grey-border   { background-color:#cccccc; }
 
 /* ===============================================================
    Forms & Buttons (global)
@@ -144,150 +161,56 @@ button {
   padding: 0.6em 1.2em;
   border-radius: var(--radius);
   cursor: pointer;
-  transition: background 0.2s;
+  transition: filter 0.2s, background 0.2s;
 }
-button:hover {
-  background: #d68504;
-}
+button:hover { background: #d68504; }
 
-/* ──────────────────────────────────────────────────────────────
-   Prevent iOS auto-zoom on focus (inputs ≥16px) & full-width
-────────────────────────────────────────────────────────────── */
-input, textarea, select {
-  font-size: 16px;
-}
-
-/* Only the ramp-boss container gets the 100%/padding treatment here —
-   leave the global .container alone */
-.ramp-form-container {
-  width: 100%;
-  padding: 0 1rem;
-  box-sizing: border-box;
-}
-
-/* ===============================================================
-   
-Sticky Footer
-   =============================================================== */
-footer {
-  text-align: center;
-  padding: calc(var(--spacing) / 2);
-  color: var(--muted);
-  font-size: 0.9em;
-  margin-top: var(--spacing);
-  position: fixed;
-  bottom: 0;
-  left:   0;
-  right:  0;
-  background: var(--bg);
-  z-index: 1000;
-}
-
-/* ===============================================================
-   Ramp Boss Form Styles
-   =============================================================== */
-.ramp-form-container {
-  max-width: 600px;
-  margin: 2rem auto;
-  padding: 0 1rem;
-}
-.ramp-form-container form {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  column-gap: 1.5rem;
-  row-gap: 1rem;
-  align-items: center;
-}
-.ramp-form-container form > label {
-  grid-column: 1;
-  justify-self: end;
-  margin: 0;
-  font-weight: bold;
-}
-.ramp-form-container form > 
-  input,
-.ramp-form-container form > 
-  select,
-.ramp-form-container form > 
-  textarea,
-.ramp-form-container form > 
-  .radio-toggle,
-.ramp-form-container form > 
-  .lookup-row,
-.ramp-form-container form > 
-  button[type="button"] {
-  grid-column: 2;
-  width: 100%;
-}
-.ramp-form-container button[type="submit"] {
-  grid-column: 1 / -1;
-  justify-self: stretch;
-  margin-top: 1rem;
-}
-/* ensure Cargo Weight field can fit at least 6 digits */
-.ramp-form-container .lookup-row input[name="cargo_weight"] {
-  min-width: 12ch;
-}
-
-/* Radio-toggle */
-.ramp-form-container .radio-toggle {
-  display: inline-flex;
-  border: 1px solid #888;
-  border-radius: 4px;
-  overflow: hidden;
-}
-.ramp-form-container .radio-toggle input {
-  display: none;
-}
-.ramp-form-container .radio-toggle label {
-  padding: 6px 12px;
-  cursor: pointer;
-  background: #f0f0f0;
+/* Button variants: keep both names for compatibility */
+.btn-yellow,
+.btn.yellow {
+  background: var(--accent);
+  border: 1px solid #d68504;
   color: #333;
-  user-select: none;
-  transition: background 0.15s, color 0.15s;
+  padding: .5rem .9rem;
+  border-radius: 6px;
+  cursor: pointer;
 }
-.ramp-form-container .radio-toggle label:hover {
-  background: #e0e0e0;
-}
-.ramp-form-container .radio-toggle input:checked + label {
-  background: var(--table-head-bg);
-  color: var(--table-head-fg);
-}
+.btn.yellow:hover,
+.btn-yellow:hover { filter: brightness(1.03); }
 
-/* Lookup row helper */
-.ramp-form-container .lookup-row {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-}
-.ramp-form-container .lookup-row input {
-  flex: 1;
-}
-.ramp-form-container .lookup-row button {
-  flex: 0 0 auto;
-}
-
-/* Error highlight */
-.ramp-form-container .error {
-  border: 2px solid #d33;
-}
-/* unwrap the ETA wrapper so its children slot into the grid */
-.ramp-form-container form > #eta_block {
-  display: contents;
-}
-
-/* target the ETA label inside that now-hidden wrapper */
-/* force it into the label-column (right justified + bold) */
-.ramp-form-container form > #eta_block > label {
-  justify-self: end;
-  font-weight: bold;
-  text-align: right;
-}
+.danger { background: #c33 !important; color: #fff !important; }
 
 /* ===============================================================
-   Preferences Form Styles
+   Toasts
    =============================================================== */
+#toast-container {
+  position: fixed; top: 1rem; right: 1rem;
+  display: flex; flex-direction: column; gap: 0.5rem;
+  z-index: 2000; pointer-events: none;
+}
+.toast {
+  min-width: 200px; padding: 0.75rem 1rem; border-radius: var(--radius);
+  color: #fff; opacity: 0; transform: translateX(100%);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  pointer-events: auto;
+}
+.toast.show { opacity: 1; transform: translateX(0); }
+.toast.hide { opacity: 0; transform: translateX(100%); }
+.toast.success { background: #4caf50; }
+.toast.error   { background: #f44336; }
+.toast.info    { background: #2196f3; }
+
+/* ===============================================================
+   Utility/State
+   =============================================================== */
+body.offline { background: #ff4242 !important; transition: background 0.3s; }
+
+/* ===============================================================
+   Page: Preferences
+   =============================================================== */
+/* Pull page up under sticky header */
+body.preferences { margin: 0 !important; }
+
 .container.preferences {
   max-width: 600px;
   margin: 2rem auto;
@@ -320,439 +243,148 @@ footer {
   margin-top: 0.5rem;
 }
 
-/* ===============================================================
-   Preferences page overrides (moved from inline <style> in preferences.html)
-   =============================================================== */
-
-/* target only the Preferences screen */
-body.preferences {
-  font-family: sans-serif;
-  margin: 20px;  /* replaced the inline body{…} */
-}
-
-/* section headings */
-body.preferences h3 {
-  margin-top: 32px;
-}
-
-/* labels in the Preferences form */
-body.preferences label {
-  display: block;
-  margin-top: 12px;
-  font-weight: bold;
-}
-
-/* inputs and selects in Preferences */
-body.preferences select,
-body.preferences input {
-  padding: 6px;
-  font-size: 14px;
-  width: 200px;
-}
-
-/* buttons in Preferences */
-body.preferences button {
-  margin-right: 6px;
-  padding: 6px 12px;
-}
-
-
-/* danger button (Preferences & elsewhere) */
-.danger {
-  background: #c33 !important;
-  color: #fff !important;
-}
-
-/* slightly darker on hover / focus */
-body.preferences .danger:hover,
-body.preferences button.danger:hover {
-  background: #a92222 !important;
-}
-
-/* flash message list styling */
+/* Flash messages */
 body.preferences .flashes {
-  list-style: none;
-  padding: 0;
-  margin: 12px 0;
+  list-style: none; padding: 0; margin: 12px 0;
+}
+body.preferences .flashes li {
+  margin: 4px 0; padding: 8px 12px; border-radius: 4px; font-weight: bold;
+}
+body.preferences .flashes li.error   { background: #ffe5e5; border: 1px solid #cc3333; color: #800; }
+body.preferences .flashes li.import  { background: #e5ffe5; border: 1px solid #33aa33; color: #060; }
+body.preferences .flashes li.db_reset{ background: #fff0e5; border: 1px solid #ff8800; color: #663300; }
+
+/* default-origin “fade red” animation */
+@keyframes fadeRed { from { background-color: #ff9999; } to { background-color: #fff; } }
+input.fade-red { background-color: #ff9999; animation: fadeRed 4s ease-in-out; }
+
+/* ===============================================================
+   Page: Radio
+   =============================================================== */
+#incoming-form textarea[name="body"] {
+  min-height: 8rem;    /* start taller */
+  max-height: 50vh;    /* bounded */
+  resize: vertical; overflow: auto;
 }
 
-body.preferences .flashes li {
-  margin: 4px 0;
-  padding: 8px 12px;
-  border-radius: 4px;
+/* ===============================================================
+   Page: Ramp Boss
+   =============================================================== */
+.ramp-form-container {
+  width: 100%;
+  max-width: 600px;
+  margin: 2rem auto;
+  padding: 0 1rem;
+  box-sizing: border-box;
+}
+
+.ramp-form-container form {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 1.5rem;
+  row-gap: 1rem;
+  align-items: center;
+}
+.ramp-form-container form > label {
+  grid-column: 1;
+  justify-self: end;
+  margin: 0;
   font-weight: bold;
 }
-body.preferences .flashes li.error {
-  background: #ffe5e5;
-  border: 1px solid #cc3333;
-  color: #800;
+.ramp-form-container form >
+  input,
+.ramp-form-container form >
+  select,
+.ramp-form-container form >
+  textarea,
+.ramp-form-container form >
+  .radio-toggle,
+.ramp-form-container form >
+  .lookup-row,
+.ramp-form-container form >
+  button[type="button"] {
+  grid-column: 2;
+  width: 100%;
 }
-body.preferences .flashes li.import {
-  background: #e5ffe5;
-  border: 1px solid #33aa33;
-  color: #060;
-}
-body.preferences .flashes li.db_reset {
-  background: #fff0e5;
-  border: 1px solid #ff8800;
-  color: #663300;
-}
-
-/* default-origin “fade red” animation (Preferences only) */
-@keyframes fadeRed {
-  from { background-color: #ff9999; }
-  to   { background-color: white; }
-}
-
-/* start bright red, then fade to white */
-/* we want the 'fade-red' animation anywhere you tag an <input> */
-input.fade-red {
-  background-color: #ff9999;          /* initial tint */
-  animation: fadeRed 4s ease-in-out;  /* then dissolve */
-}
-
-/* full-bleed tables on Dashboard & Radio, even when wrapped in a div */
-body.dashboard .container #dashboard-table > table,
-body.radio     .container #radio-table     > table {
-  position: relative;
-  left: 50%;
-  width: 100vw;
-  margin-left: -50vw;
-  margin-right: -50vw;
-  padding: 0 1rem;   /* optional gutter */
-  box-sizing: border-box;
-}
-
-/* full-width “break-out” for feedback tables */
-.full-bleed {
-  position: relative;
-  left:  50%;
-  right: 50%;
-  width: 100vw;
-  margin-left:  -50vw;
-  margin-right: -50vw;
-  box-sizing: border-box;
-  padding: 0 1rem; /* optional gutter */
-}
-
-/* highlight parse‐failure rows (no real data) */
-.red-border { background-color: #f8d7da; }
-
-/* highlight updated‐existing rows */
-.blue-border    { background-color: #bbdefb; }
-
-/* green highlight for successful entries */
-.green-border   { background-color: #C8E6C9; }
-
-
-/* break out the radio incoming-feedback table */
-#incoming-feedback,
-#rb-feedback-container > table {
-  position: relative;
-  left:  50%;
-  right: 50%;
-  width: 100vw;
-  margin-left:  -50vw;
-  margin-right: -50vw;
-  box-sizing: border-box;
-  padding: 0 1rem; /* optional gutter */
-}
-
-/* Faux header and clock: same line alignment */
-/* ── Page-header faux-header ───────────────────────── */
-.page-header-bar {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;    /* keep the clock on the same text-baseline */
-  margin-bottom: 1rem;      /* space before the table */
-}
-
-.page-header-bar .page-title {
-  /* mimic an <h2> without newline behaviorr */
-  font-size: 1.5rem;        /* same as your H2 size */
-  font-weight: bold;        /* bold like a header */
-  margin: 0;
-}
-
-.page-header-bar .clock {
-  font-size: 1.5rem;        /* match the title size exactly */
-  font-weight: normal;      /* but not bold */
-  color: var(--muted);      /* a subtler shade */
-  margin: 0;
-}
-
-/* ───────────────────────────────────────────────────────────────
-   Mobile optimization: Ramp Boss & Nav for narrow screens (≤600px)
-   ─────────────────────────────────────────────────────────────── */
-@media (max-width: 600px) {
-  /* ramp boss container fills the screen */
-  .ramp-form-container {
-    max-width: 100%;
-    margin: 0.5rem auto;
-    padding: 0.5rem;
-  }
-
-  /* switch to one‐column form */
-  .ramp-form-container form {
-    display: block;
-  }
-  .ramp-form-container form > label {
-    display: block;
-    margin: 0.5rem 0 0.25rem;
-    font-weight: bold;
-  }
-
-  /* stack controls full-width */
-  .ramp-form-container form input,
-  .ramp-form-container form select,
-  .ramp-form-container form textarea,
-  .ramp-form-container form .radio-toggle,
-  .ramp-form-container form .lookup-row,
-  .ramp-form-container form button[type="button"] {
-    display: block;
-    width: 100%;
-    margin-bottom: 0.75rem;
-  }
-
-  /* lookup‐row wraps neatly */
-  .ramp-form-container .lookup-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
-  .ramp-form-container .lookup-row button {
-    flex: 0 0 auto;
-  }
-
-  /* nav wraps onto multiple lines */
-  .main-nav {
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
-
-  /* Preferences form → single‐column on mobile */
-  .container.preferences {
-    max-width: 100%;
-    margin: 0.5rem auto;
-    padding: 0.5rem;
-  }
-  .container.preferences form {
-    display: block;
-  }
-  .container.preferences form > label {
-    display: block;
-    margin: 0.5rem 0 0.25rem;
-    font-weight: bold;
-  }
-  .container.preferences form input,
-  .container.preferences form select,
-  .container.preferences form textarea,
-  .container.preferences form button {
-    display: block;
-    width: 100%;
-    margin-bottom: 0.75rem;
-  }
-
-}
-/* ──────────────────────────────────────────────────────────────
-   Radio page: larger Winlink-body textarea + allow vertical resize
-────────────────────────────────────────────────────────────── */
-#incoming-form textarea[name="body"] {
-  /* start out taller (6× a normal line) */
-  min-height: 8rem;
-  /* but never exceed half the viewport */
-  max-height: 50vh;
-  /* still let the user drag it if they want */
-  resize: vertical;
-  overflow: auto;
-}
-
-/* ──────────────────────────────────────────────────────────────
-    Preferences page: kill its top margin & pull it up under the header
- ─────────────────────────────────────────────────────────────── */
-body.preferences {
-  margin: 0 !important;
-}
-
-/* less “buffer” under the sticky header on prefs */
-body.preferences main.container {
-  padding-top: 1rem;  /* instead of 3.5rem */
-}
-
-/* ──────────────────────────────────────────────────────────────
-    Ramp Boss page: improvements for missing required fields
- ─────────────────────────────────────────────────────────────── */
-
-/* turn any required-but-empty field red */
-.ramp-form-container input:required:invalid,
-.ramp-form-container select:required:invalid {
-  border-color: #d33;
-  background: #ffecec;
-}
-
-/* the little error message under the submit button */
-#rb-form .form-error {
-  color: #d33;
-  margin-top: 0.5rem;
-  font-size: 0.9rem;
-}
-
-
-/* ── heartbeat: tint whole UI red while offline ───────────── */
-body.offline {
-  background: #ff4242 !important;
-  transition: background 0.3s;
-}
-
-/* ──────────────────────────────────────────────────────────────
-   Toast container & individual toasts
-────────────────────────────────────────────────────────────── */
-#toast-container {
-  position: fixed;
-  top: 1rem;
-  right: 1rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  z-index: 2000;
-  pointer-events: none; /* clicks “through” to underlying UI */
-}
-.toast {
-  min-width: 200px;
-  padding: 0.75rem 1rem;
-  border-radius: var(--radius);
-  color: white;
-  opacity: 0;
-  transform: translateX(100%);
-  transition: opacity 0.3s ease, transform 0.3s ease;
-  pointer-events: auto;
-}
-.toast.show {
-  opacity: 1;
-  transform: translateX(0);
-}
-.toast.hide {
-  opacity: 0;
-  transform: translateX(100%);
-}
-/* semantic variants */
-.toast.success { background: #4caf50; }
-.toast.error   { background: #f44336; }
-.toast.info    { background: #2196f3; }
-/* ── Embedded-Tab form row in Admin ───────────────────────── */
-.container.admin-console .embedded-config {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
+.ramp-form-container button[type="submit"] {
+  grid-column: 1 / -1;
+  justify-self: stretch;
   margin-top: 1rem;
 }
-.container.admin-console .embedded-config input[type="text"] {
-  flex: 1;
-  /* match your other admin inputs: */
-  padding: 0.6em;
-  border: 1px solid #ccc;
-  border-radius: var(--radius);
+
+/* Radio-toggle */
+.ramp-form-container .radio-toggle {
+  display: inline-flex;
+  border: 1px solid #888;
+  border-radius: 4px;
+  overflow: hidden;
 }
- /* Cargo Weight Tools */
+.ramp-form-container .radio-toggle input { display: none; }
+.ramp-form-container .radio-toggle label {
+  padding: 6px 12px; cursor: pointer;
+  background: #f0f0f0; color: #333; user-select: none;
+  transition: background 0.15s, color 0.15s;
+}
+.ramp-form-container .radio-toggle label:hover { background: #e0e0e0; }
+.ramp-form-container .radio-toggle input:checked + label {
+  background: var(--table-head-bg); color: var(--table-head-fg);
+}
+
+/* Lookup row helper */
+.ramp-form-container .lookup-row { display: flex; gap: 0.5rem; align-items: center; }
+.ramp-form-container .lookup-row input { flex: 1; }
+.ramp-form-container .lookup-row button { flex: 0 0 auto; }
+
+/* Required field cues */
+.ramp-form-container input:required:invalid,
+.ramp-form-container select:required:invalid {
+  border-color: #d33; background: #ffecec;
+}
+
+/* Cargo Weight “tools” panel */
 .cargo-tools-toggle {
   grid-column: 2;
   margin-top: 0.5rem;
-  display: flex;
-  gap: 0.5rem;
+  display: flex; gap: 0.5rem;
 }
 .cargo-tools-panel {
   display: none;
   border: 1px solid #ccc;
-  padding: 1rem;
-  margin-top: 1rem;
-  background: #fff;
-  border-radius: var(--radius);
-  /* center all panel content */
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
+  padding: 1rem; margin-top: 1rem;
+  background: #fff; border-radius: var(--radius);
+  flex-direction: column; align-items: center; text-align: center;
 }
- /* full‑screen takeover when body.cw-active */
- body.cw-active #cargo-tools-panel {
-   display: flex !important;      /* now actually turn it on */
-   position: fixed;
-   top:    3.5rem;
-   left:   50%;
-   transform: translateX(-50%);
-   width:  min(480px, 90vw);
-   bottom: 2.5rem;
-   background: var(--bg);
-   z-index: 2000;
-   padding: 2rem;
-   overflow-y: auto;
- }
-.cw-button {
-  width: 2.5em;
-  height: 2.5em;
-  border: none;
-  color: #fff;
-  font-size: 1.25em;
-  border-radius: var(--radius);
-  cursor: pointer;
-}
-.cw-minus { background: #d33; }
-.cw-plus  { background: #4caf50; }
-#cw-change {
-  /* minimum width ≈ 14 characters */
-  min-width: 14ch;
-  padding: 0.5em;
-  text-align: right;
-}
-.cw-minus:disabled {
-  /* lighter “minus” when disabled */
-  background: rgba(211,51,51,0.3);
-  cursor: not-allowed;
-}
-#cw-history {
-  max-height: 8em;
-  overflow-y: auto;
-  margin-bottom: 0.5rem;
-  font-size: 0.9em;
-  color: var(--muted);
-}
-#cw-total {
-  font-weight: bold;
-  margin-bottom: 0.5rem;
-}
-
-/* full-page takeover: hide all ramp-form children except the tools panel */
-body.cw-active .ramp-form-container > :not(#cargo-tools-panel) {
-  display: none !important;
-}
-
-/* panel fills the viewport between header and footer */
+/* Full-screen takeover when body.cw-active */
 body.cw-active #cargo-tools-panel {
-  display: block !important;
+  display: flex !important;
   position: fixed;
-  top:    3.5rem;                   /* just under the navbar */
-  /* center panel, constrain width */
-  left:   50%;
-  transform: translateX(-50%);
+  top: 3.5rem;
+  left: 50%; transform: translateX(-50%);
   width: min(480px, 90vw);
-  bottom: 2.5rem;                   /* just above the footer */
+  bottom: 2.5rem;
   background: var(--bg);
   z-index: 2000;
   padding: 2rem;
   overflow-y: auto;
 }
+/* Hide the rest of the form during takeover */
+body.cw-active .ramp-form-container > :not(#cargo-tools-panel) { display: none !important; }
 
-/* ──────────────────────────────────────────────────────────────
-   Advanced Inventory Panel (Ramp Boss)
-   ────────────────────────────────────────────────────────────── */
+.cw-button { width: 2.5em; height: 2.5em; border: none; color: #fff; font-size: 1.25em; border-radius: var(--radius); cursor: pointer; }
+.cw-minus { background: #d33; }
+.cw-plus  { background: #4caf50; }
+#cw-change { min-width: 14ch; padding: 0.5em; text-align: right; }
+.cw-minus:disabled { background: rgba(211,51,51,0.3); cursor: not-allowed; }
+#cw-history { max-height: 8em; overflow-y: auto; margin-bottom: 0.5rem; font-size: 0.9em; color: var(--muted); }
+#cw-total { font-weight: bold; margin-bottom: 0.5rem; }
+
+/* Advanced Inventory Panel (Ramp Boss) */
 #adv-panel {
-  display: none;           /* revealed by JS             */
+  display: none;           /* toggled by JS */
   position: fixed;
-  /* fill the viewport between sticky header & footer */
-  top:    3.5rem;          /* header height               */
-  bottom: 2.5rem;          /* footer height               */
-  left:   50%;
-  transform:translateX(-50%);
-  width:  80vw;            /* 80% of full-bleed width  */
+  top: 3.5rem; bottom: 2.5rem;
+  left: 50%; transform: translateX(-50%);
+  width: 80vw;
   overflow-y: auto;
   background: #fff;
   z-index: 1500;
@@ -761,86 +393,21 @@ body.cw-active #cargo-tools-panel {
   box-shadow: 0 0 15px rgba(0,0,0,0.2);
   box-sizing: border-box;
 }
+#ramp-boss-form.hidden { display: none; }
 
-/* When advanced panel is active, hide the main ramp boss form */
-#ramp-boss-form.hidden {
-  display: none;
-}
-
-/* Responsive adjustments for narrow screens (≤600px) */
-@media (max-width: 600px) {
-  #adv-panel {
-    left: 0;
-    width: 100%;
-    padding: 1rem;
-  }
-}
-/* separator between metrics */
-.metrics-overview {
-  display: flex;
-  align-items: center;
-}
-.metrics-overview .delimiter {
-  width: 1px;
-  background: #ccc;
-  height: 4rem;
-  margin: 0 1rem;
-}
-
-/* inbox modal */
-.modal {
-  position: fixed;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(0,0,0,0.4);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.modal-window {
+/* ===============================================================
+   Page: Wargame – Role Chooser
+   =============================================================== */
+.wg-role-form { width: 100%; max-width: 1080px; margin: 0 auto; }
+.wg-role-fieldset {
+  width: 100%;
+  border: 1px solid #ddd;
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin: 0 auto;
   background: #fff;
-  padding: 1rem;
-  border-radius: 4px;
-  width: 80%;
-  max-width: 600px;
-  position: relative;
 }
-.modal-window .close-modal {
-  position: absolute;
-  top: .5rem; right: .5rem;
-  background: none; border: none; font-size: 1.2rem;
-  cursor: pointer;
-}
-.card-container {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1rem;
-  margin-top: 1rem;
-}
-.card {
-  border: 1px solid #ccc;
-  border-radius: 0.5rem;
-  padding: 0.75rem;
-  background: #fafafa;
-  width: 280px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-}
-.card ul { margin: .5rem 0 0 1rem; }
-.card .item.done { opacity: .55; text-decoration: line-through; }
-.separator {
-  margin: 2rem 0;
-  border: none;
-  border-top: 1px solid #ddd;
-}
-/* --- Wargame role chooser --- */
-.wg-role-form { width:100%; max-width: 1080px; margin: 0 auto; }
-.wg-role-fieldset{
-  width:100%;
-  border:1px solid #ddd;
-  border-radius:12px;
-  padding:12px 16px;        /* add breathing room */
-  margin: 0 auto;           /* keep centered inside the container */
-  background:#fff;
-}
+
 .role-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px,1fr));
@@ -848,12 +415,25 @@ body.cw-active #cargo-tools-panel {
   margin: .5rem 0 1rem;
 }
 .role-card {
-  display: flex; gap: .6rem; align-items: flex-start;
-  border: 1px solid #ddd; border-radius: 10px; background: #fff;
-  padding: 12px; box-shadow: 0 1px 2px rgba(0,0,0,.04);
+  display: block; cursor: pointer;
+  border: 1px solid #ddd; border-radius: 8px;
+  padding: 0.9rem 1rem; background: #f9fafb;
+  transition: box-shadow 120ms ease, background-color 120ms ease, border-color 120ms ease;
+  position: relative;
 }
-.role-card h3 { margin: 0; font-size: 1rem; }
-.role-card p  { margin: .25rem 0 0; color: #555; font-size: .9rem; }
+.role-card:hover { box-shadow: 0 1px 6px rgba(0,0,0,.06); }
+.role-card.selected {
+  outline: 2px solid #d1a500;
+  background: #fffbe6;
+  border-color: #e5cf76;
+}
+.role-card h3 { margin: 0 0 .25rem 0; font-weight: 600; font-size: 1rem; }
+.role-card p  { margin: 0; color: #333; font-size: .9rem; }
+
+/* hide native radios, rely on card selection */
+.role-picker input[type="radio"] { position: absolute; left: -9999px; }
+
+/* Supervisor settings panel (on chooser) */
 .super-panel { margin-top: .5rem; padding-top: .75rem; border-top: 1px solid #eee; }
 .super-panel h3 { margin: .25rem 0 .5rem; }
 .super-panel .form-row {
@@ -861,21 +441,165 @@ body.cw-active #cargo-tools-panel {
   align-items: center; gap: .5rem; margin: .35rem 0;
 }
 .super-panel input[type="number"] { width: 120px; }
-.actions { margin-top: .75rem; }
-.actions.right { display:flex; justify-content:flex-end; }
-.btn.yellow{
-  background:#FFEB3B;       /* Google yellow 500 */
-  border:1px solid #FBC02D; /* 700 for contrast */
-  color:#333;
-  padding:.5rem .9rem;
-  border-radius:6px;
-  cursor:pointer;
+
+/* Optionally used role grid legacy styles */
+.wg-chooser {
+  max-width: 980px; margin: 0 auto;
+  border: 1px solid #ddd; padding: 1rem 1.25rem;
+  border-radius: 8px; background: #fff;
 }
-.btn.yellow:hover{ filter: brightness(1.03); }
-/* Floating "Exit Role" action (bottom-right) */
-.wg-exit {
-  position: fixed;
-  right: 24px;
-  bottom: 24px;
-  z-index: 1000;
+.role-grid {
+  display: grid; gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+/* ===============================================================
+   Page: Wargame – Shared Inventory UI (cards/lists/progress)
+   =============================================================== */
+.wg-intro { margin-bottom: 1rem; }
+.wg-sections { display: grid; gap: 1.25rem; grid-template-columns: 1fr; }
+@media (min-width: 900px) { .wg-sections { grid-template-columns: 1fr 1fr; } }
+.wg-section-title { margin: 0 0 .5rem 0; }
+
+/* Card chrome */
+.wg-card {
+  border: 1px solid #e3e3e3;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0,0,0,.04);
+}
+.wg-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: .75rem 1rem;
+  border-bottom: 1px solid #eee;
+  background: #fafafa;
+}
+.wg-card-title { font-weight: 600; }
+.wg-card-meta  { font-size: .9rem; color: #666; }
+.wg-badge {
+  display: inline-block; margin-left: .5rem;
+  font-size: .85rem; padding: .1rem .45rem; border-radius: 999px;
+  border: 1px solid #ddd; color: #555; background: #f6f6f6;
+}
+
+/* Lines + progress */
+.wg-lines { margin: 0; padding: .5rem 1rem 1rem 1.25rem; list-style: disc; }
+.wg-line  { margin: .25rem 0; }
+.wg-line.complete { color: #888; text-decoration: line-through; } /* fully satisfied */
+.wg-progress { color: #666; font-size: .9rem; }                    /* partial status */
+
+/* Exit Role: right-aligned in normal flow (sits above footer) */
+.wg-exit-form {
+  display: flex;
+  justify-content: flex-end;
+  margin: 1.5rem 0 0;
+  padding-bottom: 1rem; /* breathing room above footer */
+}
+
+/* Optional legacy batch card chrome (kept for compatibility) */
+.wg-batch-card {
+  border: 1px solid #e3e3e3;
+  border-radius: 8px;
+  padding: .75rem 1rem;
+  background: #fff;
+  margin-bottom: .75rem;
+}
+.wg-batch-head {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: .5rem;
+  font-weight: 600;
+}
+
+/* ===============================================================
+   Page: Wargame – Supervisor layout helpers
+   =============================================================== */
+.metrics-overview { display: flex; align-items: center; }
+.metrics-overview .delimiter {
+  width: 1px; background: #ccc; height: 4rem; margin: 0 1rem;
+}
+.super-metrics {
+  display: flex; flex-wrap: wrap; gap: 1rem; align-items: center;
+  justify-content: center; /* centers the three tiles */
+}
+.super-metrics .metric { min-width: 220px; text-align: center; }
+.super-metrics .throughput { margin-left: auto; text-align: left; }
+
+/* ===============================================================
+   Modals (generic)
+   =============================================================== */
+.modal {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.4);
+  display: flex; align-items: center; justify-content: center;
+}
+.modal-window {
+  background: #fff; padding: 1rem; border-radius: 4px;
+  width: 80%; max-width: 600px; position: relative;
+}
+.modal-window .close-modal {
+  position: absolute; top: .5rem; right: .5rem;
+  background: none; border: none; font-size: 1.2rem; cursor: pointer;
+}
+
+/* Simple cards (generic/legacy) */
+.card-container { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1rem; }
+.card { border: 1px solid #ccc; border-radius: .5rem; padding: .75rem; background: #fafafa; width: 280px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+.card ul { margin: .5rem 0 0 1rem; }
+.card .item.done { opacity: .55; text-decoration: line-through; }
+.separator { margin: 2rem 0; border: none; border-top: 1px solid #ddd; }
+
+/* ===============================================================
+   Page Header (clock + title)
+   =============================================================== */
+.page-header-bar {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-bottom: 1rem;
+}
+.page-header-bar .page-title { font-size: 1.5rem; font-weight: bold; margin: 0; }
+.page-header-bar .clock { font-size: 1.5rem; color: var(--muted); margin: 0; }
+
+/* ===============================================================
+   Responsive (mobile-first tweaks ≤ 600px)
+   =============================================================== */
+@media (max-width: 600px) {
+  /* Ramp Boss: one-column stack */
+  .ramp-form-container { max-width: 100%; margin: 0.5rem auto; padding: 0.5rem; }
+  .ramp-form-container form { display: block; }
+  .ramp-form-container form > label {
+    display: block; margin: 0.5rem 0 0.25rem; font-weight: bold;
+  }
+  .ramp-form-container form input,
+  .ramp-form-container form select,
+  .ramp-form-container form textarea,
+  .ramp-form-container form .radio-toggle,
+  .ramp-form-container form .lookup-row,
+  .ramp-form-container form button[type="button"] {
+    display: block; width: 100%; margin-bottom: 0.75rem;
+  }
+  .ramp-form-container .lookup-row { flex-wrap: wrap; gap: 0.5rem; }
+  .ramp-form-container .lookup-row button { flex: 0 0 auto; }
+
+  /* Nav wraps neatly */
+  .main-nav { flex-wrap: wrap; gap: 0.5rem; }
+
+  /* Preferences → single column */
+  .container.preferences { max-width: 100%; margin: 0.5rem auto; padding: 0.5rem; }
+  .container.preferences form { display: block; }
+  .container.preferences form > label {
+    display: block; margin: 0.5rem 0 0.25rem; font-weight: bold;
+  }
+  .container.preferences form input,
+  .container.preferences form select,
+  .container.preferences form textarea,
+  .container.preferences form button {
+    display: block; width: 100%; margin-bottom: 0.75rem;
+  }
+
+  /* Advanced Inventory panel full-width on narrow screens */
+  #adv-panel { left: 0; transform: none; width: 100%; padding: 1rem; }
+
+  /* Wargame inventory sections naturally stack already (1fr) */
 }

@@ -1,96 +1,94 @@
-{% extends 'base.html' %}
-{% block content %}
-<div class="container wargame-radio">
-  <h1>📨 Radio Operator Inbox</h1>
-  <table class="winlink-inbox">
-    <thead>
-      <tr>
-        <th>Date / Time (UTC)</th>
-        <th>Msg ID</th>
-        <th>Size (bytes)</th>
-        <th>Source</th>
-        <th>Sender</th>
-        <th>Recipient</th>
-        <th>Subject</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for email in emails %}
-      <tr class="{% if not email.read %}unread{% endif %}">
-        <td>{{ email.generated_at }}</td>
-        <td>{{ email.message_id }}</td>
-        <td>{{ email.size_bytes }}</td>
-        <td>{{ email.source }}</td>
-        <td>{{ email.sender }}</td>
-        <td>{{ email.recipient }}</td>
-        <td>
-          <a href="#" class="open-email" data-id="{{ email.id }}">
-            {{ email.subject }}
-          </a>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+{% extends "base.html" %}
+{% block title %}Wargame · Radio Inbox{% endblock %}
 
-  <!-- modal window -->
-  <div id="email-modal" class="modal" style="display:none;">
-    <div class="modal-window">
-      <button class="close-modal">✖</button>
-      <pre id="email-content"></pre>
-    </div>
-  </div>
+{% block content %}
+<div class="container">
+  <h1>Wargame — Radio Inbox</h1>
+
+  {% if emails|length == 0 %}
+    <p>No messages yet.</p>
+  {% else %}
+    <table class="table table-striped wg-radio-table">
+      <thead>
+        <tr>
+          <th style="white-space:nowrap;">Received (UTC)</th>
+          <th>From → To</th>
+          <th>Subject</th>
+          <th style="text-align:right;">Size</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for e in emails %}
+        <tr class="wg-email{% if e.read %} read{% endif %}">
+          <td class="when" style="white-space:nowrap;">{{ e.generated_at }}</td>
+          <td class="from">{{ e.sender }} → {{ e.recipient }}</td>
+          <td class="subject">
+            <a href="#" class="open-email" data-email-id="{{ e.id }}">{{ e.subject }}</a>
+          </td>
+          <td class="size" style="text-align:right;">{{ e.size_bytes }} B</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+
+  <!-- Exit role (kept in normal flow; positioning via global .wg-exit-form CSS) -->
+  <form class="wg-exit-form" method="post"
+        action="{{ url_for('wargame_exit_role') }}"
+        onsubmit="return confirm('Exit your role and choose a new one?');">
+    <button type="submit" class="btn btn-yellow">Exit role</button>
+  </form>
 </div>
 
-<form id="wg-exit-form"
-      class="wg-exit"
-      method="post"
-      action="{{ url_for('wargame_exit_role') }}"
-      onsubmit="return confirm('Exit your Wargame role and choose a new one?');">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <button type="submit" class="btn btn-yellow">Exit Role</button>
-</form>
-{% endblock %}
+<!-- Lightweight email viewer -->
+<dialog id="emailDialog">
+  <form method="dialog" class="email-modal">
+    <h3 id="emailSubject" style="margin:0 0 .5rem 0;"></h3>
+    <pre id="emailBody" style="white-space:pre-wrap; max-height:50vh; overflow:auto; margin:0;"></pre>
+    <div style="text-align:right; margin-top:.75rem;">
+      <button class="btn">Close</button>
+    </div>
+  </form>
+</dialog>
 
-<!-- inline script to handle modal open/close and mark‐read cookie -->
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-  const modal    = document.getElementById('email-modal');
-  const content  = document.getElementById('email-content');
-  const closeBtn = modal.querySelector('.close-modal');
+(function(){
+  const dlg  = document.getElementById('emailDialog');
+  const subj = document.getElementById('emailSubject');
+  const body = document.getElementById('emailBody');
 
-  document.querySelectorAll('.open-email').forEach(link => {
-    link.addEventListener('click', async e => {
-      e.preventDefault();
-      const id = link.dataset.id;
-      const res  = await fetch(
-        `{{ url_for('fetch_wargame_email', email_id=0) }}`.replace('0', id)
-      );
-      const data = await res.json();
-      content.textContent = `Subject: ${data.subject}\n\n${data.body}`;
-      modal.style.display = 'flex';
-      if (window.blockRefresh) window.blockRefresh(true);
+  function getCookie(name){
+    const m = document.cookie.match(new RegExp('(?:^|;\\s*)' + name + '=([^;]*)'));
+    return m ? decodeURIComponent(m[1]) : '';
+  }
+  function setCookie(name, value){
+    document.cookie = name + '=' + encodeURIComponent(value) +
+                      '; Max-Age=31536000; Path=/; SameSite=Lax';
+  }
+  function markRead(id, row){
+    const current = getCookie('wargame_emails_read');
+    const set = new Set((current ? current.split(',') : []).filter(Boolean));
+    set.add(String(id));
+    setCookie('wargame_emails_read', Array.from(set).join(','));
+    if (row) row.classList.add('read');
+  }
 
-      // mark as read
-      let seen = (document.cookie.match(/(?:^|; )wargame_emails_read=([^;]+)/)||[])[1]||'';
-      let ids  = seen ? seen.split(',') : [];
-      if (!ids.includes(id)) {
-        ids.push(id);
-        document.cookie =
-          `wargame_emails_read=${ids.join(',')}; Path=/; Max-Age=${60*60*24*365}`;
-      }
-      link.closest('tr').classList.remove('unread');
+  document.querySelectorAll('.open-email').forEach(a => {
+    a.addEventListener('click', ev => {
+      ev.preventDefault();
+      const id  = a.dataset.emailId;
+      const row = a.closest('tr');
+      fetch(`/wargame/radio/email/${id}`)
+        .then(r => r.ok ? r.json() : Promise.reject(r.status))
+        .then(data => {
+          subj.textContent = data.subject || '(no subject)';
+          body.textContent = data.body || '';
+          if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open','open');
+          markRead(id, row);
+        })
+        .catch(() => {/* no-op */});
     });
   });
-
-  function closeModal(){
-    modal.style.display = 'none';
-    if (window.blockRefresh) {
-      window.blockRefresh(false);
-      if (window.requestRefreshIfPending) window.requestRefreshIfPending();
-    }
-  }
-  closeBtn.addEventListener('click', closeModal);
-  modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
-});
+})();
 </script>
+{% endblock %}

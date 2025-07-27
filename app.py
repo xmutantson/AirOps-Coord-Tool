@@ -1603,9 +1603,21 @@ def generate_cargo_manifest():
 def generate_ramp_request():
     """
     Generate a cargo *request* destined to a remote airport (appears on
-    Wargame → Ramp as a cue card). Ramp Boss will satisfy it by creating
-    an outbound flight in the normal Ramp UI.
+    Wargame → Ramp as a cue card). Enforces max_ramp cap and guarantees
+    a non-empty manifest.
     """
+    # enforce cap
+    settings_row = dict_rows("SELECT value FROM preferences WHERE name='wargame_settings'")
+    settings  = json.loads(settings_row[0]['value'] or '{}') if settings_row else {}
+    max_ramp  = int(settings.get('max_ramp', 3) or 3)
+    open_cnt  = dict_rows("""
+        SELECT COUNT(*) AS c
+          FROM wargame_ramp_requests
+         WHERE satisfied_at IS NULL
+    """)[0]['c'] or 0
+    if open_cnt >= max_ramp:
+        return
+
     ts = datetime.utcnow().isoformat()
     # choose destination ≠ our origin (if set)
     pref   = dict_rows("SELECT value FROM preferences WHERE name='default_origin'")
@@ -1615,14 +1627,16 @@ def generate_ramp_request():
 
     manifest, total_wt, _ = generate_cargo_manifest()
     if not total_wt:
-        # guarantee non-zero ask
+        # guarantee a non-zero ask & a manifest line
         total_wt = random.choice([200, 400, 600])
+        manifest = f"general cargo {int(total_wt)} lb×1"
 
     with sqlite3.connect(DB_FILE) as c:
         c.execute("""
           INSERT INTO wargame_ramp_requests(created_at, destination, requested_weight, manifest)
           VALUES (?,?,?,?)
-        """, (ts, destination, float(total_wt), manifest or ''))
+        """, (ts, destination, float(total_wt), manifest))
+
 
 def _parse_manifest(manifest: str):
     """
@@ -2048,88 +2062,72 @@ def wargame_task_finish(role: str, kind: str, key: str) -> bool:
     return True
 
 def configure_wargame_jobs():
-    """
-    (Re)configure all Wargame-mode background jobs according
-    to the Supervisor’s settings in preferences.wargame_settings.
-    """
-    with _CONFIGURE_WG_LOCK:
-        # Clear any existing jobs (idempotent)
-        try:
-            scheduler.remove_all_jobs()
-        except Exception:
-            pass
+    # clear out any existing jobs
+    scheduler.remove_all_jobs()
 
-        # Always dispatch due radio messages every minute
+    # always dispatch due radio messages every minute
+    scheduler.add_job(
+        func=process_radio_schedule,
+        trigger='interval',
+        seconds=60,
+        id='job_radio_dispatch',
+        replace_existing=True
+    )
+
+    # load supervisor settings
+    settings_row = dict_rows("SELECT value FROM preferences WHERE name='wargame_settings'")
+    settings = json.loads(settings_row[0]['value'] or '{}')
+
+    radio_rate = float(settings.get('radio_rate', 0) or 0)
+    if radio_rate > 0:
         scheduler.add_job(
-            func=process_radio_schedule,
+            func=generate_radio_message,
             trigger='interval',
-            seconds=60,
-            id='job_radio_dispatch',
-            replace_existing=True,
+            seconds=max(5, 3600.0 / radio_rate),
+            id='job_radio',
+            replace_existing=True
         )
 
-        # Load supervisor settings
-        settings_row = dict_rows(
-            "SELECT value FROM preferences WHERE name='wargame_settings'"
-        )
-        settings = json.loads(settings_row[0]['value'] or '{}') if settings_row else {}
-
-        # Radio message generation
-        radio_rate = float(settings.get('radio_rate', 0) or 0)
-        if radio_rate > 0:
-            scheduler.add_job(
-                func=generate_radio_message,
-                trigger='interval',
-                seconds=3600.0 / radio_rate,
-                id='job_radio',
-                replace_existing=True,
-            )
-
-        # Inventory batches (outbound)
-        inv_out_rate = float(settings.get('inv_out_rate', settings.get('inv_rate', 0) or 0) or 0)
-        if inv_out_rate > 0:
-            scheduler.add_job(
-                func=generate_inventory_outbound_request,
-                trigger='interval',
-                seconds=3600.0 / inv_out_rate,
-                id='job_inventory_out',
-                replace_existing=True,
-            )
-
-        # Inventory batches (inbound)
-        inv_in_rate = float(settings.get('inv_in_rate', settings.get('inv_rate', 0) or 0) or 0)
-        if inv_in_rate > 0:
-            scheduler.add_job(
-                func=generate_inventory_inbound_delivery,
-                trigger='interval',
-                seconds=3600.0 / inv_in_rate,
-                id='job_inventory_in',
-                replace_existing=True,
-            )
-
-        # Ramp requests
-        ramp_rate = float(settings.get('ramp_rate', 0) or 0)
-        if ramp_rate > 0:
-            scheduler.add_job(
-                func=generate_ramp_request,
-                trigger='interval',
-                seconds=3600.0 / ramp_rate,
-                id='job_ramp_requests',
-                replace_existing=True,
-            )
-
-        # Remote confirmations (always on)
+    inv_out_rate = float(settings.get('inv_out_rate', settings.get('inv_rate', 0) or 0) or 0)
+    if inv_out_rate > 0:
         scheduler.add_job(
-            func=process_remote_confirmations,
+            func=generate_inventory_outbound_request,
             trigger='interval',
-            seconds=60,
-            id='job_remote_confirm',
-            replace_existing=True,
+            seconds=max(5, 3600.0 / inv_out_rate),
+            id='job_inventory_out',
+            replace_existing=True
         )
 
-        # Start the scheduler if not already running
-        if scheduler.state != STATE_RUNNING:
-            scheduler.start()
+    inv_in_rate = float(settings.get('inv_in_rate', settings.get('inv_rate', 0) or 0) or 0)
+    if inv_in_rate > 0:
+        scheduler.add_job(
+            func=generate_inventory_inbound_delivery,
+            trigger='interval',
+            seconds=max(5, 3600.0 / inv_in_rate),
+            id='job_inventory_in',
+            replace_existing=True
+        )
+
+    ramp_rate = float(settings.get('ramp_rate', 0) or 0)
+    if ramp_rate > 0:
+        scheduler.add_job(
+            func=generate_ramp_request,
+            trigger='interval',
+            seconds=max(5, 3600.0 / ramp_rate),
+            id='job_ramp_requests',
+            replace_existing=True
+        )
+
+    scheduler.add_job(
+        func=process_remote_confirmations,
+        trigger='interval',
+        seconds=60,
+        id='job_remote_confirm',
+        replace_existing=True
+    )
+
+    if scheduler.state != STATE_RUNNING:
+        scheduler.start()
 
 # ───────────────── routes ─────────────────────────────────
 
