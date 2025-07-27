@@ -1394,6 +1394,17 @@ def wargame_task_start_once(role: str, kind: str, key: str, gen_at: str, sched_f
         return
     wargame_task_start(role=role, kind=kind, key=key, gen_at=gen_at, sched_for=sched_for)
 
+def _reset_autoincrements(names: list[str]) -> None:
+    """Best‑effort reset of AUTOINCREMENT counters (SQLite keeps them after DELETE)."""
+    try:
+        with sqlite3.connect(DB_FILE) as c:
+            for n in names:
+                c.execute("DELETE FROM sqlite_sequence WHERE name=?", (n,))
+    except Exception:
+        # Ignore on engines without sqlite_sequence or non‑AUTOINCREMENT tables.
+        pass
+
+
 def set_wargame_epoch(epoch=None) -> int:
     """
     Persist a stable epoch for the current Wargame run.
@@ -1422,7 +1433,6 @@ def get_wargame_epoch() -> int:
 def reset_wargame_state():
     """
     Wipe transient Wargame queues so a fresh run starts clean.
-    Adjust table names if yours differ.
     Note: delete child rows before parent rows.
     """
     with sqlite3.connect(DB_FILE) as c:
@@ -1432,10 +1442,55 @@ def reset_wargame_state():
         cur.execute("DELETE FROM wargame_radio_schedule")
         # Ramp
         cur.execute("DELETE FROM wargame_ramp_requests")
+        cur.execute("DELETE FROM wargame_inbound_schedule")
         # Inventory (batch items, then batches)
         cur.execute("DELETE FROM wargame_inventory_batch_items")
         cur.execute("DELETE FROM wargame_inventory_batches")
         c.commit()
+    # Reset AUTOINCREMENT counters so new runs start from 1 again.
+    _reset_autoincrements([
+        'wargame_emails',
+        'wargame_radio_schedule',
+        'wargame_ramp_requests',
+        'wargame_inbound_schedule',
+        'wargame_inventory_batches',
+        'wargame_inventory_batch_items',
+        'wargame_tasks'
+    ])
+
+def seed_wargame_baseline_inventory():
+    """
+    Seed some shelf stock so outbound requests and Ramp can be fulfilled from the start.
+    Quantities are modest and use the canonical nouns/sizes from WARGAME_ITEMS.
+    """
+    stock = [
+        ('emergency supplies', 'batteries', 10,  12),
+        ('emergency supplies', 'batteries', 25,   8),
+        ('food',               'beans',     25,  10),
+        ('food',               'rice',      20,  10),
+        ('medical supplies',   'bandages',   5,  20),
+        ('water',              'water',     20,  20),
+    ]
+    with sqlite3.connect(DB_FILE) as c:
+        # lookup category IDs by display_name (seed_default_categories already ran)
+        rows = dict_rows("SELECT id, display_name FROM inventory_categories")
+        name_to_id = {r['display_name'].lower(): r['id'] for r in rows}
+        ts = datetime.utcnow().isoformat()
+        for cat_name, noun, size_lb, qty in stock:
+            cid = name_to_id.get(cat_name.lower())
+            if not cid: 
+                continue
+            c.execute("""
+              INSERT INTO inventory_entries(
+                category_id,raw_name,sanitized_name,
+                weight_per_unit,quantity,total_weight,
+                direction,timestamp,pending
+              ) VALUES (?,?,?,?,?,?, 'in', ?, 0)
+            """, (
+              cid, noun, noun,
+              float(size_lb), int(qty), float(size_lb)*int(qty),
+              ts
+            ))
 
 def generate_radio_message():
     """Enqueue a synthetic radio email into the schedule (batch or immediate)."""
@@ -1669,9 +1724,12 @@ def generate_ramp_request():
 
     manifest, total_wt, _ = generate_cargo_manifest()
     if not total_wt:
-        # guarantee a non-zero ask & a manifest line
-        total_wt = random.choice([200, 400, 600])
-        manifest = f"general cargo {int(total_wt)} lb×1"
+        # guarantee a concrete line from catalog instead of "general cargo"
+        name, sizes = random.choice(list(WARGAME_ITEMS.items()))
+        size = random.choice(sizes)
+        qty  = random.randint(1, 4)
+        manifest = f"{name} {size} lb×{qty}"
+        total_wt = float(size * qty)
 
     with sqlite3.connect(DB_FILE) as c:
         c.execute("""
@@ -1855,14 +1913,34 @@ def generate_inventory_outbound_request():
     """)[0]['c'] or 0
     if pending >= max_inv:
         return
-    combos = random.sample([(n,s) for n,szs in WARGAME_ITEMS.items() for s in szs],
-                           k=random.randint(2,6))
+    # Build availability from committed entries only.
+    avail = dict_rows("""
+      SELECT c.id    AS cid,
+             e.sanitized_name AS noun,
+             e.weight_per_unit AS size_lb,
+             SUM(CASE WHEN e.direction='in'  THEN e.quantity
+                      WHEN e.direction='out' THEN -e.quantity END) AS qty
+        FROM inventory_entries e
+        JOIN inventory_categories c ON c.id=e.category_id
+       WHERE e.pending=0
+       GROUP BY c.id, e.sanitized_name, e.weight_per_unit
+       HAVING qty > 0
+    """)
+    if not avail:
+        return  # nothing on shelves → don't ask for outbound
+    # Choose 2..6 distinct (noun,size) with available qty > 0
+    import random as _r
+    picks = _r.sample(avail, k=min(len(avail), _r.randint(2,6)))
     lines = []
-    for name, size in combos:
-        qty = random.randint(1,5)
-        lines.append(f"{name} {size} lb×{qty}")
-    manifest = '; '.join(lines)
-    _create_inventory_batch('out', manifest, ts)
+    for r in picks:
+        have = int(r['qty'] or 0)
+        if have <= 0: 
+            continue
+        ask = _r.randint(1, have)  # do not exceed stock
+        lines.append(f"{r['noun']} {int(r['size_lb'])} lb×{ask}")
+    if not lines:
+        return
+    _create_inventory_batch('out', '; '.join(lines), ts)
 
 def generate_inventory_inbound_delivery():
     """Generate a multi-line inbound delivery batch (stuff 'arrived' that must be logged)."""
@@ -3642,11 +3720,14 @@ def admin():
                         c.execute(f"DELETE FROM {tbl}")
                 # Ensure schema is current after a wipe
                 run_migrations()
+                # Reset sequences and seed baseline inventory so requests are satisfiable.
+                _reset_autoincrements(WARGAME_TABLES + ['wargame_inventory_batches','wargame_inventory_batch_items','wargame_ramp_requests'])
 
                 # 2) regenerate callsigns and wire up the scheduler
                 initialize_airfield_callsigns()
                 reset_wargame_state()
                 set_wargame_epoch()
+                seed_wargame_baseline_inventory()
                 configure_wargame_jobs()
 
                 # 3) clear any stale role
@@ -3854,7 +3935,7 @@ def wargame_radio_dashboard():
     # 3) determine “read” state from an epoch‑namespaced cookie bitmask
     epoch = get_wargame_epoch()
     cookie_name = f"wargame_emails_read_{epoch}"
-    seen = request.cookies.get(cookie_name, '')  # e.g. "1,4,7"
+    seen = request.cookies.get(f"wargame_emails_read_{epoch}", '')  # e.g. "1,4,7"
     seen_ids = set(int(i) for i in seen.split(',') if i.isdigit())
     for e in emails:
         e['read'] = (e['id'] in seen_ids)

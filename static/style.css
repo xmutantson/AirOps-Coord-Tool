@@ -646,3 +646,28 @@ body.cw-active .ramp-form-container > :not(#cargo-tools-panel) { display: none !
 
   /* Wargame inventory sections naturally stack already (1fr) */
 }
+/* Supervisor: make difficulty/settings area narrower on 16:9 monitors */
+.super-settings { max-width: 540px; margin: 0 auto; }
+
+/* Wargame Radio inbox: unread/read cues */
+table.wg-inbox thead th { background: var(--table-head-bg); color: var(--table-head-fg); }
+table.wg-inbox .unread-dot {
+  display:inline-block; width:10px; height:10px; border-radius:50%; background:#c33;
+}
+table.wg-inbox tr.read .unread-dot { visibility:hidden; }
+table.wg-inbox tr.read { opacity: .8; }
+
+/* Radio modal */
+.wg-modal {
+  position: fixed;
+  width: min(800px, 92vw);
+  border: 1px solid #ccc; border-radius: 8px; padding: 0;
+}
+.wg-modal-header {
+  height: 36px; background: #fafafa; border-bottom: 1px solid #eee;
+  display:flex; align-items:center; justify-content:flex-end; padding: 0 .5rem;
+}
+.wg-modal-close { background: #c33; color: #fff; border: none; border-radius: 4px; width:28px; height:28px; font-size: 1.1rem; line-height: 1; cursor: pointer; }
+.wg-modal-body   { padding: 1rem; }
+.wg-modal-subject{ margin: 0 0 .5rem 0; }
+.wg-modal-pre    { white-space: pre-wrap; }

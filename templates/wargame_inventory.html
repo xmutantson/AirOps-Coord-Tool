@@ -24,12 +24,13 @@
             </div>
 
             {% if b.lines %}
-              <ul>
+              <ul class="wg-lines">
                 {% for line in b.lines %}
                   {% set done = (line.qty_done or 0) %}
                   {% set need = (line.qty_required or 0) %}
-                  <li class="item {% if need>0 and done >= need %}done{% endif %}">
-                    {{ line.name }} {{ (line.size_lb or 0)|round(0,'floor')|int }} lb × {{ need }}
+                  <li class="wg-line{% if need>0 and done >= need %} complete{% endif %}">
+                    {{ line.name }}
+                    {{ (line.size_lb or 0)|round(0,'floor')|int }} lb × {{ need }}
                     {% if done > 0 and done < need %}
                       <span class="wg-progress"> (done {{ done }} / {{ need }})</span>
                     {% endif %}
@@ -63,12 +64,13 @@
             </div>
 
             {% if b.lines %}
-              <ul>
+              <ul class="wg-lines">
                 {% for line in b.lines %}
                   {% set done = (line.qty_done or 0) %}
                   {% set need = (line.qty_required or 0) %}
-                  <li class="item {% if need>0 and done >= need %}done{% endif %}">
-                    {{ line.name }} {{ (line.size_lb or 0)|round(0,'floor')|int }} lb × {{ need }}
+                  <li class="wg-line{% if need>0 and done >= need %} complete{% endif %}">
+                    {{ line.name }}
+                    {{ (line.size_lb or 0)|round(0,'floor')|int }} lb × {{ need }}
                     {% if done > 0 and done < need %}
                       <span class="wg-progress"> (done {{ done }} / {{ need }})</span>
                     {% endif %}

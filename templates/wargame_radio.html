@@ -5,32 +5,34 @@
 <div class="container">
   <h1>Wargame — Radio Inbox</h1>
 
-  {% if emails|length == 0 %}
-    <p>No messages yet.</p>
-  {% else %}
-    <table class="table table-striped wg-radio-table">
-      <thead>
-        <tr>
-          <th style="white-space:nowrap;">Received (UTC)</th>
-          <th>From → To</th>
-          <th>Subject</th>
-          <th style="text-align:right;">Size</th>
-        </tr>
-      </thead>
-      <tbody>
-      {% for e in emails %}
-        <tr class="wg-email{% if e.read %} read{% endif %}">
-          <td class="when" style="white-space:nowrap;">{{ e.generated_at }}</td>
-          <td class="from">{{ e.sender }} → {{ e.recipient }}</td>
-          <td class="subject">
-            <a href="#" class="open-email" data-email-id="{{ e.id }}">{{ e.subject }}</a>
-          </td>
-          <td class="size" style="text-align:right;">{{ e.size_bytes }} B</td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  {% endif %}
+  <table class="table table-striped wg-radio-table">
+    <thead>
+      <tr>
+        <th style="width:1.5rem;"></th>
+        <th style="white-space:nowrap;">Received (UTC)</th>
+        <th>From → To</th>
+        <th>Subject</th>
+        <th style="text-align:right;">Size</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% if emails and emails|length > 0 %}
+        {% for e in emails %}
+          <tr class="wg-email{% if e.read %} read{% endif %}">
+            <td><span class="dot" title="Unread"></span></td>
+            <td class="when" style="white-space:nowrap;">{{ e.generated_at }}</td>
+            <td class="from">{{ e.sender }} → {{ e.recipient }}</td>
+            <td class="subject">
+              <a href="#" class="open-email" data-email-id="{{ e.id }}">{{ e.subject }}</a>
+            </td>
+            <td class="size" style="text-align:right;">{{ e.size_bytes }} B</td>
+          </tr>
+        {% endfor %}
+      {% else %}
+        <tr><td colspan="5" class="muted">No messages yet.</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
 
   <!-- Exit role (kept in normal flow; positioning via global .wg-exit-form CSS) -->
   <form class="wg-exit-form" method="post"
@@ -41,22 +43,47 @@
   </form>
 </div>
 
-<!-- Lightweight email viewer -->
-<dialog id="emailDialog">
-  <form method="dialog" class="email-modal">
-    <h3 id="emailSubject" style="margin:0 0 .5rem 0;"></h3>
-    <pre id="emailBody" style="white-space:pre-wrap; max-height:50vh; overflow:auto; margin:0;"></pre>
-    <div style="text-align:right; margin-top:.75rem;">
-      <button class="btn">Close</button>
+<!-- Email viewer (centered, draggable via header bar only) -->
+<dialog id="emailDialog" aria-modal="true">
+  <form method="dialog" class="email-modal" style="padding:0; margin:0;">
+    <div id="wgModalDrag"
+         style="height:36px; background:#f3f3f3; border-bottom:1px solid #e6e6e6;
+                display:flex; align-items:center; justify-content:flex-end; padding:0 .5rem; cursor:move;">
+      <button type="button" id="wgClose"
+              style="background:#c33; color:#fff; border:none; border-radius:4px;
+                     width:28px; height:28px; font-size:1.1rem; line-height:1; cursor:pointer;"
+              aria-label="Close">✕</button>
+    </div>
+    <div class="email-content" style="padding:1rem;">
+      <h3 id="emailSubject" style="margin:0 0 .5rem 0;"></h3>
+      <pre id="emailBody" style="white-space:pre-wrap; max-height:50vh; overflow:auto; margin:0;"></pre>
     </div>
   </form>
 </dialog>
 
+<style>
+  /* Unread indicator */
+  .wg-radio-table .dot {
+    display:inline-block; width:10px; height:10px; border-radius:50%; background:#c33;
+  }
+  .wg-radio-table tr.read .dot { visibility:hidden; }
+  .wg-radio-table tr.read { opacity:.9; }
+  /* Dialog chrome */
+  #emailDialog {
+    position: fixed;
+    width: min(800px, 92vw);
+    border: 1px solid #ccc; border-radius: 8px;
+    padding: 0;
+  }
+</style>
+
 <script>
 (function(){
-  const dlg  = document.getElementById('emailDialog');
-  const subj = document.getElementById('emailSubject');
-  const body = document.getElementById('emailBody');
+  const dlg   = document.getElementById('emailDialog');
+  const subj  = document.getElementById('emailSubject');
+  const body  = document.getElementById('emailBody');
+  const close = document.getElementById('wgClose');
+  const dragBar = document.getElementById('wgModalDrag');
 
   // Stable epoch for this Wargame run (namespaces the cookie)
   const EPOCH  = {{ epoch|default(0) }};
@@ -77,18 +104,54 @@
     if (row) row.classList.add('read');
   }
 
+  // Open centered; when dragging begins we switch to absolute offsets.
+  function openModal() {
+    dlg.style.left = '50%';
+    dlg.style.top = '50%';
+    dlg.style.transform = 'translate(-50%, -50%)';
+    if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open','open');
+  }
+  function closeModal() {
+    if (dlg.close) dlg.close(); else dlg.removeAttribute('open');
+  }
+  close.addEventListener('click', closeModal);
+  dlg.addEventListener('cancel', (e)=>{ e.preventDefault(); closeModal(); });
+
+  // Drag only by the header bar
+  (function enableDrag(){
+    let dragging = false, startX=0, startY=0, startLeft=0, startTop=0;
+    dragBar.addEventListener('mousedown', (ev)=>{
+      dragging = true;
+      // drop centering transform and move by absolute offsets
+      dlg.style.transform = '';
+      const rect = dlg.getBoundingClientRect();
+      startLeft = rect.left; startTop = rect.top;
+      startX = ev.clientX; startY = ev.clientY;
+      ev.preventDefault();
+    });
+    window.addEventListener('mousemove', (ev)=>{
+      if (!dragging) return;
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      dlg.style.left = (startLeft + dx) + 'px';
+      dlg.style.top  = (startTop  + dy) + 'px';
+    });
+    window.addEventListener('mouseup', ()=> dragging = false);
+  })();
+
+  // Wire up row clicks
   document.querySelectorAll('.open-email').forEach(a => {
     a.addEventListener('click', ev => {
       ev.preventDefault();
       const id  = a.dataset.emailId;
       const row = a.closest('tr');
-      // No url_for here — build the path on the client:
+      // Build the path on the client:
       fetch('/wargame/radio/email/' + id)
         .then(r => r.ok ? r.json() : Promise.reject(r.status))
         .then(data => {
           subj.textContent = data.subject || '(no subject)';
           body.textContent = data.body || '';
-          if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', 'open');
+          openModal();
           markRead(id, row);
         })
         .catch(() => {});

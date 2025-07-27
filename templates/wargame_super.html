@@ -25,25 +25,27 @@
     </div>
   </div>
 
-  <h2 style="margin-top:1.25rem;">Difficulty settings</h2>
-  {% set pretty = {
-    'Radio message rate (per hour)': settings.get('radio_rate', 0),
-    'Radio: batch inbox': 'Yes' if settings.get('radio_use_batch') == 'yes' else 'No',
-    'Radio: count batch toward cap': 'Yes' if settings.get('radio_count_batch') == 'yes' else 'No',
-    'Inventory batch rate (per hour)': settings.get('inv_rate', 0),
-    'Ramp request rate (per hour)': settings.get('ramp_rate', 0),
-    'Inbound/outbound balance band (±%)': settings.get('balance_pct', 20),
-    'Max simultaneous Radio items': settings.get('max_radio', 3),
-    'Max simultaneous Ramp cue cards': settings.get('max_ramp', 3),
-    'Max simultaneous Inventory batches': settings.get('max_inventory', 3)
-  } %}
-  <table class="table wg-settings">
-    <tbody>
-    {% for label, val in pretty.items() %}
-      <tr><th>{{ label }}</th><td>{{ val }}</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
+  <div class="super-settings">
+    <h2 style="margin-top:1.25rem;">Difficulty settings</h2>
+    {% set pretty = {
+      'Radio message rate (per hour)': settings.get('radio_rate', 0),
+      'Radio: batch inbox': 'Yes' if settings.get('radio_use_batch') == 'yes' else 'No',
+      'Radio: count batch toward cap': 'Yes' if settings.get('radio_count_batch') == 'yes' else 'No',
+      'Inventory batch rate (per hour)': settings.get('inv_rate', 0),
+      'Ramp request rate (per hour)': settings.get('ramp_rate', 0),
+      'Inbound/outbound balance band (±%)': settings.get('balance_pct', 20),
+      'Max simultaneous Radio items': settings.get('max_radio', 3),
+      'Max simultaneous Ramp cue cards': settings.get('max_ramp', 3),
+      'Max simultaneous Inventory batches': settings.get('max_inventory', 3)
+    } %}
+    <table class="table wg-settings">
+      <tbody>
+      {% for label, val in pretty.items() %}
+        <tr><th>{{ label }}</th><td>{{ val }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
 
   <!-- Exit role (kept in normal flow; positioning via global .wg-exit-form CSS) -->
   <form class="wg-exit-form" method="post"
