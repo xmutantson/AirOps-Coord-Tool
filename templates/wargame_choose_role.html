@@ -6,6 +6,7 @@
   <h1>Choose your Wargame role</h1>
 
   <form method="post" action="{{ url_for('wargame_choose_role') }}" class="role-picker">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <fieldset class="wg-chooser">
       <legend>Select your role</legend>
 

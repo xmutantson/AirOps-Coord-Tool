@@ -36,6 +36,7 @@
   <form class="wg-exit-form" method="post"
         action="{{ url_for('wargame_exit_role') }}"
         onsubmit="return confirm('Exit your role and choose a new one?');">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button type="submit" class="btn btn-yellow">Exit role</button>
   </form>
 </div>
@@ -78,7 +79,8 @@
       ev.preventDefault();
       const id  = a.dataset.emailId;
       const row = a.closest('tr');
-      fetch(`/wargame/radio/email/${id}`)
+      const endpoint = {{ url_for('fetch_wargame_email', email_id='__ID__')|tojson }};
+      fetch(endpoint.replace('__ID__', String(id)))
         .then(r => r.ok ? r.json() : Promise.reject(r.status))
         .then(data => {
           subj.textContent = data.subject || '(no subject)';

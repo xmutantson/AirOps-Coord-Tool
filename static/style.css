@@ -19,7 +19,6 @@
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
-
 html, body { height: 100%; }
 
 body {
@@ -29,7 +28,7 @@ body {
   line-height: 1.6;
 }
 
-/* ── iOS: prevent auto-zoom on focus ─────────────────────────── */
+/* iOS: prevent auto-zoom on focus */
 input, textarea, select { font-size: 16px; }
 
 /* ===============================================================
@@ -210,6 +209,8 @@ body.offline { background: #ff4242 !important; transition: background 0.3s; }
    =============================================================== */
 /* Pull page up under sticky header */
 body.preferences { margin: 0 !important; }
+/* Less buffer under sticky header on prefs */
+body.preferences main.container { padding-top: 1rem; }
 
 .container.preferences {
   max-width: 600px;
@@ -277,7 +278,6 @@ input.fade-red { background-color: #ff9999; animation: fadeRed 4s ease-in-out; }
   padding: 0 1rem;
   box-sizing: border-box;
 }
-
 .ramp-form-container form {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -310,6 +310,11 @@ input.fade-red { background-color: #ff9999; animation: fadeRed 4s ease-in-out; }
   grid-column: 1 / -1;
   justify-self: stretch;
   margin-top: 1rem;
+}
+
+/* Ensure Cargo Weight field can fit at least 6 digits (RESTORED) */
+.ramp-form-container .lookup-row input[name="cargo_weight"] {
+  min-width: 12ch;
 }
 
 /* Radio-toggle */
@@ -395,6 +400,12 @@ body.cw-active .ramp-form-container > :not(#cargo-tools-panel) { display: none !
 }
 #ramp-boss-form.hidden { display: none; }
 
+/* ETA block helpers (RESTORED – harmless if #eta_block not present) */
+.ramp-form-container form > #eta_block { display: contents; }
+.ramp-form-container form > #eta_block > label {
+  justify-self: end; font-weight: bold; text-align: right;
+}
+
 /* ===============================================================
    Page: Wargame – Role Chooser
    =============================================================== */
@@ -433,7 +444,7 @@ body.cw-active .ramp-form-container > :not(#cargo-tools-panel) { display: none !
 /* hide native radios, rely on card selection */
 .role-picker input[type="radio"] { position: absolute; left: -9999px; }
 
-/* Supervisor settings panel (on chooser) */
+/* Supervisor settings panel (if used in chooser) */
 .super-panel { margin-top: .5rem; padding-top: .75rem; border-top: 1px solid #eee; }
 .super-panel h3 { margin: .25rem 0 .5rem; }
 .super-panel .form-row {
@@ -442,7 +453,7 @@ body.cw-active .ramp-form-container > :not(#cargo-tools-panel) { display: none !
 }
 .super-panel input[type="number"] { width: 120px; }
 
-/* Optionally used role grid legacy styles */
+/* Optional legacy role grid container */
 .wg-chooser {
   max-width: 980px; margin: 0 auto;
   border: 1px solid #ddd; padding: 1rem 1.25rem;
@@ -560,6 +571,22 @@ body.cw-active .ramp-form-container > :not(#cargo-tools-panel) { display: none !
 }
 .page-header-bar .page-title { font-size: 1.5rem; font-weight: bold; margin: 0; }
 .page-header-bar .clock { font-size: 1.5rem; color: var(--muted); margin: 0; }
+
+/* ===============================================================
+   Admin Console – Embedded Tab URL row (RESTORED)
+   =============================================================== */
+.container.admin-console .embedded-config {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+.container.admin-console .embedded-config input[type="text"] {
+  flex: 1;
+  padding: 0.6em;
+  border: 1px solid #ccc;
+  border-radius: var(--radius);
+}
 
 /* ===============================================================
    Responsive (mobile-first tweaks ≤ 600px)

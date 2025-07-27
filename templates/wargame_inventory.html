@@ -87,7 +87,7 @@
   </div>
 
   <!-- Exit role (right-aligned, sits above footer via CSS .wg-exit-form) -->
-  <form class="wg-exit-form" action="{{ url_for('wargame_exit') }}" method="post">
+  <form class="wg-exit-form" action="{{ url_for('wargame_exit_role') }}" method="post">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button type="submit" class="btn btn-yellow"
             onclick="return confirm('Exit your Wargame role and return to role selection?');">

@@ -1610,11 +1610,11 @@ def generate_ramp_request():
     settings_row = dict_rows("SELECT value FROM preferences WHERE name='wargame_settings'")
     settings  = json.loads(settings_row[0]['value'] or '{}') if settings_row else {}
     max_ramp  = int(settings.get('max_ramp', 3) or 3)
-    open_cnt  = dict_rows("""
+    open_cnt  = int(dict_rows("""
         SELECT COUNT(*) AS c
           FROM wargame_ramp_requests
          WHERE satisfied_at IS NULL
-    """)[0]['c'] or 0
+    """)[0]['c'] or 0)
     if open_cnt >= max_ramp:
         return
 
@@ -2076,7 +2076,7 @@ def configure_wargame_jobs():
 
     # load supervisor settings
     settings_row = dict_rows("SELECT value FROM preferences WHERE name='wargame_settings'")
-    settings = json.loads(settings_row[0]['value'] or '{}')
+    settings = json.loads(settings_row[0]['value'] or '{}') if settings_row else {}
 
     radio_rate = float(settings.get('radio_rate', 0) or 0)
     if radio_rate > 0:
