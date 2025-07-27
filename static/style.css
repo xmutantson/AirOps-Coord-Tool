@@ -209,8 +209,8 @@ body.offline { background: #ff4242 !important; transition: background 0.3s; }
    =============================================================== */
 /* Pull page up under sticky header */
 body.preferences { margin: 0 !important; }
-/* Less buffer under sticky header on prefs */
-body.preferences main.container { padding-top: 1rem; }
+/* Less buffer under sticky header on prefs (tightened) */
+body.preferences main.container { padding-top: 0.5rem; }
 
 .container.preferences {
   max-width: 600px;
@@ -274,15 +274,15 @@ input.fade-red { background-color: #ff9999; animation: fadeRed 4s ease-in-out; }
 .ramp-form-container {
   width: 100%;
   max-width: 600px;
-  margin: 2rem auto;
+  margin: 0.75rem auto;            /* tightened from 2rem */
   padding: 0 1rem;
   box-sizing: border-box;
 }
 .ramp-form-container form {
   display: grid;
   grid-template-columns: auto 1fr;
-  column-gap: 1.5rem;
-  row-gap: 1rem;
+  column-gap: 1.25rem;
+  row-gap: 0.6rem;                 /* tighter vertical rhythm */
   align-items: center;
 }
 .ramp-form-container form > label {
@@ -306,16 +306,20 @@ input.fade-red { background-color: #ff9999; animation: fadeRed 4s ease-in-out; }
   grid-column: 2;
   width: 100%;
 }
+.ramp-form-container input,
+.ramp-form-container select,
+.ramp-form-container textarea {
+  margin-top: 0.25em;              /* slightly tighter */
+  padding: 0.5em;                  /* slightly tighter */
+}
 .ramp-form-container button[type="submit"] {
   grid-column: 1 / -1;
   justify-self: stretch;
-  margin-top: 1rem;
+  margin-top: 0.75rem;
 }
 
 /* Ensure Cargo Weight field can fit at least 6 digits (RESTORED) */
-.ramp-form-container .lookup-row input[name="cargo_weight"] {
-  min-width: 12ch;
-}
+.ramp-form-container .lookup-row input[name="cargo_weight"] { min-width: 12ch; }
 
 /* Radio-toggle */
 .ramp-form-container .radio-toggle {
@@ -323,6 +327,7 @@ input.fade-red { background-color: #ff9999; animation: fadeRed 4s ease-in-out; }
   border: 1px solid #888;
   border-radius: 4px;
   overflow: hidden;
+  margin-top: 0.25rem;             /* keep close to top */
 }
 .ramp-form-container .radio-toggle input { display: none; }
 .ramp-form-container .radio-toggle label {
@@ -563,14 +568,19 @@ body.cw-active .ramp-form-container > :not(#cargo-tools-panel) { display: none !
 .separator { margin: 2rem 0; border: none; border-top: 1px solid #ddd; }
 
 /* ===============================================================
-   Page Header (clock + title)
+   Page Header (clock + title) — allow two-row layout with filters
    =============================================================== */
 .page-header-bar {
-  display: flex; justify-content: space-between; align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;           /* allow wrapping to a second row */
+  justify-content: space-between;
+  align-items: baseline;
   margin-bottom: 1rem;
 }
-.page-header-bar .page-title { font-size: 1.5rem; font-weight: bold; margin: 0; }
-.page-header-bar .clock { font-size: 1.5rem; color: var(--muted); margin: 0; }
+.page-header-bar .page-title { order: 0; font-size: 1.5rem; font-weight: bold; margin: 0; }
+.page-header-bar .clock { order: 1; margin-left: auto; font-size: 1.5rem; color: var(--muted); margin: 0; }
+/* Any form placed in the header flows to the second row automatically */
+.page-header-bar form { order: 2; flex: 1 1 100%; margin-top: 0.35rem; }
 
 /* ===============================================================
    Admin Console – Embedded Tab URL row (RESTORED)

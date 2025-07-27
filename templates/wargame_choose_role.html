@@ -7,33 +7,87 @@
 
   <form method="post" action="{{ url_for('wargame_choose_role') }}" class="role-picker">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
     <fieldset class="wg-chooser">
       <legend>Select your role</legend>
 
       <div class="role-grid">
         <label class="role-card" data-role="radio">
-          <input type="radio" name="role" value="radio">
+          <input type="radio" name="role" value="radio" {% if session.get('wargame_role')=='radio' %}checked{% endif %} required>
           <h3>Radio Operator</h3>
           <p>Handle Winlink messages and publish arrivals to the team.</p>
         </label>
 
         <label class="role-card" data-role="ramp">
-          <input type="radio" name="role" value="ramp">
+          <input type="radio" name="role" value="ramp" {% if session.get('wargame_role')=='ramp' %}checked{% endif %}>
           <h3>Ramp Boss</h3>
           <p>Create outbound flights and mark arrivals complete.</p>
         </label>
 
         <label class="role-card" data-role="inventory">
-          <input type="radio" name="role" value="inventory">
+          <input type="radio" name="role" value="inventory" {% if session.get('wargame_role')=='inventory' %}checked{% endif %}>
           <h3>Inventory Specialist</h3>
           <p>Log inbound deliveries and fulfill outbound requests.</p>
         </label>
 
         <label class="role-card" data-role="super">
-          <input type="radio" name="role" value="super">
+          <input type="radio" name="role" value="super" {% if session.get('wargame_role')=='super' %}checked{% endif %}>
           <h3>Exercise Supervisor</h3>
           <p>Control difficulty and monitor performance metrics.</p>
         </label>
+      </div>
+
+      <!-- Supervisor settings (auto-expands when "super" is selected) -->
+      <div id="super-settings" class="super-panel" style="display:none;">
+        <h3>Supervisor Settings</h3>
+
+        <div class="form-row">
+          <label>Radio messages/hr:</label>
+          <input type="number" name="radio_rate" min="0" value="{{ settings.get('radio_rate', 12) }}">
+        </div>
+
+        <div class="form-row">
+          <label>Use 5‑min batch inbox for inbound flights:</label>
+          <input type="checkbox" name="radio_use_batch" value="yes"
+                 {% if settings.get('radio_use_batch','yes')=='yes' %}checked{% endif %}>
+        </div>
+
+        <div class="form-row">
+          <label>Include batch delay in radio metrics:</label>
+          <input type="checkbox" name="radio_count_batch" value="yes"
+                 {% if settings.get('radio_count_batch','yes')=='yes' %}checked{% endif %}>
+        </div>
+
+        <div class="form-row">
+          <label>Inventory batches/hr:</label>
+          <input type="number" name="inv_rate" min="0" value="{{ settings.get('inv_rate', 6) }}">
+        </div>
+
+        <div class="form-row">
+          <label>Ramp requests/hr:</label>
+          <input type="number" name="ramp_rate" min="0" value="{{ settings.get('ramp_rate', 10) }}">
+        </div>
+
+        <div class="form-row">
+          <label>Balance band (±% inbound/outbound):</label>
+          <input type="number" name="balance_pct" min="0" max="100" value="{{ settings.get('balance_pct', 20) }}">
+        </div>
+
+        <hr class="separator">
+
+        <h4>Max Pending (queue caps)</h4>
+        <div class="form-row">
+          <label>Radio inbox (visible messages):</label>
+          <input type="number" name="max_radio" min="1" value="{{ settings.get('max_radio', 3) }}">
+        </div>
+        <div class="form-row">
+          <label>Ramp cue cards (waiting arrivals):</label>
+          <input type="number" name="max_ramp" min="1" value="{{ settings.get('max_ramp', 3) }}">
+        </div>
+        <div class="form-row">
+          <label>Inventory requests (pending “out” lines):</label>
+          <input type="number" name="max_inventory" min="1" value="{{ settings.get('max_inventory', 3) }}">
+        </div>
       </div>
 
       <div style="display:flex; justify-content:flex-end; margin-top:1rem;">
@@ -46,14 +100,27 @@
 <script>
 (function(){
   const cards = document.querySelectorAll('.role-card');
+  const superPanel = document.getElementById('super-settings');
+
+  function updatePanel() {
+    const isSuper = document.querySelector('input[name="role"][value="super"]')?.checked;
+    superPanel.style.display = isSuper ? 'block' : 'none';
+  }
+
   cards.forEach(card => {
     card.addEventListener('click', () => {
       cards.forEach(c => c.classList.remove('selected'));
       card.classList.add('selected');
       const rb = card.querySelector('input[type=radio]');
-      if (rb) rb.checked = true;
+      if (rb) { rb.checked = true; updatePanel(); }
     });
   });
+
+  // Restore visual selection on load
+  const selected = document.querySelector('input[name="role"]:checked');
+  if (selected) selected.closest('.role-card')?.classList.add('selected');
+
+  updatePanel(); // set initial state
 })();
 </script>
 {% endblock %}
