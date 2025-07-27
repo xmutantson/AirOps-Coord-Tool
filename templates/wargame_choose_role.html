@@ -2,122 +2,121 @@
 {% extends 'base.html' %}
 {% block content %}
 <div class="container">
-  <h1>Wargame Mode – Select Your Role</h1>
-  <form method="post" action="{{ url_for('wargame_choose_role') }}">
+  <h1>Wargame Mode – Select Your Role</h1>
+  <form method="post" action="{{ url_for('wargame_choose_role') }}" class="wg-role-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <fieldset>
       <legend>Choose one:</legend>
 
-      <label>
+    <div class="role-cards">
+      <label class="role-card">
         <input type="radio" name="role" value="radio" required
                {% if session.get('wargame_role')=='radio' %}checked{% endif %}>
-        Radio Operator
+        <div>
+          <h3>Radio Operator</h3>
+          <p>Handle Winlink messages.</p>
+        </div>
       </label>
-      <p class="hint">Handle incoming Winlink‑style messages.</p>
 
-      <label>
+      <label class="role-card">
         <input type="radio" name="role" value="ramp"
                {% if session.get('wargame_role')=='ramp' %}checked{% endif %}>
-        Ramp Boss
+        <div>
+          <h3>Ramp Boss</h3>
+          <p>Manage arrivals &amp; departures.</p>
+        </div>
       </label>
-      <p class="hint">Manage arrivals &amp; departure paperwork.</p>
 
-      <label>
+      <label class="role-card">
         <input type="radio" name="role" value="inventory"
                {% if session.get('wargame_role')=='inventory' %}checked{% endif %}>
-        Inventory Specialist
+        <div>
+          <h3>Inventory Specialist</h3>
+          <p>Process supply requests &amp; deliveries.</p>
+        </div>
       </label>
-      <p class="hint">Process supply requests &amp; deliveries.</p>
 
-      <label>
+      <label class="role-card">
         <input type="radio" name="role" value="super"
                {% if session.get('wargame_role')=='super' %}checked{% endif %}>
-        Exercise Supervisor
+        <div>
+          <h3>Exercise Supervisor</h3>
+          <p>View real-time metrics &amp; settings. Manage the wargame.</p>
+        </div>
       </label>
-      <p class="hint">View real‑time metrics &amp; settings.</p>
+    </div>
 
-      <div id="super-settings" style="display:none; margin-top:1rem;">
-        <h3>Supervisor Settings</h3>
+    <div id="super-settings" class="super-panel" style="display:none;">
+      <h3>Supervisor Settings</h3>
+      <div class="form-row">
 
         <label>
           Radio msgs/hr:
-          <input type="number"
-                 name="radio_rate"
-                 min="0"
-                 value="{{ settings.get('radio_rate', 12) }}">
         </label>
-
-        <label>
-          Use 5 min batch queue for inbound flights:
-          <input type="checkbox"
-                 name="radio_use_batch"
-                 value="yes"
-                 {% if settings.get('radio_use_batch','yes')=='yes' %}checked{% endif %}>
-        </label>
-
-        <label>
-          Include batch delay in radio‑operator metrics:
-          <input type="checkbox"
-                 name="radio_count_batch"
-                 value="yes"
-                 {% if settings.get('radio_count_batch','yes')=='yes' %}checked{% endif %}>
-        </label>
-
-        <label>
-          Inventory req/hr:
-          <input type="number"
-                 name="inv_rate"
-                 min="0"
-                 value="{{ settings.get('inv_rate', 6) }}">
-        </label>
-
-        <label>
-          Ramp flights/hr:
-          <input type="number"
-                 name="ramp_rate"
-                 min="0"
-                 value="{{ settings.get('ramp_rate', 10) }}">
-        </label>
-
-        <label>
-          Balance ±% inbound/outbound:
-          <input type="number"
-                 name="balance_pct"
-                 min="0"
-                 max="100"
-                 value="{{ settings.get('balance_pct', 20) }}">
-        </label>
-        <hr class="separator">
-        <h4>Max Pending (queue caps)</h4>
-        <label>
-          Radio inbox (visible messages):
-          <input type="number"
-                 name="max_radio"
-                 min="1"
-                 value="{{ settings.get('max_radio', 3) }}">
-        </label>
-        <label>
-          Ramp cue cards (inbound flights waiting):
-          <input type="number"
-                 name="max_ramp"
-                 min="1"
-                 value="{{ settings.get('max_ramp', 3) }}">
-        </label>
-        <label>
-          Inventory requests (pending “out” lines):
-          <input type="number"
-                 name="max_inventory"
-                 min="1"
-                 value="{{ settings.get('max_inventory', 3) }}">
-        </label>
+        <input type="number" name="radio_rate" min="0"
+               value="{{ settings.get('radio_rate', 12) }}">
+      </div>
+      <div class="form-row">
+        <label>Use 5-min batch queue for inbound flights (emulates winlink behavior):</label>
+        <input type="checkbox" name="radio_use_batch" value="yes"
+               {% if settings.get('radio_use_batch','yes')=='yes' %}checked{% endif %}>
       </div>
 
-      <button type="submit" class="btn">Confirm Role</button>
+      <div class="form-row">
+        <label>Include batch-delay in radio-operator metrics:</label>
+        <input type="checkbox" name="radio_count_batch" value="yes"
+               {% if settings.get('radio_count_batch','yes')=='yes' %}checked{% endif %}>
+      </div>
+
+      <div class="form-row">
+        <label>Inventory req/hr:</label>
+        <input type="number" name="inv_rate" min="0"
+               value="{{ settings.get('inv_rate', 6) }}">
+      </div>
+
+      <div class="form-row">
+        <label>Ramp flights/hr:</label>
+        <input type="number" name="ramp_rate" min="0"
+               value="{{ settings.get('ramp_rate', 10) }}">
+      </div>
+
+
+      <div class="form-row">
+        <label>Balance ±% inbound/outbound:</label>
+        <input type="number" name="balance_pct" min="0" max="100"
+               value="{{ settings.get('balance_pct', 20) }}">
+      </div>
+
+        <hr class="separator">
+
+      <h4>Max Pending (queue caps)</h4>
+      <div class="form-row">
+        <label>Radio inbox (visible messages):</label>
+        <input type="number" name="max_radio" min="1"
+               value="{{ settings.get('max_radio', 3) }}">
+      </div>
+      <div class="form-row">
+        <label>Ramp cue cards (inbound flights waiting):</label>
+        <input type="number" name="max_ramp" min="1"
+               value="{{ settings.get('max_ramp', 3) }}">
+      </div>
+      <div class="form-row">
+        <label>Inventory requests (pending “out” lines):</label>
+        <input type="number" name="max_inventory" min="1"
+               value="{{ settings.get('max_inventory', 3) }}">
+      </div>
+    </div>
+
+    <div class="actions">
+      <button type="submit" class="btn primary">Confirm Role</button>
+    </div>
+
     </fieldset>
   </form>
 </div>
 
 <script>
-  // Show/hide the supervisor panel
+  // Show/hide the supervisor panel, and pause auto-refresh while editing
   const radios = document.querySelectorAll('input[name="role"]');
   const panel  = document.getElementById('super-settings');
   radios.forEach(r => r.addEventListener('change', () => {
@@ -128,6 +127,11 @@
   // On page‐load, if “super” was already selected, show panel:
   if (document.querySelector('input[value="super"]:checked')) {
     panel.style.display = 'block';
+  }
+  if (window.blockRefresh) {
+    const f = document.querySelector('.wg-role-form');
+    f.addEventListener('focusin',  () => window.blockRefresh(true));
+    f.addEventListener('focusout', () => window.blockRefresh(false));
   }
 </script>
 {% endblock %}

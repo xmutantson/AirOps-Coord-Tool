@@ -10,6 +10,7 @@
                  user-scalable=no">
   <title>{% block title %}{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
 
   {# Auto-refresh only on Wargame dashboards #}
 {# auto-refresh for Wargame pages is JS-driven so we can pause while modals are open #}
@@ -171,6 +172,27 @@ if (typeof window.showToast !== 'function') {
 })();
 </script>
 {% endif %}
+
+<!-- Automatically attach CSRF header to non-GET fetch() calls -->
+<script>
+(function(){
+  const el = document.querySelector('meta[name="csrf-token"]');
+  const token = el ? el.getAttribute('content') : null;
+  if (!token) return;
+  const _fetch = window.fetch;
+  window.fetch = function(resource, init) {
+    init = init || {};
+    const method = (init.method || 'GET').toUpperCase();
+    if (method !== 'GET' && method !== 'HEAD') {
+      init.headers = new Headers(init.headers || {});
+      if (!init.headers.has('X-CSRFToken') && !init.headers.has('X-CSRF-Token')) {
+        init.headers.set('X-CSRFToken', token);
+      }
+    }
+    return _fetch(resource, init);
+  };
+})();
+</script>
 
 {% block scripts %}{% endblock %}
 
