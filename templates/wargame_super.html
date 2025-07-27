@@ -5,19 +5,18 @@
 <div class="container">
   <h1>Wargame — Exercise Supervisor</h1>
 
-  <!-- Centered delay tiles with throughput on the same row (right) -->
   <div class="super-metrics">
     <div class="metric">
       <h3>Radio delays</h3>
-      <div>Avg {{ metrics.radio.avg }} s, Min {{ metrics.radio.min }} s, Max {{ metrics.radio.max }} s</div>
+      <div>Avg {{ metrics.radio.avg|mmss }}, Min {{ metrics.radio.min|mmss }}, Max {{ metrics.radio.max|mmss }} <span class="muted">(mm:ss)</span></div>
     </div>
     <div class="metric">
       <h3>Ramp delays</h3>
-      <div>Avg {{ metrics.ramp.avg }} s, Min {{ metrics.ramp.min }} s, Max {{ metrics.ramp.max }} s</div>
+      <div>Avg {{ metrics.ramp.avg|mmss }}, Min {{ metrics.ramp.min|mmss }}, Max {{ metrics.ramp.max|mmss }} <span class="muted">(mm:ss)</span></div>
     </div>
     <div class="metric">
       <h3>Inventory delays</h3>
-      <div>Avg {{ metrics.inventory.avg }} s, Min {{ metrics.inventory.min }} s, Max {{ metrics.inventory.max }} s</div>
+      <div>Avg {{ metrics.inventory.avg|mmss }}, Min {{ metrics.inventory.min|mmss }}, Max {{ metrics.inventory.max|mmss }} <span class="muted">(mm:ss)</span></div>
     </div>
     <div class="metric throughput" style="margin-left:auto;">
       <h3>Throughput (last hour)</h3>
@@ -47,7 +46,6 @@
     </table>
   </div>
 
-  <!-- Exit role (kept in normal flow; positioning via global .wg-exit-form CSS) -->
   <form class="wg-exit-form" method="post"
         action="{{ url_for('wargame_exit_role') }}"
         onsubmit="return confirm('Exit your role and choose a new one?');">

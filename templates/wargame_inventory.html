@@ -88,7 +88,7 @@
     {% endif %}
   </section>
 
-  <!-- Exit role (right-aligned, sits above footer via CSS .wg-exit-form) -->
+  <!-- Exit role -->
   <form class="wg-exit-form" action="{{ url_for('wargame_exit_role') }}" method="post">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button type="submit" class="btn btn-yellow"
@@ -98,4 +98,30 @@
   </form>
 
 </main>
+
+<!-- Auto-refresh on committed inventory changes via SSE, with a safe fallback -->
+<script>
+(function(){
+  const url = "{{ url_for('inventory_events') }}";  // new SSE endpoint in app.py
+  let reloadedRecently = false;
+
+  function doReload() {
+    if (reloadedRecently) return;
+    reloadedRecently = true;
+    // small debounce to allow multiple quick commits to coalesce
+    setTimeout(()=>{ window.location.reload(); }, 250);
+  }
+
+  if ('EventSource' in window) {
+    const es = new EventSource(url);
+    es.addEventListener('inv_commit', doReload);
+    let fbTimer = null;
+    function startFallback(){ if (!fbTimer) fbTimer = setInterval(doReload, 30000); }
+    es.onerror = function(){ try{ es.close(); }catch(_){}; startFallback(); };
+  } else {
+    // Fallback: light polling (still better than 30s server poll elsewhere)
+    setInterval(doReload, 30000);
+  }
+})();
+</script>
 {% endblock %}

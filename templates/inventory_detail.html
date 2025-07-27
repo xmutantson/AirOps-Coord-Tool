@@ -13,11 +13,13 @@
   <div class="ramp-form-container">
     <form id="inventory-form"
           method="POST"
-          action="{{ url_for('inventory.inventory_detail') }}">
+          action="{{ url_for('inventory.inventory_detail') }}"
+          autocomplete="off">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
       <label for="category">Category</label>
       <select id="category" name="category" required>
+        <option value="" disabled selected>— choose category —</option>
         {% for c in categories %}
           <option value="{{ c.id }}">{{ c.display_name }}</option>
         {% endfor %}
@@ -45,7 +47,8 @@
       <input id="qty" name="qty" type="number" step="1" min="0" required>
 
       <label for="direction">Direction</label>
-      <select id="direction" name="direction">
+      <select id="direction" name="direction" required>
+        <option value="" disabled selected>— choose direction —</option>
         <option value="in">Incoming</option>
         <option value="out">Outgoing</option>
       </select>
@@ -60,8 +63,10 @@
 
   <script>
     async function loadInventoryDetail() {
-      const resp = await fetch("{{ url_for('inventory.inventory_detail_table') }}");
-      document.getElementById("inventory-detail-table").innerHTML = await resp.text();
+      try {
+        const resp = await fetch("{{ url_for('inventory.inventory_detail_table') }}");
+        document.getElementById("inventory-detail-table").innerHTML = await resp.text();
+      } catch (_) {}
     }
     loadInventoryDetail();
   </script>

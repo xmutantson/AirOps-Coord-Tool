@@ -42,6 +42,7 @@ import sqlite3, csv, io, re, os, json
 from datetime import datetime, timedelta
 import threading, time, socket, math
 from urllib.request import urlopen
+import queue
 
 from functools import lru_cache
 
@@ -175,6 +176,47 @@ limiter = Limiter(
     key_func=get_remote_address,
     default_limits=["1000 per hour"]
 )
+
+# ---- Jinja filter: seconds -> mm:ss (used by Wargame Super template) ----
+def _mmss(value):
+    try:
+        total = int(float(value))
+    except Exception:
+        return "0:00"
+    m, s = divmod(max(total, 0), 60)
+    return f"{m}:{s:02d}"
+app.jinja_env.filters['mmss'] = _mmss
+
+# ---- Server-Sent Events for inventory commits (Wargame Inventory auto-refresh) ----
+_inv_event_queues = set()
+def publish_inventory_event(payload=None):
+    """Fan out a lightweight event to all connected Wargame Inventory pages."""
+    data = payload or {"when": time.time()}
+    for q in list(_inv_event_queues):
+        try:
+            q.put_nowait(data)
+        except Exception:
+            _inv_event_queues.discard(q)
+
+@app.route("/events/inventory")
+def inventory_events():
+    q = queue.Queue()
+    _inv_event_queues.add(q)
+    def stream():
+        try:
+            # open the stream
+            yield ": ok\n\n"
+            while True:
+                try:
+                    data = q.get(timeout=30)
+                    yield f"event: inv_commit\ndata: {json.dumps(data)}\n\n"
+                except queue.Empty:
+                    # keep-alive ping so proxies don't close the pipe
+                    yield ": keep-alive\n\n"
+        finally:
+            _inv_event_queues.discard(q)
+    return Response(stream(), mimetype="text/event-stream",
+                    headers={"Cache-Control":"no-cache"})
 
 # Constants: Only these ICAO4 codes will be used in Wargame Mode
 HARDCODED_AIRFIELDS = [
@@ -2545,7 +2587,7 @@ def radio():
                       UPDATE flights
                          SET eta=?, complete=1, remarks=?
                        WHERE id=?
-                    """, (arr_hhmm, new_rem, match['id']))
+                    """, (arrival, new_rem, match['id']))
                     c.commit()  # ensure subsequent reads see the closure
 
                     # ── JSON reply for XHR caller (blue success row) ──
@@ -3490,6 +3532,11 @@ def inventory_advance_line():
                       VALUES ('inventory', ?, ?)
                     """, (delta, now_ts))
 
+        # After commit/reconciliation, notify dashboards (SSE)
+        try:
+            publish_inventory_event()
+        except Exception:
+            pass
         return jsonify(success=True)
 
     return jsonify(success=False), 400
@@ -4427,6 +4474,12 @@ def inventory_detail():
                 reconcile_inventory_entry(int(eid))
         except Exception:
             # never block the operator’s flow on reconciliation issues
+            pass
+
+        # Notify live Wargame Inventory dashboards to refresh (SSE)
+        try:
+            publish_inventory_event()
+        except Exception:
             pass
 
         return redirect(url_for('inventory.inventory_detail'))

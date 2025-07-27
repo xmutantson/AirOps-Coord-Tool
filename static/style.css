@@ -678,6 +678,7 @@ table.wg-radio-table tr.read { opacity: .8; }
 .wg-modal-header {
   height: 36px; background: #fafafa; border-bottom: 1px solid #eee;
   display:flex; align-items:center; justify-content:flex-end; padding: 0 .5rem;
+  cursor: move; /* drag handle */
 }
 .wg-modal-close {
   background: #c33; color: #fff; border: none; border-radius: 4px;

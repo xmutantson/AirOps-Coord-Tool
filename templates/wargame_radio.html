@@ -12,20 +12,20 @@
         <th style="white-space:nowrap;">Received (UTC)</th>
         <th>From → To</th>
         <th>Subject</th>
-        <th style="text-align:right;">Size</th>
+        <th>Size</th>
       </tr>
     </thead>
     <tbody>
       {% if emails and emails|length > 0 %}
         {% for e in emails %}
-          <tr class="wg-email{% if e.read %} read{% endif %}">
+          <tr class="wg-email{% if e.read %} read{% endif %}" data-email-row="{{ e.id }}">
             <td><span class="dot" title="Unread"></span></td>
             <td class="when" style="white-space:nowrap;">{{ e.generated_at }}</td>
             <td class="from">{{ e.sender }} → {{ e.recipient }}</td>
             <td class="subject">
               <a href="#" class="open-email" data-email-id="{{ e.id }}">{{ e.subject }}</a>
             </td>
-            <td class="size" style="text-align:right;">{{ e.size_bytes }} B</td>
+            <td class="size">{{ e.size_bytes }} B</td>
           </tr>
         {% endfor %}
       {% else %}
@@ -44,54 +44,41 @@
 </div>
 
 <!-- Email viewer (centered, draggable via header bar only) -->
-<dialog id="emailDialog" aria-modal="true">
-  <form method="dialog" class="email-modal" style="padding:0; margin:0;">
-    <div id="wgModalDrag"
-         style="height:36px; background:#f3f3f3; border-bottom:1px solid #e6e6e6;
-                display:flex; align-items:center; justify-content:flex-end; padding:0 .5rem; cursor:move;">
-      <button type="button" id="wgClose"
-              style="background:#c33; color:#fff; border:none; border-radius:4px;
-                     width:28px; height:28px; font-size:1.1rem; line-height:1; cursor:pointer;"
-              aria-label="Close">✕</button>
+<dialog id="emailDialog" class="wg-modal" aria-modal="true">
+  <form method="dialog" class="email-modal">
+    <div id="wgModalDrag" class="wg-modal-header">
+      <button type="button" id="wgClose" class="wg-modal-close" aria-label="Close">✕</button>
     </div>
-    <div class="email-content" style="padding:1rem;">
-      <h3 id="emailSubject" style="margin:0 0 .5rem 0;"></h3>
-      <pre id="emailBody" style="white-space:pre-wrap; max-height:50vh; overflow:auto; margin:0;"></pre>
+    <div class="wg-modal-body email-content">
+      <h3 id="emailSubject" class="wg-modal-subject"></h3>
+      <pre id="emailBody" class="wg-modal-pre"></pre>
     </div>
   </form>
 </dialog>
 
-<!-- keep template styles light; main rules live in static/style.css -->
-<style>
-  /* Dialog chrome (fallback if CSS not loaded early) */
-  #emailDialog {
-    width: min(1200px, 98vw);
-    border: 1px solid #ccc;
-    border-radius: 8px;
-    padding: 0;
-  }
-</style>
-
 <script>
-(function(){
-  const dlg   = document.getElementById('emailDialog');
-  const subj  = document.getElementById('emailSubject');
-  const body  = document.getElementById('emailBody');
-  const close = document.getElementById('wgClose');
-  const dragBar = document.getElementById('wgModalDrag');
+document.addEventListener('DOMContentLoaded', function () {
+  if (window.__wgRadioInit) return;    // one-time init guard
+  window.__wgRadioInit = true;
 
-  // Stable epoch for this Wargame run (namespaces the cookie)
+  const dlg      = document.getElementById('emailDialog');
+  const subj     = document.getElementById('emailSubject');
+  const body     = document.getElementById('emailBody');
+  const closeBtn = document.getElementById('wgClose');
+  const dragBar  = document.getElementById('wgModalDrag');
+
+  // Namespace read-state per wargame run
   const EPOCH  = {{ epoch|default(0) }};
   const COOKIE = 'wargame_emails_read_' + EPOCH;
 
-  function getCookie(name){
-    const m = document.cookie.match(new RegExp('(?:^|;\\s*)' + name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + '=([^;]*)'));
+  function getCookie(name) {
+    const m = document.cookie.match(new RegExp('(?:^|;\\s*)' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '=([^;]*)'));
     return m ? decodeURIComponent(m[1]) : '';
   }
-  function setCookie(name, value){
+  function setCookie(name, value) {
     document.cookie = name + '=' + encodeURIComponent(value) + '; Max-Age=31536000; Path=/; SameSite=Lax';
   }
-  function markRead(id, row){
+  function markRead(id, row) {
     const current = getCookie(COOKIE);
     const set = new Set((current ? current.split(',') : []).filter(Boolean));
     set.add(String(id));
@@ -99,80 +86,81 @@
     if (row) row.classList.add('read');
   }
 
-  function openEmail(id, row){
-    // Build the path on the client:
-    fetch('/wargame/radio/email/' + id)
-      .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(data => {
-        subj.textContent = data.subject || '(no subject)';
-        body.textContent = data.body || '';
-        localStorage.setItem('wg_open_email_id', String(id));  // remember open message across reloads
-        openModal();
-        markRead(id, row);
-      })
-      .catch(() => {});
-  }
-
-  // Open centered; when dragging begins we switch to absolute offsets.
   function openModal() {
+    // center, then show
     dlg.style.left = '50%';
     dlg.style.top = '50%';
     dlg.style.transform = 'translate(-50%, -50%)';
-    if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open','open');
+    if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', 'open');
   }
   function closeModal() {
     if (dlg.close) dlg.close(); else dlg.removeAttribute('open');
     localStorage.removeItem('wg_open_email_id');
   }
-  close.addEventListener('click', closeModal);
-  dlg.addEventListener('cancel', (e)=>{ e.preventDefault(); closeModal(); });
+
+  closeBtn.addEventListener('click', closeModal);
+  dlg.addEventListener('cancel', (e) => { e.preventDefault(); closeModal(); });
+
+  function openEmail(id, row) {
+    fetch('/wargame/radio/email/' + id)
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        subj.textContent = data.subject || '(no subject)';
+        body.textContent = data.body || '';
+        localStorage.setItem('wg_open_email_id', String(id));
+        openModal();
+        markRead(id, row);
+      })
+      .catch(() => { /* swallow; keep UI responsive */ });
+  }
 
   // Drag only by the header bar
-  (function enableDrag(){
-    let dragging = false, startX=0, startY=0, startLeft=0, startTop=0;
-    dragBar.addEventListener('mousedown', (ev)=>{
-      // Measure first while still centered, then drop transform and fix position.
-      const rect = dlg.getBoundingClientRect();
+  (function enableDrag() {
+    let dragging = false, startX = 0, startY = 0, startLeft = 0, startTop = 0;
+
+    dragBar.addEventListener('mousedown', (ev) => {
+      // measure current box while centered, then "pin" it
+      let box = dlg.getBoundingClientRect();
+      dlg.style.left = box.left + 'px';
+      dlg.style.top  = box.top  + 'px';
       dlg.style.transform = '';
-      dlg.style.left = rect.left + 'px';
-      dlg.style.top  = rect.top  + 'px';
       dragging = true;
-      const rect = dlg.getBoundingClientRect();
-      startLeft = rect.left; startTop = rect.top;
+      startLeft = box.left; startTop = box.top;
       startX = ev.clientX; startY = ev.clientY;
       ev.preventDefault();
     });
-    window.addEventListener('mousemove', (ev)=>{
+
+    window.addEventListener('mousemove', (ev) => {
       if (!dragging) return;
       const dx = ev.clientX - startX;
       const dy = ev.clientY - startY;
       dlg.style.left = (startLeft + dx) + 'px';
       dlg.style.top  = (startTop  + dy) + 'px';
     });
-    window.addEventListener('mouseup', ()=> dragging = false);
+
+    window.addEventListener('mouseup', () => { dragging = false; });
   })();
 
-  // Wire up row clicks
-  document.querySelectorAll('.open-email').forEach(a => {
-    a.addEventListener('click', ev => {
-      ev.preventDefault();
-      const id  = a.dataset.emailId;
-      const row = a.closest('tr');
-      openEmail(id, row);
-    });
+  // Event delegation: open on subject click
+  document.addEventListener('click', function (ev) {
+    const link = ev.target.closest('a.open-email');
+    if (!link) return;
+    ev.preventDefault();
+    const id  = link.dataset.emailId;
+    const row = link.closest('tr');
+    openEmail(id, row);
   });
 
-  // Re-open the last message after a refresh if it was open
-  window.addEventListener('DOMContentLoaded', ()=>{
+  // Re-open last open message after refresh (if any)
+  (function reopenIfNeeded() {
     const reopen = localStorage.getItem('wg_open_email_id');
-    if (reopen) {
-      const link = document.querySelector('a.open-email[data-email-id="'+reopen+'"]');
-      openEmail(reopen, link ? link.closest('tr') : null);
-    }
-  });
+    if (!reopen) return;
+    const link = document.querySelector('a.open-email[data-email-id="' + reopen + '"]');
+    openEmail(reopen, link ? link.closest('tr') : null);
+  })();
 
-  // On load, apply “read” class from the stable cookie so it survives reloads.
-  (function applyReadState(){
+  // Apply “read” class from cookie (persists across reloads)
+  (function applyReadState() {
     const seen = new Set((getCookie(COOKIE) || '').split(',').filter(Boolean));
     if (seen.size === 0) return;
     document.querySelectorAll('a.open-email[data-email-id]').forEach(a => {
@@ -182,7 +170,6 @@
       }
     });
   })();
-})();
+});
 </script>
-
 {% endblock %}
