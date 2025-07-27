@@ -189,11 +189,12 @@ document.addEventListener('DOMContentLoaded', function () {
   });
 
   // Re-open last open message after refresh (if any)
-  (function reopenIfNeeded() {
-    const reopen = localStorage.getItem('wg_open_email_id');
-    if (!reopen) return;
-    const link = document.querySelector('a.open-email[data-email-id="' + reopen + '"]');
-    openEmail(reopen, link ? link.closest('tr') : null);
+  (function applyAutoReopen() {
+    const qs = new URLSearchParams(location.search);
+    const reopenId = +(qs.get('open_email') || 0);
+    if (reopenId > 0) {
+      openEmail(reopenId, null);
+    }
   })();
 
   // Apply “read” class from range cookie
@@ -209,4 +210,38 @@ document.addEventListener('DOMContentLoaded', function () {
   })();
 });
 </script>
+
+<script>
+(function(){
+  // Simple US-style tail like N12345 or N1234X (no I/O/Q)
+  function genTail(){
+    const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+    const n = Math.floor(10000 + Math.random()*90000); // 5 digits
+    const suffix = Math.random() < 0.35 ? letters[Math.floor(Math.random()*letters.length)] : "";
+    return "N" + n + suffix;
+  }
+
+  document.addEventListener('click', function(e){
+    // When the cargo request UI is opened, ensure tail is prefilled once
+    // Try a few common selectors; harmless if none exist on this page.
+    const form = document.querySelector('#cargo-request-form, form[data-role="cargo-request"], form[name="cargo_request"]');
+    if (!form) return;
+
+    // If a button/link with an id/class hints the modal opens, hook that:
+    if (e.target.closest('#open-cargo-request, .open-cargo-request, [data-open="cargo-request"]')) {
+      const tail = form.querySelector('input[name="tail_number"], input[name="tail"], input[id*="tail"]');
+      if (tail && !tail.value.trim()) tail.value = genTail();
+    }
+  });
+
+  // Safety net: on submit, still ensure it exists (no effect outside this page)
+  document.addEventListener('submit', function(ev){
+    const form = ev.target;
+    if (!form || !form.matches('#cargo-request-form, form[data-role="cargo-request"], form[name="cargo_request"]')) return;
+    const tail = form.querySelector('input[name="tail_number"], input[name="tail"], input[id*="tail"]');
+    if (tail && !tail.value.trim()) tail.value = genTail();
+  }, true);
+})();
+</script>
+
 {% endblock %}

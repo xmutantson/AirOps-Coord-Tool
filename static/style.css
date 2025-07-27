@@ -700,3 +700,14 @@ table.wg-radio-table tr.read { opacity: .8; }
 }
 #emailSubject { white-space: nowrap; overflow-x: auto; margin: 0 0 .5rem 0; }
 #emailBody    { white-space: pre-wrap; max-height: 50vh; overflow: auto; margin: 0; }
+
+/* ── Wargame Inventory (scoped) ───────────────────────────────────────────── */
+.wg-inventory .wg-card { background:#fff; border:1px solid #ddd; border-radius:8px; padding:.75rem; margin:.75rem 0; }
+.wg-inventory .wg-card-head { font-size:.9rem; color:#555; margin-bottom:.35rem; }
+.wg-inventory .lines { list-style:none; margin:.25rem 0 0; padding:0; }
+.wg-inventory .lines li { display:flex; align-items:baseline; padding:.4rem 0; border-top:1px dashed #eee; }
+.wg-inventory .lines li:first-child { border-top:0; }
+.wg-inventory .lines .name { flex:1; }
+.wg-inventory .lines .name small { color:#666; margin-left:.25rem; }
+.wg-inventory .lines .meta { white-space:nowrap; margin-left:.75rem; font-variant-numeric:tabular-nums; }
+.wg-inventory .lines li.done .name { text-decoration: line-through; opacity:.65; }

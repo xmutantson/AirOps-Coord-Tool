@@ -2,7 +2,7 @@
 {% block title %}Wargame — Inventory{% endblock %}
 
 {% block content %}
-<main class="container">
+<main class="container wg-inventory">
   <h1>Wargame — Inventory Specialist</h1>
 
   <section>
@@ -14,26 +14,14 @@
             <strong>Created:</strong> {{ b.created_at }}
           </div>
           {% if b.lines and b.lines|length > 0 %}
-            <table class="table table-striped">
-              <thead>
-                <tr>
-                  <th>Item</th>
-                  <th>Size</th>
-                  <th>Req</th>
-                  <th>Done</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for ln in b.lines %}
-                  <tr class="{% if ln.qty_done >= ln.qty_required %}done{% endif %}">
-                    <td>{{ ln.name }}</td>
-                    <td>{{ ln.size_lb }} lb</td>
-                    <td>{{ ln.qty_required }}</td>
-                    <td>{{ ln.qty_done }}</td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
+            <ul class="lines">
+              {% for ln in b.lines %}
+                <li class="{% if ln.qty_done >= ln.qty_required %}done{% endif %}">
+                  <span class="name">{{ ln.name }} <small>{{ ln.size_lb }} lb</small></span>
+                  <span class="meta">{{ ln.qty_done }} / {{ ln.qty_required }}</span>
+                </li>
+              {% endfor %}
+            </ul>
           {% else %}
             <pre class="muted" style="white-space:pre-wrap;">{{ b.manifest }}</pre>
           {% endif %}
@@ -53,26 +41,14 @@
             <strong>Created:</strong> {{ b.created_at }}
           </div>
           {% if b.lines and b.lines|length > 0 %}
-            <table class="table table-striped">
-              <thead>
-                <tr>
-                  <th>Item</th>
-                  <th>Size</th>
-                  <th>Req</th>
-                  <th>Done</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for ln in b.lines %}
-                  <tr class="{% if ln.qty_done >= ln.qty_required %}done{% endif %}">
-                    <td>{{ ln.name }}</td>
-                    <td>{{ ln.size_lb }} lb</td>
-                    <td>{{ ln.qty_required }}</td>
-                    <td>{{ ln.qty_done }}</td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
+            <ul class="lines">
+              {% for ln in b.lines %}
+                <li class="{% if ln.qty_done >= ln.qty_required %}done{% endif %}">
+                  <span class="name">{{ ln.name }} <small>{{ ln.size_lb }} lb</small></span>
+                  <span class="meta">{{ ln.qty_done }} / {{ ln.qty_required }}</span>
+                </li>
+              {% endfor %}
+            </ul>
           {% else %}
             <pre class="muted" style="white-space:pre-wrap;">{{ b.manifest }}</pre>
           {% endif %}
@@ -109,7 +85,7 @@
   function debounceReload() {
     if (reloading) return;
     reloading = true;
-    cleanup();                              // close SSE before reload
+    cleanup();
     setTimeout(() => { window.location.reload(); }, 50);
   }
 
@@ -118,32 +94,22 @@
     try {
       es = new EventSource(URL);
       es.addEventListener('inv_commit', debounceReload);
-      es.onerror = () => {
-        cleanup();
-        scheduleReconnect();
-      };
-    } catch (e) {
-      cleanup();
-      scheduleReconnect();
-    }
+      es.onerror = () => { cleanup(); scheduleReconnect(); };
+    } catch (e) { cleanup(); scheduleReconnect(); }
   }
 
   function scheduleReconnect() {
-    if (document.hidden) return;            // reconnect only if visible
+    if (document.hidden) return;
     if (reconnectTimer) return;
     reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, 4000);
   }
 
-  // Connect only when the tab is visible; tear down when hidden.
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) cleanup();
     else connect();
   });
 
-  // Clean up when navigating away / closing.
   window.addEventListener('beforeunload', cleanup);
-
-  // Initial connect if visible.
   if (!document.hidden) connect();
 })();
 </script>

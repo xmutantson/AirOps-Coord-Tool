@@ -194,34 +194,49 @@ _inv_event_queues = set()
 def publish_inventory_event(payload=None):
     """Fan out a lightweight event to all connected Wargame Inventory pages."""
     data = payload or {"when": time.time()}
-    for q in list(_inv_event_queues):
-        try:
-            q.put_nowait(data)
-        except Exception:
-            _inv_event_queues.discard(q)
+    msg = payload or {}
+    stale = []
+    """
+    Broadcast an inventory refresh notification to connected SSE clients.
+    Non‑blocking: if a client's one‑slot mailbox is already full, skip it.
+    """
+    msg = json.dumps(payload or {}, separators=(",", ":"))
+    stale = []
+    with _sse_lock:
+        for q in list(_sse_clients):
+            try:
+                q.put_nowait(msg)
+            except Full:
+                # Client already has a pending trigger; that's enough.
+                # Do not block and do not drop the client.
+                pass
+            except Exception:
+                stale.append(q)
+        for q in stale:
+            _sse_clients.discard(q)
 
-@app.route("/events/inventory")
+@app.get("/events/inventory", endpoint="inventory_events")
 def inventory_events():
-    q = queue.Queue()
-    _inv_event_queues.add(q)
-    def stream():
-        try:
-            # open the stream
-            yield ": ok\n\n"
-            while True:
-                try:
-                    data = q.get(timeout=30)
-                    yield f"event: inv_commit\ndata: {json.dumps(data)}\n\n"
-                except queue.Empty:
-                    # keep-alive ping so proxies don't close the pipe
-                    yield ": keep-alive\n\n"
-        finally:
-            _inv_event_queues.discard(q)
-    return Response(
-        stream(),
-        mimetype="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"}
-    )
+    # Use the bounded per‑client mailbox stream you defined earlier
+    headers = {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache",
+        # Helpful for some reverse proxies (harmless if unused)
+        "X-Accel-Buffering": "no",
+    }
+    return Response(stream_with_context(_inventory_event_stream()), headers=headers)
+
+# Remove hop‑by‑hop headers from all responses (PEP 3333)
+@app.after_request
+def _strip_hop_by_hop(resp):
+    for h in ("Connection","Keep-Alive","Proxy-Authenticate","Proxy-Authorization",
+              "TE","Trailer","Transfer-Encoding","Upgrade"):
+        if h in resp.headers:
+            try:
+                del resp.headers[h]
+            except Exception:
+                pass
+    return resp
 
 # Constants: Only these ICAO4 codes will be used in Wargame Mode
 HARDCODED_AIRFIELDS = [
