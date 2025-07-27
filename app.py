@@ -4704,7 +4704,7 @@ def publish_inventory_event(data=None):
         for q in stale:
             _sse_clients.discard(q)
 
-@app.get('/inventory/events')
+@app.get('/inventory/events', endpoint='inventory_sse')
 def inventory_events():
     headers = {
         'Content-Type': 'text/event-stream; charset=utf-8',
