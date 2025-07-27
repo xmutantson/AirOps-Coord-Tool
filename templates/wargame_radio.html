@@ -61,18 +61,13 @@
   </form>
 </dialog>
 
+<!-- keep template styles light; main rules live in static/style.css -->
 <style>
-  /* Unread indicator */
-  .wg-radio-table .dot {
-    display:inline-block; width:10px; height:10px; border-radius:50%; background:#c33;
-  }
-  .wg-radio-table tr.read .dot { visibility:hidden; }
-  .wg-radio-table tr.read { opacity:.9; }
-  /* Dialog chrome */
+  /* Dialog chrome (fallback if CSS not loaded early) */
   #emailDialog {
-    position: fixed;
-    width: min(800px, 92vw);
-    border: 1px solid #ccc; border-radius: 8px;
+    width: min(1200px, 98vw);
+    border: 1px solid #ccc;
+    border-radius: 8px;
     padding: 0;
   }
 </style>
@@ -104,6 +99,20 @@
     if (row) row.classList.add('read');
   }
 
+  function openEmail(id, row){
+    // Build the path on the client:
+    fetch('/wargame/radio/email/' + id)
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        subj.textContent = data.subject || '(no subject)';
+        body.textContent = data.body || '';
+        localStorage.setItem('wg_open_email_id', String(id));  // remember open message across reloads
+        openModal();
+        markRead(id, row);
+      })
+      .catch(() => {});
+  }
+
   // Open centered; when dragging begins we switch to absolute offsets.
   function openModal() {
     dlg.style.left = '50%';
@@ -113,6 +122,7 @@
   }
   function closeModal() {
     if (dlg.close) dlg.close(); else dlg.removeAttribute('open');
+    localStorage.removeItem('wg_open_email_id');
   }
   close.addEventListener('click', closeModal);
   dlg.addEventListener('cancel', (e)=>{ e.preventDefault(); closeModal(); });
@@ -121,9 +131,12 @@
   (function enableDrag(){
     let dragging = false, startX=0, startY=0, startLeft=0, startTop=0;
     dragBar.addEventListener('mousedown', (ev)=>{
-      dragging = true;
-      // drop centering transform and move by absolute offsets
+      // Measure first while still centered, then drop transform and fix position.
+      const rect = dlg.getBoundingClientRect();
       dlg.style.transform = '';
+      dlg.style.left = rect.left + 'px';
+      dlg.style.top  = rect.top  + 'px';
+      dragging = true;
       const rect = dlg.getBoundingClientRect();
       startLeft = rect.left; startTop = rect.top;
       startX = ev.clientX; startY = ev.clientY;
@@ -145,17 +158,17 @@
       ev.preventDefault();
       const id  = a.dataset.emailId;
       const row = a.closest('tr');
-      // Build the path on the client:
-      fetch('/wargame/radio/email/' + id)
-        .then(r => r.ok ? r.json() : Promise.reject(r.status))
-        .then(data => {
-          subj.textContent = data.subject || '(no subject)';
-          body.textContent = data.body || '';
-          openModal();
-          markRead(id, row);
-        })
-        .catch(() => {});
+      openEmail(id, row);
     });
+  });
+
+  // Re-open the last message after a refresh if it was open
+  window.addEventListener('DOMContentLoaded', ()=>{
+    const reopen = localStorage.getItem('wg_open_email_id');
+    if (reopen) {
+      const link = document.querySelector('a.open-email[data-email-id="'+reopen+'"]');
+      openEmail(reopen, link ? link.closest('tr') : null);
+    }
   });
 
   // On load, apply “read” class from the stable cookie so it survives reloads.

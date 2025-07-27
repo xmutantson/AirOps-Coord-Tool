@@ -650,24 +650,52 @@ body.cw-active .ramp-form-container > :not(#cargo-tools-panel) { display: none !
 .super-settings { max-width: 540px; margin: 0 auto; }
 
 /* Wargame Radio inbox: unread/read cues */
-table.wg-inbox thead th { background: var(--table-head-bg); color: var(--table-head-fg); }
-table.wg-inbox .unread-dot {
+/* Support both legacy .wg-inbox and current .wg-radio-table */
+table.wg-inbox thead th,
+table.wg-radio-table thead th {
+  background: var(--table-head-bg);
+  color: var(--table-head-fg);
+}
+table.wg-inbox .unread-dot,
+table.wg-radio-table .unread-dot,
+table.wg-inbox .dot,
+table.wg-radio-table .dot {
   display:inline-block; width:10px; height:10px; border-radius:50%; background:#c33;
 }
-table.wg-inbox tr.read .unread-dot { visibility:hidden; }
-table.wg-inbox tr.read { opacity: .8; }
+table.wg-inbox tr.read .unread-dot,
+table.wg-radio-table tr.read .unread-dot,
+table.wg-inbox tr.read .dot,
+table.wg-radio-table tr.read .dot { visibility:hidden; }
+table.wg-inbox tr.read,
+table.wg-radio-table tr.read { opacity: .8; }
 
 /* Radio modal */
 .wg-modal {
   position: fixed;
-  width: min(800px, 92vw);
+  width: min(1200px, 98vw);
   border: 1px solid #ccc; border-radius: 8px; padding: 0;
 }
 .wg-modal-header {
   height: 36px; background: #fafafa; border-bottom: 1px solid #eee;
   display:flex; align-items:center; justify-content:flex-end; padding: 0 .5rem;
 }
-.wg-modal-close { background: #c33; color: #fff; border: none; border-radius: 4px; width:28px; height:28px; font-size: 1.1rem; line-height: 1; cursor: pointer; }
+.wg-modal-close {
+  background: #c33; color: #fff; border: none; border-radius: 4px;
+  width:28px; height:28px; font-size: 1.1rem; line-height: 1; cursor: pointer;
+}
 .wg-modal-body   { padding: 1rem; }
-.wg-modal-subject{ margin: 0 0 .5rem 0; }
+.wg-modal-subject{
+  margin: 0 0 .5rem 0;
+  white-space: nowrap;        /* prefer single line; allow horizontal scroll if needed */
+  overflow-x: auto;
+}
 .wg-modal-pre    { white-space: pre-wrap; }
+
+/* Fallback for the current <dialog id="emailDialog"> implementation */
+#emailDialog {
+  position: fixed;
+  width: min(1200px, 98vw);
+  border: 1px solid #ccc; border-radius: 8px; padding: 0;
+}
+#emailSubject { white-space: nowrap; overflow-x: auto; margin: 0 0 .5rem 0; }
+#emailBody    { white-space: pre-wrap; max-height: 50vh; overflow: auto; margin: 0; }

@@ -1722,14 +1722,28 @@ def generate_ramp_request():
     choices = [af for af in HARDCODED_AIRFIELDS if af != origin] or HARDCODED_AIRFIELDS[:]
     destination = random.choice(choices)
 
-    manifest, total_wt, _ = generate_cargo_manifest()
-    if not total_wt:
-        # guarantee a concrete line from catalog instead of "general cargo"
-        name, sizes = random.choice(list(WARGAME_ITEMS.items()))
-        size = random.choice(sizes)
-        qty  = random.randint(1, 4)
-        manifest = f"{name} {size} lb×{qty}"
-        total_wt = float(size * qty)
+    # Build availability from committed shelf stock (only items we can actually load).
+    avail = dict_rows("""
+      SELECT e.sanitized_name AS noun,
+             e.weight_per_unit AS size_lb,
+             SUM(CASE WHEN e.direction='in' THEN e.quantity
+                      WHEN e.direction='out' THEN -e.quantity END) AS qty
+        FROM inventory_entries e
+       WHERE e.pending=0
+       GROUP BY e.sanitized_name, e.weight_per_unit
+       HAVING qty > 0
+    """)
+    if not avail:
+        return  # nothing to request yet
+    import random as _r
+    picks = _r.sample(avail, k=min(len(avail), _r.randint(2,5)))
+    lines, total_wt = [], 0.0
+    for r in picks:
+        have = int(r['qty'])
+        ask  = _r.randint(1, min(4, have))
+        lines.append(f"{r['noun']} {int(r['size_lb'])} lb×{ask}")
+        total_wt += r['size_lb'] * ask
+    manifest = '; '.join(lines)
 
     with sqlite3.connect(DB_FILE) as c:
         c.execute("""
@@ -1786,7 +1800,8 @@ def reconcile_inventory_batches(session_id: str) -> None:
     """
     For the just-committed /inventory session:
       • Attribute entries to the most-complete pending batch of the same direction.
-      • Prefer item-level match (name+size); fallback to weight-based allocation.
+      • Prefer item-level match (**sanitized_name** + exact size); can spread across batches.
+      • Fallback to weight-based allocation only if no open matching items exist.
       • When a batch completes, set satisfied_at and write one inventory SLA metric.
     """
     with sqlite3.connect(DB_FILE) as c:
@@ -1839,28 +1854,54 @@ def reconcile_inventory_batches(session_id: str) -> None:
                   VALUES ('inventory', ?, ?, ?)
                 """, (delta, now_ts, f"invbatch:{batch_id}"))
 
-        def apply_item(direction: str, name: str, size_lb: float, qty: int):
-            if qty <= 0:
-                return
-            cands = []
+        def _any_open_match(direction: str, san_name: str, size_lb: float) -> bool:
+            """Is there any *open* batch item needing this sanitized name+size?"""
             for r in load_batches(direction):
                 for it in r['items']:
-                    if it['name'].lower() == name.lower() and abs(it['size_lb'] - size_lb) < 1e-6:
+                    if sanitize_name(it['name']) == san_name and abs(it['size_lb'] - size_lb) < 1e-6:
                         if it['qty_done'] < it['qty_required']:
-                            cands.append(r)
-                            break
-            pick = pick_most_complete(cands)
-            if not pick:
-                return
-            for it in pick['items']:
-                if it['name'].lower() == name.lower() and abs(it['size_lb'] - size_lb) < 1e-6:
-                    remaining = it['qty_required'] - it['qty_done']
-                    inc = min(qty, remaining)
-                    if inc > 0:
-                        c.execute("UPDATE wargame_inventory_batch_items SET qty_done=qty_done+? WHERE id=?",
-                                  (inc, it['id']))
+                            return True
+            return False
+
+        def apply_item(direction: str, name_raw: str, size_lb: float, qty: int) -> int:
+            """
+            Allocate `qty` units of (sanitized(name_raw), size_lb) across batches that still need them.
+            Returns the number of units actually applied.
+            """
+            if qty <= 0:
+                return 0
+            applied = 0
+            san = sanitize_name(name_raw)
+            while qty > 0:
+                # Build candidates each round; state changes as we update.
+                cands = []
+                for r in load_batches(direction):
+                    need_here = False
+                    for it in r['items']:
+                        if sanitize_name(it['name']) == san and abs(it['size_lb'] - size_lb) < 1e-6:
+                            if it['qty_done'] < it['qty_required']:
+                                need_here = True
+                                break
+                    if need_here:
+                        cands.append(r)
+                pick = pick_most_complete(cands)
+                if not pick:
                     break
-            close_if_complete(pick['b']['id'], pick['b']['created_at'])
+                # Apply to the picked batch’s matching item
+                for it in pick['items']:
+                    if sanitize_name(it['name']) == san and abs(it['size_lb'] - size_lb) < 1e-6:
+                        remaining = it['qty_required'] - it['qty_done']
+                        inc = min(qty, remaining)
+                        if inc > 0:
+                            c.execute(
+                              "UPDATE wargame_inventory_batch_items SET qty_done=qty_done+? WHERE id=?",
+                              (inc, it['id'])
+                            )
+                            applied += inc
+                            qty     -= inc
+                        break
+                close_if_complete(pick['b']['id'], pick['b']['created_at'])
+            return applied
 
         def apply_weight(direction: str, total_wt: float):
             if total_wt <= 0:
@@ -1887,18 +1928,136 @@ def reconcile_inventory_batches(session_id: str) -> None:
             if parsed:
                 for it in parsed:
                     q = int(e['quantity'] or it['qty'] or 1)
-                    # try item match; if nothing moved, consume by weight for that line
-                    before = dict_rows("""
-                        SELECT qty_done FROM wargame_inventory_batch_items
-                        WHERE name=? AND ABS(size_lb-?)<1e-6
-                        ORDER BY id DESC LIMIT 1
-                    """, (it['name'], float(it['size_lb'])))
-                    apply_item(e['direction'], it['name'], float(it['size_lb']), q)
-                    # crude check: if no matching item existed anywhere, weight-fallback
-                    if not before:
-                        apply_weight(e['direction'], float(it['size_lb']) * q)
+                    size = float(it['size_lb'])
+                    # First try sanitized item match (across batches, if multiple exist)
+                    used = apply_item(e['direction'], it['name'], size, q)
+                    left = q - used
+                    if left > 0:
+                        # Fallback only if there are NO open matching items left anywhere.
+                        if not _any_open_match(e['direction'], sanitize_name(it['name']), size):
+                            apply_weight(e['direction'], size * left)
             else:
                 apply_weight(e['direction'], float(e['total_weight'] or 0.0))
+
+def reconcile_inventory_entry(entry_id: int) -> None:
+    """
+    Reconcile a single committed Inventory entry (used by Inventory Detail form).
+    Mirrors the logic in reconcile_inventory_batches() for one row.
+    """
+    row = dict_rows("""
+      SELECT id, direction, quantity, total_weight, COALESCE(NULLIF(raw_name,''), '') AS raw_name
+        FROM inventory_entries
+       WHERE id=? AND pending=0
+    """, (entry_id,))
+    if not row:
+        return
+    e = row[0]
+    # Reuse the session-based reconciler by faking a one-off list:
+    # implement minimal inline logic to avoid SQL gymnastics
+    with sqlite3.connect(DB_FILE) as c:
+        c.row_factory = sqlite3.Row
+        now_ts = datetime.utcnow().isoformat()
+
+        # Inline helpers copied (lightly) from reconcile_inventory_batches
+        def load_batches(direction: str):
+            bs = c.execute("""
+                SELECT id, created_at FROM wargame_inventory_batches
+                 WHERE direction=? AND satisfied_at IS NULL
+            """, (direction,)).fetchall()
+            out = []
+            for b in bs:
+                items = c.execute("""
+                    SELECT id, name, size_lb, qty_required, qty_done
+                      FROM wargame_inventory_batch_items
+                     WHERE batch_id=?
+                """, (b['id'],)).fetchall()
+                remain = sum(1 for it in items if it['qty_done'] < it['qty_required'])
+                out.append({'b': b, 'items': items, 'remain': remain})
+            return out
+
+        def pick_most_complete(cands):
+            if not cands: return None
+            cands.sort(key=lambda r: (r['remain'], r['b']['created_at']))
+            return cands[0]
+
+        def close_if_complete(batch_id: int, created_at: str):
+            items_now = c.execute("""
+                SELECT qty_required, qty_done
+                  FROM wargame_inventory_batch_items
+                 WHERE batch_id=?
+            """, (batch_id,)).fetchall()
+            if all(x['qty_done'] >= x['qty_required'] for x in items_now):
+                c.execute("UPDATE wargame_inventory_batches SET satisfied_at=? WHERE id=?",
+                          (now_ts, batch_id))
+                delta = (datetime.fromisoformat(now_ts) - datetime.fromisoformat(created_at)).total_seconds()
+                c.execute("""
+                  INSERT INTO wargame_metrics(event_type, delta_seconds, recorded_at, key)
+                  VALUES ('inventory', ?, ?, ?)
+                """, (delta, now_ts, f"invbatch:{batch_id}"))
+
+        def _any_open_match(direction: str, san_name: str, size_lb: float) -> bool:
+            for r in load_batches(direction):
+                for it in r['items']:
+                    if sanitize_name(it['name']) == san_name and abs(it['size_lb'] - size_lb) < 1e-6:
+                        if it['qty_done'] < it['qty_required']:
+                            return True
+            return False
+
+        def apply_item(direction: str, name_raw: str, size_lb: float, qty: int) -> int:
+            if qty <= 0: return 0
+            applied = 0
+            san = sanitize_name(name_raw)
+            while qty > 0:
+                cands = []
+                for r in load_batches(direction):
+                    need_here = any(
+                        sanitize_name(it['name']) == san and abs(it['size_lb'] - size_lb) < 1e-6 and
+                        it['qty_done'] < it['qty_required']
+                        for it in r['items']
+                    )
+                    if need_here: cands.append(r)
+                pick = pick_most_complete(cands)
+                if not pick: break
+                for it in pick['items']:
+                    if sanitize_name(it['name']) == san and abs(it['size_lb'] - size_lb) < 1e-6:
+                        remaining = it['qty_required'] - it['qty_done']
+                        inc = min(qty, remaining)
+                        if inc > 0:
+                            c.execute("UPDATE wargame_inventory_batch_items SET qty_done=qty_done+? WHERE id=?",
+                                      (inc, it['id']))
+                            applied += inc
+                            qty     -= inc
+                        break
+                close_if_complete(pick['b']['id'], pick['b']['created_at'])
+            return applied
+
+        def apply_weight(direction: str, total_wt: float):
+            if total_wt <= 0: return
+            pick = pick_most_complete(load_batches(direction))
+            if not pick: return
+            remaining = total_wt
+            for it in pick['items']:
+                need = it['qty_required'] - it['qty_done']
+                if need <= 0: continue
+                fit_qty = min(need, int(remaining // max(it['size_lb'], 1e-6)))
+                if fit_qty > 0:
+                    c.execute("UPDATE wargame_inventory_batch_items SET qty_done=qty_done+? WHERE id=?",
+                              (fit_qty, it['id']))
+                    remaining -= fit_qty * it['size_lb']
+                if remaining < 1e-6: break
+            close_if_complete(pick['b']['id'], pick['b']['created_at'])
+
+        parsed = _parse_manifest(e['raw_name'])
+        if parsed:
+            for it in parsed:
+                q = int(e['quantity'] or it['qty'] or 1)
+                size = float(it['size_lb'])
+                used = apply_item(e['direction'], it['name'], size, q)
+                left = q - used
+                if left > 0 and not _any_open_match(e['direction'], sanitize_name(it['name']), size):
+                    apply_weight(e['direction'], size * left)
+        else:
+            apply_weight(e['direction'], float(e['total_weight'] or 0.0))
 
 def generate_inventory_outbound_request():
     """Generate a multi-line outbound request batch (to be fulfilled by Inventory)."""
@@ -4252,13 +4411,24 @@ def inventory_detail():
         ts         = datetime.utcnow().isoformat()
 
         with sqlite3.connect(DB_FILE) as c:
-            c.execute("""
+            cur = c.execute("""
               INSERT INTO inventory_entries(
                 category_id,raw_name,sanitized_name,
                 weight_per_unit,quantity,total_weight,
                 direction,timestamp
               ) VALUES (?,?,?,?,?,?,?,?)
             """, (cat_id, raw, noun, wpu_lbs, qty, total_lbs, dirn, ts))
+            eid = cur.lastrowid
+
+        # If Wargame is active, immediately reconcile this single entry
+        # so Wargame Inventory cue cards reflect progress (strikethroughs).
+        try:
+            if get_preference('wargame_mode') == 'yes':
+                reconcile_inventory_entry(int(eid))
+        except Exception:
+            # never block the operator’s flow on reconciliation issues
+            pass
+
         return redirect(url_for('inventory.inventory_detail'))
 
     categories = dict_rows("SELECT id, display_name FROM inventory_categories")
