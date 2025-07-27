@@ -27,12 +27,25 @@ Create a directory and save this `docker-compose.yml`:
 services:
   aircraft_ops_tool:
     image: ghcr.io/xmutantson/aircraft_ops_tool:latest
-    # host networking so we can advertise rampops.local via mDNS
     network_mode: host
     volumes:
-      - ./data:/app/data         # Persists the SQLite database
-      - flask_secret:/run/secrets  # Auto-generated, stable Flask secret
+      - ./data:/app/data
+      - flask_secret:/run/secrets
     restart: unless-stopped
+
+    # Waitress sizing (safe defaults for a Pi 4; tune by env without rebuilds)
+    environment:
+      WAITRESS_LISTEN: "0.0.0.0:5150"
+      WAITRESS_THREADS: "32"            # 24–40 are fine on a Pi 4 for I/O-bound loads
+      WAITRESS_CONNECTION_LIMIT: "200"  # cap concurrent sockets per process
+      WAITRESS_CHANNEL_TIMEOUT: "120"   # > 30s SSE keep-alive
+      # WAITRESS_BACKLOG: "100"         # optional; leave unset unless needed
+
+    # A modest FD limit helps if many tabs open SSE
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 8192
 
 volumes:
   flask_secret:
