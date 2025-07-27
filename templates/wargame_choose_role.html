@@ -5,7 +5,7 @@
   <h1>Wargame Mode – Select Your Role</h1>
   <form method="post" action="{{ url_for('wargame_choose_role') }}" class="wg-role-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <fieldset>
+    <fieldset class="wg-role-fieldset">
       <legend>Choose one:</legend>
 
     <div class="role-cards">
@@ -108,7 +108,7 @@
     </div>
 
     <div class="actions">
-      <button type="submit" class="btn primary">Confirm Role</button>
+      <button type="submit" class="btn yellow">Confirm Role</button>
     </div>
 
     </fieldset>

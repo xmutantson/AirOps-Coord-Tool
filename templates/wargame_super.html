@@ -37,10 +37,12 @@
     <table class="data-table">
       <tbody>
         {% for key, val in settings.items() %}
+        {% if key != 'csrf_token' %}
         <tr>
           <td>{{ key }}</td>
           <td>{{ val }}</td>
         </tr>
+        {% endif %}
         {% endfor %}
       </tbody>
     </table>

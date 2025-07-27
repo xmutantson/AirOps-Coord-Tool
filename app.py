@@ -608,6 +608,27 @@ def run_migrations():
     # wargame_metrics.key for linking metrics to entities (e.g., flight:<id>)
     ensure_column("wargame_metrics", "key", "TEXT")
     ensure_column("flights", "cargo_weight_real", "REAL")
+    # Ensure the canonical timestamp column exists on flights
+    ensure_column("flights", "timestamp", "TEXT")
+
+    with sqlite3.connect(DB_FILE) as c:
+        # backfill any missing timestamps on existing rows
+        c.execute("""
+          UPDATE flights
+             SET timestamp = strftime('%Y-%m-%dT%H:%M:%f','now')
+           WHERE IFNULL(timestamp,'') = ''
+        """)
+        # idempotent trigger to auto-stamp timestamp on inserts that omit it
+        c.execute("""
+          CREATE TRIGGER IF NOT EXISTS flights_set_timestamp
+          AFTER INSERT ON flights
+          WHEN NEW.timestamp IS NULL OR NEW.timestamp = ''
+          BEGIN
+            UPDATE flights
+               SET timestamp = strftime('%Y-%m-%dT%H:%M:%f','now')
+             WHERE id = NEW.id;
+          END;
+        """)
 
     # Wargame: hold cargo manifest on inbound schedule so it becomes flight.remarks
     ensure_column("wargame_inbound_schedule", "manifest", "TEXT")
@@ -3550,6 +3571,8 @@ def admin():
                 with sqlite3.connect(DB_FILE) as c:
                     for tbl in WARGAME_TABLES:
                         c.execute(f"DELETE FROM {tbl}")
+                # Ensure schema is current after a wipe
+                run_migrations()
 
                 # 2) regenerate callsigns and wire up the scheduler
                 initialize_airfield_callsigns()
@@ -3572,6 +3595,8 @@ def admin():
                 with sqlite3.connect(DB_FILE) as c:
                     for tbl in WARGAME_TABLES:
                         c.execute(f"DELETE FROM {tbl}")
+                # Keep schema current even when turning Wargame off
+                run_migrations()
 
                 # 3) clear any stale cookies
                 resp = redirect(url_for('admin'))

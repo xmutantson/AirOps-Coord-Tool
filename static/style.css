@@ -832,7 +832,15 @@ body.cw-active #cargo-tools-panel {
   border-top: 1px solid #ddd;
 }
 /* --- Wargame role chooser --- */
-.wg-role-form { max-width: 960px; }
+.wg-role-form { width:100%; max-width: 1080px; margin: 0 auto; }
+.wg-role-fieldset{
+  width:100%;
+  border:1px solid #ddd;
+  border-radius:12px;
+  padding:12px 16px;        /* add breathing room */
+  margin: 0 auto;           /* keep centered inside the container */
+  background:#fff;
+}
 .role-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px,1fr));
@@ -854,5 +862,13 @@ body.cw-active #cargo-tools-panel {
 }
 .super-panel input[type="number"] { width: 120px; }
 .actions { margin-top: .75rem; }
-.btn.primary { background: #2b6cb0; color: #fff; border: none; padding: .5rem .9rem; border-radius: 6px; cursor: pointer; }
-.btn.primary:hover { filter: brightness(1.05); }
+.actions.right { display:flex; justify-content:flex-end; }
+.btn.yellow{
+  background:#FFEB3B;       /* Google yellow 500 */
+  border:1px solid #FBC02D; /* 700 for contrast */
+  color:#333;
+  padding:.5rem .9rem;
+  border-radius:6px;
+  cursor:pointer;
+}
+.btn.yellow:hover{ filter: brightness(1.03); }
