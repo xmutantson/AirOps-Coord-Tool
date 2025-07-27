@@ -153,19 +153,43 @@ if (typeof window.showToast !== 'function') {
     ] %}
 <script>
 (function(){
-  var blocked = false;
-  var pending = false;
+  var blocked  = false;
+  var pending  = false;
+  var INTERVAL = 30000; // 30s
+
+  // Public API for pages/components (e.g., Radio modal)
   window.blockRefresh = function(on){ blocked = !!on; };
   window.requestRefreshIfPending = function(){
     if (pending && !blocked) { pending = false; location.reload(); }
   };
-  function tick(){
-    setTimeout(function(){
-      if (blocked){ pending = true; tick(); return; }
-      location.reload();
-    }, 30000);
+
+  function wantPause(){
+    // Also respect a page setting a global flag (defensive fallback)
+    var modalOpen = !!window.__wgModalOpen;
+    // Don't reload in background tabs; queue a pending refresh instead.
+    var hidden = (document.visibilityState !== 'visible');
+    return blocked || modalOpen || hidden;
   }
-  tick();
+
+  function schedule(){
+    setTimeout(function(){
+      if (wantPause()){
+        pending = true;
+        schedule();
+        return;
+      }
+      location.reload();
+    }, INTERVAL);
+  }
+
+  // When the tab becomes visible, perform the pending refresh (if unblocked).
+  document.addEventListener('visibilitychange', function(){
+    if (document.visibilityState === 'visible') {
+      window.requestRefreshIfPending();
+    }
+  });
+
+  schedule();
 })();
 </script>
 {% endif %}

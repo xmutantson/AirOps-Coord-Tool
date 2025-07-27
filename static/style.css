@@ -711,3 +711,8 @@ table.wg-radio-table tr.read { opacity: .8; }
 .wg-inventory .lines .name small { color:#666; margin-left:.25rem; }
 .wg-inventory .lines .meta { white-space:nowrap; margin-left:.75rem; font-variant-numeric:tabular-nums; }
 .wg-inventory .lines li.done .name { text-decoration: line-through; opacity:.65; }
+
+/* Wargame card lists (Inventory + Ramp) */
+.card ul.tight { margin: 0.25rem 0 0; padding-left: 1.2rem; }
+.card ul.tight li { margin: 0.15rem 0; }
+.card ul.tight li.done { text-decoration: line-through; opacity: 0.65; }

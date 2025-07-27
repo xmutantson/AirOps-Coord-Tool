@@ -189,16 +189,15 @@ def _mmss(value):
     return f"{m}:{s:02d}"
 app.jinja_env.filters['mmss'] = _mmss
 
-# ---- Server-Sent Events for inventory commits (Wargame Inventory auto-refresh) ----
-_inv_event_queues = set()
-def publish_inventory_event(payload=None):
-    """Fan out a lightweight event to all connected Wargame Inventory pages."""
-    data = payload or {"when": time.time()}
-    msg = payload or {}
-    stale = []
+# ---- Server-Sent Events for inventory commits (Wargame Inventory auto‑refresh) ----
+# One‑slot per‑client mailbox so we never block on slow browsers.
+_sse_lock = Lock()
+_sse_clients: set[Queue] = set()
+
+def publish_inventory_event(payload: dict | None = None) -> None:
     """
-    Broadcast an inventory refresh notification to connected SSE clients.
-    Non‑blocking: if a client's one‑slot mailbox is already full, skip it.
+    Broadcast a lightweight refresh notification to all connected Inventory pages.
+    Non‑blocking: if a client's mailbox is full, skip it (it already has a pending refresh).
     """
     msg = json.dumps(payload or {}, separators=(",", ":"))
     stale = []
@@ -207,21 +206,41 @@ def publish_inventory_event(payload=None):
             try:
                 q.put_nowait(msg)
             except Full:
-                # Client already has a pending trigger; that's enough.
-                # Do not block and do not drop the client.
+                # A refresh is already queued for this client; that's sufficient.
                 pass
             except Exception:
                 stale.append(q)
-        for q in stale:
+        with _sse_lock:
+            for q in stale:
+                _sse_clients.discard(q)
+
+def _inventory_event_stream():
+    """
+    Yield a simple SSE stream. Sends a comment heartbeat every ~25s so
+    intermediaries don't time out idle connections.
+    """
+    q: Queue = Queue(maxsize=1)
+    with _sse_lock:
+        _sse_clients.add(q)
+    try:
+        # Advise the browser to retry quickly if the connection drops
+        yield "retry: 5000\n\n"
+        while True:
+            try:
+                item = q.get(timeout=25)
+                yield f"data: {item}\n\n"
+            except Empty:
+                # heartbeat (SSE comment)
+                yield ":\n\n"
+    finally:
+        with _sse_lock:
             _sse_clients.discard(q)
 
 @app.get("/events/inventory", endpoint="inventory_events")
 def inventory_events():
-    # Use the bounded per‑client mailbox stream you defined earlier
     headers = {
         "Content-Type": "text/event-stream; charset=utf-8",
         "Cache-Control": "no-cache",
-        # Helpful for some reverse proxies (harmless if unused)
         "X-Accel-Buffering": "no",
     }
     return Response(stream_with_context(_inventory_event_stream()), headers=headers)
@@ -2161,7 +2180,12 @@ def generate_inventory_outbound_request():
         lines.append(f"{r['noun']} {int(r['size_lb'])} lb×{ask}")
     if not lines:
         return
-    _create_inventory_batch('out', '; '.join(lines), ts)
+    bid = _create_inventory_batch('out', '; '.join(lines), ts)
+    # Notify any open Inventory dashboards
+    try:
+        publish_inventory_event({"kind":"out","batch_id": bid})
+    except Exception:
+        pass
 
 def generate_inventory_inbound_delivery():
     """Generate a multi-line inbound delivery batch (stuff 'arrived' that must be logged)."""
@@ -2182,7 +2206,12 @@ def generate_inventory_inbound_delivery():
         qty = random.randint(1,5)
         lines.append(f"{name} {size} lb×{qty}")
     manifest = '; '.join(lines)
-    _create_inventory_batch('in', manifest, ts)
+    bid = _create_inventory_batch('in', manifest, ts)
+    # Notify any open Inventory dashboards
+    try:
+        publish_inventory_event({"kind":"in","batch_id": bid})
+    except Exception:
+        pass
 
 def generate_ramp_flight():
     """Generate a ramp flight with detailed cargo line items (no metrics here).

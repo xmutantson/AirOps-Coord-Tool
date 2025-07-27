@@ -126,14 +126,21 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   function openModal() {
+    // Pause Wargame auto‑refresh while the modal is open
+    if (window.blockRefresh) window.blockRefresh(true);
     dlg.style.left = '50%';
     dlg.style.top  = '50%';
     dlg.style.transform = 'translate(-50%, -50%)';
     if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', 'open');
+    window.__wgModalOpen = true;
   }
   function closeModal() {
     if (dlg.close) dlg.close(); else dlg.removeAttribute('open');
     localStorage.removeItem('wg_open_email_id');
+    window.__wgModalOpen = false;
+    // Resume refresh and perform any pending catch‑up reload
+    if (window.blockRefresh) window.blockRefresh(false);
+    if (window.requestRefreshIfPending) window.requestRefreshIfPending();
   }
 
   closeBtn.addEventListener('click', closeModal);

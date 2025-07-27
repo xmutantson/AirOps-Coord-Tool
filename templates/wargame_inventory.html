@@ -1,116 +1,86 @@
 {% extends "base.html" %}
-{% block title %}Wargame — Inventory{% endblock %}
-
+{% block title %}Wargame · Inventory{% endblock %}
 {% block content %}
-<main class="container wg-inventory">
   <h1>Wargame — Inventory Specialist</h1>
 
-  <section>
-    <h2>Incoming deliveries</h2>
-    {% if incoming_deliveries and incoming_deliveries|length > 0 %}
+  {% if incoming_deliveries %}
+    <h2>Incoming Deliveries</h2>
+    <div class="card-container">
       {% for b in incoming_deliveries %}
-        <article class="wg-card">
-          <div class="wg-card-head">
-            <strong>Created:</strong> {{ b.created_at }}
-          </div>
-          {% if b.lines and b.lines|length > 0 %}
-            <ul class="lines">
-              {% for ln in b.lines %}
-                <li class="{% if ln.qty_done >= ln.qty_required %}done{% endif %}">
-                  <span class="name">{{ ln.name }} <small>{{ ln.size_lb }} lb</small></span>
-                  <span class="meta">{{ ln.qty_done }} / {{ ln.qty_required }}</span>
-                </li>
-              {% endfor %}
-            </ul>
-          {% else %}
-            <pre class="muted" style="white-space:pre-wrap;">{{ b.manifest }}</pre>
-          {% endif %}
-        </article>
+        <div class="card">
+          <p><strong>Created (UTC):</strong> {{ b.created_at }}</p>
+          <p><strong>Manifest:</strong></p>
+          <ul class="tight">
+            {% for line in b.lines %}
+              {% set done = (line.qty_done >= line.qty_required) %}
+              <li{% if done %} class="done"{% endif %}>
+                {{ line.name }} {{ line.size_lb|int }} lb × {{ line.qty_required }}
+                {% if line.qty_done %} — {{ line.qty_done }}/{{ line.qty_required }} done{% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
       {% endfor %}
-    {% else %}
-      <p class="muted">No incoming deliveries are waiting.</p>
-    {% endif %}
-  </section>
+    </div>
+  {% else %}
+    <p><em>No inbound deliveries at the moment.</em></p>
+  {% endif %}
 
-  <section style="margin-top:1.5rem;">
-    <h2>Outgoing requests</h2>
-    {% if outgoing_requests and outgoing_requests|length > 0 %}
+  <hr class="separator" />
+
+  {% if outgoing_requests %}
+    <h2>Outbound Requests</h2>
+    <div class="card-container">
       {% for b in outgoing_requests %}
-        <article class="wg-card">
-          <div class="wg-card-head">
-            <strong>Created:</strong> {{ b.created_at }}
-          </div>
-          {% if b.lines and b.lines|length > 0 %}
-            <ul class="lines">
-              {% for ln in b.lines %}
-                <li class="{% if ln.qty_done >= ln.qty_required %}done{% endif %}">
-                  <span class="name">{{ ln.name }} <small>{{ ln.size_lb }} lb</small></span>
-                  <span class="meta">{{ ln.qty_done }} / {{ ln.qty_required }}</span>
-                </li>
-              {% endfor %}
-            </ul>
-          {% else %}
-            <pre class="muted" style="white-space:pre-wrap;">{{ b.manifest }}</pre>
-          {% endif %}
-        </article>
+        <div class="card">
+          <p><strong>Created (UTC):</strong> {{ b.created_at }}</p>
+          <p><strong>Manifest:</strong></p>
+          <ul class="tight">
+            {% for line in b.lines %}
+              {% set done = (line.qty_done >= line.qty_required) %}
+              <li{% if done %} class="done"{% endif %}>
+                {{ line.name }} {{ line.size_lb|int }} lb × {{ line.qty_required }}
+                {% if line.qty_done %} — {{ line.qty_done }}/{{ line.qty_required }} done{% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
       {% endfor %}
-    {% else %}
-      <p class="muted">No outgoing requests are waiting.</p>
-    {% endif %}
-  </section>
+    </div>
+  {% else %}
+    <p><em>No outbound requests at the moment.</em></p>
+  {% endif %}
 
-  <!-- Exit role -->
-  <form class="wg-exit-form" action="{{ url_for('wargame_exit_role') }}" method="post">
+  <form id="wg-exit-form"
+        class="wg-exit"
+        method="post"
+        action="{{ url_for('wargame_exit_role') }}"
+        onsubmit="return confirm('Exit your Wargame role and choose a new one?');">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button type="submit" class="btn btn-yellow"
-            onclick="return confirm('Exit your role and choose a new one?');">
-      Exit role
-    </button>
+    <button type="submit" class="btn btn-yellow">Exit Role</button>
   </form>
-</main>
 
-<!-- Visibility-aware SSE: connect only while visible; clean up when hidden/unloading -->
-<script>
-(function(){
-  const URL = "{{ url_for('inventory_events') }}";
-  let es = null;
-  let reconnectTimer = null;
-  let reloading = false;
-
-  function cleanup() {
-    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-    if (es) { try { es.close(); } catch(_) {} es = null; }
-  }
-
-  function debounceReload() {
-    if (reloading) return;
-    reloading = true;
-    cleanup();
-    setTimeout(() => { window.location.reload(); }, 50);
-  }
-
-  function connect() {
-    if (es || document.hidden) return;
+  <script>
+  // Subscribe to Inventory SSE and refresh on change.
+  document.addEventListener('DOMContentLoaded', function () {
+    if (window.__invSseInit) return;
+    window.__invSseInit = true;
     try {
-      es = new EventSource(URL);
-      es.addEventListener('inv_commit', debounceReload);
-      es.onerror = () => { cleanup(); scheduleReconnect(); };
-    } catch (e) { cleanup(); scheduleReconnect(); }
-  }
-
-  function scheduleReconnect() {
-    if (document.hidden) return;
-    if (reconnectTimer) return;
-    reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, 4000);
-  }
-
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) cleanup();
-    else connect();
+      const es = new EventSource('{{ url_for("inventory_events") }}');
+      let pending = false;
+      es.onmessage = function () {
+        // If tab is hidden, defer; otherwise refresh immediately.
+        if (document.visibilityState === 'hidden') { pending = true; return; }
+        location.reload();
+      };
+      document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'visible' && pending) {
+          pending = false;
+          location.reload();
+        }
+      });
+      es.onerror = function () { /* browser will retry automatically */ };
+    } catch (e) { /* no-op */ }
   });
-
-  window.addEventListener('beforeunload', cleanup);
-  if (!document.hidden) connect();
-})();
-</script>
+  </script>
 {% endblock %}
