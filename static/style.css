@@ -479,10 +479,11 @@ body.cw-active .ramp-form-container > :not(#cargo-tools-panel) { display: none !
 
 /* Card chrome */
 .wg-card {
-  border: 1px solid #e3e3e3;
-  border-radius: 8px;
+  border: 1px solid #ddd;
+  border-radius: 10px;
   background: #fff;
-  box-shadow: 0 1px 2px rgba(0,0,0,.04);
+  box-shadow: 0 1px 2px rgba(0,0,0,.06);
+  margin: 0 0 12px 0;
 }
 .wg-card-header {
   display: flex;
@@ -495,9 +496,14 @@ body.cw-active .ramp-form-container > :not(#cargo-tools-panel) { display: none !
 .wg-card-title { font-weight: 600; }
 .wg-card-meta  { font-size: .9rem; color: #666; }
 .wg-badge {
-  display: inline-block; margin-left: .5rem;
-  font-size: .85rem; padding: .1rem .45rem; border-radius: 999px;
-  border: 1px solid #ddd; color: #555; background: #f6f6f6;
+  display: inline-block;
+  margin-left: .5rem;
+  font-size: .8rem;
+  padding: .1rem .45rem;
+  border-radius: 999px;
+  border: 1px solid #ddd;
+  color: #555;
+  background: #f6f6f6;
 }
 
 /* Lines + progress */

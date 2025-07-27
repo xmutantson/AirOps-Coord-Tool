@@ -1394,6 +1394,47 @@ def wargame_task_start_once(role: str, kind: str, key: str, gen_at: str, sched_f
         return
     wargame_task_start(role=role, kind=kind, key=key, gen_at=gen_at, sched_for=sched_for)
 
+def set_wargame_epoch(epoch=None) -> int:
+    """
+    Persist a stable epoch for the current Wargame run.
+    This namespaces client cookies (e.g., read/unread) so they reset only
+    when Wargame is (re)started, not on every page render.
+    """
+    if epoch is None:
+        epoch = int(time.time())
+    with sqlite3.connect(DB_FILE) as c:
+        c.execute(
+            "INSERT OR REPLACE INTO preferences(name, value) VALUES(?, ?)",
+            ('wargame_epoch', str(epoch))
+        )
+        c.commit()
+    return epoch
+
+def get_wargame_epoch() -> int:
+    """Return current Wargame epoch (0 if not set)."""
+    row = dict_rows("SELECT value FROM preferences WHERE name='wargame_epoch'")
+    try:
+        return int(row[0]['value'])
+    except Exception:
+        return 0
+
+
+def reset_wargame_state():
+    """
+    Wipe transient Wargame queues so a fresh run starts clean.
+    Adjust table names if yours differ.
+    """
+    with sqlite3.connect(DB_FILE) as c:
+        cur = c.cursor()
+        # Radio
+        cur.execute("DELETE FROM wargame_emails")
+        cur.execute("DELETE FROM wargame_radio_schedule")
+        # Ramp
+        cur.execute("DELETE FROM wargame_ramp_requests")
+        # Inventory (batches + lines)
+        cur.execute("DELETE FROM wargame_inventory_lines")
+        cur.execute("DELETE FROM wargame_inventory_batches")
+        c.commit()
 
 def generate_radio_message():
     """Enqueue a synthetic radio email into the schedule (batch or immediate)."""
@@ -3603,6 +3644,8 @@ def admin():
 
                 # 2) regenerate callsigns and wire up the scheduler
                 initialize_airfield_callsigns()
+                reset_wargame_state()
+                set_wargame_epoch()
                 configure_wargame_jobs()
 
                 # 3) clear any stale role
@@ -3812,11 +3855,11 @@ def wargame_radio_dashboard():
         e['read'] = (e['id'] in seen_ids)
 
     return render_template(
-      'wargame_radio.html',
-      emails=emails,
-      active='wargame'
+        'wargame_radio.html',
+        emails=emails,
+        epoch=get_wargame_epoch(),  # stable across the Wargame session
+        active='wargame'
     )
-
 
 # ───────────────────────────────────────────────────────────
 #  WARGAME: Ramp Boss “Cue Cards”

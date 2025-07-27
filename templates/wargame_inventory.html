@@ -6,85 +6,85 @@
 
   <h1 class="page-title">Wargame: Inventory Specialist</h1>
   <p class="muted wg-intro">
-    Log items in <strong>Inventory → Advanced</strong>. Fully satisfied lines are
-    <em>grey and struck</em>. When every line in a batch is satisfied, the batch disappears from this view.
+    Log items in <strong>Inventory → Advanced</strong>. Lines you fully satisfy appear
+    <em>grey and struck</em>. When every line in a batch is satisfied, the batch disappears here.
   </p>
 
-  <div class="wg-sections">
-    <!-- Incoming deliveries (IN) -->
-    <section aria-labelledby="incoming-title">
-      <h2 id="incoming-title" class="wg-section-title">Incoming deliveries</h2>
+  <!-- Incoming deliveries (IN) -->
+  <section aria-labelledby="incoming-title">
+    <h2 id="incoming-title" class="wg-section-title">Incoming deliveries</h2>
 
-      {% if incoming_deliveries %}
+    {% if incoming_deliveries %}
+      <div class="card-container">
         {% for b in incoming_deliveries %}
-          <article class="wg-card">
-            <header class="wg-card-header">
-              <div class="wg-card-title">
-                Incoming batch
-                <span class="wg-badge">#{{ b.id }}</span>
-              </div>
-              <div class="wg-card-meta">Created {{ b.created_at }}</div>
-            </header>
+          <div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;">
+              <strong>Incoming batch <span class="wg-badge">#{{ b.id }}</span></strong>
+              <span class="wg-card-meta">Created {{ b.created_at }}</span>
+            </div>
 
             {% if b.lines %}
-              <ul class="wg-lines">
+              <ul>
                 {% for line in b.lines %}
                   {% set done = (line.qty_done or 0) %}
                   {% set need = (line.qty_required or 0) %}
-                  <li class="wg-line{% if need>0 and done >= need %} complete{% endif %}">
-                    {{ line.name }}
-                    {{ (line.size_lb or 0)|round(0,'floor')|int }} lb × {{ need }}
-                    {% if done > 0 and done < need %}<span class="wg-progress"> (done {{ done }} / {{ need }})</span>{% endif %}
+                  <li class="item {% if need>0 and done >= need %}done{% endif %}">
+                    {{ line.name }} {{ (line.size_lb or 0)|round(0,'floor')|int }} lb × {{ need }}
+                    {% if done > 0 and done < need %}
+                      <span class="wg-progress"> (done {{ done }} / {{ need }})</span>
+                    {% endif %}
                   </li>
                 {% endfor %}
               </ul>
             {% else %}
               <p class="muted">No manifest lines.</p>
             {% endif %}
-          </article>
+          </div>
         {% endfor %}
-      {% else %}
-        <p class="muted">No incoming deliveries are waiting.</p>
-      {% endif %}
-    </section>
+      </div>
+    {% else %}
+      <p class="muted">No incoming deliveries are waiting.</p>
+    {% endif %}
+  </section>
 
-    <!-- Outbound requests (OUT) -->
-    <section aria-labelledby="outgoing-title">
-      <h2 id="outgoing-title" class="wg-section-title">Outbound requests</h2>
+  <hr class="separator" />
 
-      {% if outgoing_requests %}
+  <!-- Outbound requests (OUT) -->
+  <section aria-labelledby="outgoing-title">
+    <h2 id="outgoing-title" class="wg-section-title">Outbound requests</h2>
+
+    {% if outgoing_requests %}
+      <div class="card-container">
         {% for b in outgoing_requests %}
-          <article class="wg-card">
-            <header class="wg-card-header">
-              <div class="wg-card-title">
-                Outbound request
-                <span class="wg-badge">#{{ b.id }}</span>
-              </div>
-              <div class="wg-card-meta">Created {{ b.created_at }}</div>
-            </header>
+          <div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;">
+              <strong>Outbound request <span class="wg-badge">#{{ b.id }}</span></strong>
+              <span class="wg-card-meta">Created {{ b.created_at }}</span>
+            </div>
 
             {% if b.lines %}
-              <ul class="wg-lines">
+              <ul>
                 {% for line in b.lines %}
                   {% set done = (line.qty_done or 0) %}
                   {% set need = (line.qty_required or 0) %}
-                  <li class="wg-line{% if need>0 and done >= need %} complete{% endif %}">
-                    {{ line.name }}
-                    {{ (line.size_lb or 0)|round(0,'floor')|int }} lb × {{ need }}
-                    {% if done > 0 and done < need %}<span class="wg-progress"> (done {{ done }} / {{ need }})</span>{% endif %}
+                  <li class="item {% if need>0 and done >= need %}done{% endif %}">
+                    {{ line.name }} {{ (line.size_lb or 0)|round(0,'floor')|int }} lb × {{ need }}
+                    {% if done > 0 and done < need %}
+                      <span class="wg-progress"> (done {{ done }} / {{ need }})</span>
+                    {% endif %}
                   </li>
                 {% endfor %}
               </ul>
             {% else %}
               <p class="muted">No manifest lines.</p>
             {% endif %}
-          </article>
+          </div>
         {% endfor %}
-      {% else %}
-        <p class="muted">No outbound requests are waiting.</p>
-      {% endif %}
-    </section>
-  </div>
+      </div>
+    {% else %}
+      <p class="muted">No outbound requests are waiting.</p>
+    {% endif %}
+  </section>
 
   <!-- Exit role (right-aligned, sits above footer via CSS .wg-exit-form) -->
   <form class="wg-exit-form" action="{{ url_for('wargame_exit_role') }}" method="post">

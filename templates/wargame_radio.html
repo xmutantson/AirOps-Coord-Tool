@@ -58,19 +58,22 @@
   const subj = document.getElementById('emailSubject');
   const body = document.getElementById('emailBody');
 
+  // Stable epoch for this Wargame run (namespaces the cookie)
+  const EPOCH  = {{ epoch|default(0) }};
+  const COOKIE = 'wargame_emails_read_' + EPOCH;
+
   function getCookie(name){
-    const m = document.cookie.match(new RegExp('(?:^|;\\s*)' + name + '=([^;]*)'));
+    const m = document.cookie.match(new RegExp('(?:^|;\\s*)' + name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + '=([^;]*)'));
     return m ? decodeURIComponent(m[1]) : '';
   }
   function setCookie(name, value){
-    document.cookie = name + '=' + encodeURIComponent(value) +
-                      '; Max-Age=31536000; Path=/; SameSite=Lax';
+    document.cookie = name + '=' + encodeURIComponent(value) + '; Max-Age=31536000; Path=/; SameSite=Lax';
   }
   function markRead(id, row){
-    const current = getCookie('wargame_emails_read');
+    const current = getCookie(COOKIE);
     const set = new Set((current ? current.split(',') : []).filter(Boolean));
     set.add(String(id));
-    setCookie('wargame_emails_read', Array.from(set).join(','));
+    setCookie(COOKIE, Array.from(set).join(','));
     if (row) row.classList.add('read');
   }
 
@@ -79,18 +82,31 @@
       ev.preventDefault();
       const id  = a.dataset.emailId;
       const row = a.closest('tr');
-      const endpoint = {{ url_for('fetch_wargame_email', email_id='__ID__')|tojson }};
-      fetch(endpoint.replace('__ID__', String(id)))
+      // No url_for here — build the path on the client:
+      fetch('/wargame/radio/email/' + id)
         .then(r => r.ok ? r.json() : Promise.reject(r.status))
         .then(data => {
           subj.textContent = data.subject || '(no subject)';
           body.textContent = data.body || '';
-          if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open','open');
+          if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', 'open');
           markRead(id, row);
         })
-        .catch(() => {/* no-op */});
+        .catch(() => {});
     });
   });
+
+  // On load, apply “read” class from the stable cookie so it survives reloads.
+  (function applyReadState(){
+    const seen = new Set((getCookie(COOKIE) || '').split(',').filter(Boolean));
+    if (seen.size === 0) return;
+    document.querySelectorAll('a.open-email[data-email-id]').forEach(a => {
+      if (seen.has(String(a.dataset.emailId))) {
+        const tr = a.closest('tr');
+        if (tr) tr.classList.add('read');
+      }
+    });
+  })();
 })();
 </script>
+
 {% endblock %}
