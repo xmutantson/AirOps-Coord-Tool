@@ -42,7 +42,8 @@ import sqlite3, csv, io, re, os, json
 from datetime import datetime, timedelta
 import threading, time, socket, math
 from urllib.request import urlopen
-from queue import Queue, Empty
+import queue
+from queue import Queue, Empty, Full
 from threading import Lock
 
 from functools import lru_cache
@@ -4664,7 +4665,7 @@ _sse_clients = set()
 _sse_lock = Lock()
 
 def _inventory_event_stream():
-    q = Queue(maxsize=10)                 # bounded → publisher never blocks
+    q = Queue(maxsize=1)                 # single-slot "mailbox" for client
     with _sse_lock:
         _sse_clients.add(q)
     try:
@@ -4693,7 +4694,11 @@ def publish_inventory_event(data=None):
     with _sse_lock:
         for q in list(_sse_clients):
             try:
+                # If the mailbox already has a trigger, that’s enough.
+                # Don’t block and don’t drop the client—just skip this one.
                 q.put_nowait(msg)
+            except Full:
+                pass  # already has a pending trigger
             except Exception:
                 stale.append(q)
         for q in stale:
