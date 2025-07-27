@@ -48,7 +48,7 @@
       {% endif %}
       {# Show Wargame tab only when training mode is on #}
       {% if wargame_mode %}
-        <a href="{{ url_for('wargame') }}"
+        <a href="{{ url_for('wargame_index') }}"
            class="{% if active=='wargame' %}active{% endif %}">Wargame</a>
       {% endif %}
       {% if admin_unlocked %}
