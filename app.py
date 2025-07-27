@@ -4705,11 +4705,14 @@ def publish_inventory_event(data=None):
             _sse_clients.discard(q)
 
 @app.get('/inventory/events', endpoint='inventory_sse')
+@app.get('/events/inventory', endpoint='inventory_sse_legacy')
 def inventory_events():
     headers = {
         'Content-Type': 'text/event-stream; charset=utf-8',
         'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
+        # Do NOT send hop-by-hop headers (PEP 3333). Let the server manage the connection.
+        # If you ever sit behind nginx, this disables response buffering there:
+        'X-Accel-Buffering': 'no',
     }
     return Response(stream_with_context(_inventory_event_stream()), headers=headers)
 
