@@ -1423,6 +1423,7 @@ def reset_wargame_state():
     """
     Wipe transient Wargame queues so a fresh run starts clean.
     Adjust table names if yours differ.
+    Note: delete child rows before parent rows.
     """
     with sqlite3.connect(DB_FILE) as c:
         cur = c.cursor()
@@ -1431,8 +1432,8 @@ def reset_wargame_state():
         cur.execute("DELETE FROM wargame_radio_schedule")
         # Ramp
         cur.execute("DELETE FROM wargame_ramp_requests")
-        # Inventory (batches + lines)
-        cur.execute("DELETE FROM wargame_inventory_lines")
+        # Inventory (batch items, then batches)
+        cur.execute("DELETE FROM wargame_inventory_batch_items")
         cur.execute("DELETE FROM wargame_inventory_batches")
         c.commit()
 
@@ -3674,6 +3675,8 @@ def admin():
                 # 3) clear any stale cookies
                 resp = redirect(url_for('admin'))
                 resp.delete_cookie('wargame_emails_read', path='/')
+                # Also remove the epoch‑scoped read cookie for the current run
+                resp.delete_cookie(f"wargame_emails_read_{get_wargame_epoch()}", path='/')
                 resp.delete_cookie('wargame_role',      path='/')
                 session.pop('wargame_role', None)
 
@@ -3848,8 +3851,10 @@ def wargame_radio_dashboard():
        ORDER BY generated_at DESC
     """)
 
-    # 3) determine “read” state from a single cookie bitmask
-    seen = request.cookies.get('wargame_emails_read','')  # e.g. "1,4,7"
+    # 3) determine “read” state from an epoch‑namespaced cookie bitmask
+    epoch = get_wargame_epoch()
+    cookie_name = f"wargame_emails_read_{epoch}"
+    seen = request.cookies.get(cookie_name, '')  # e.g. "1,4,7"
     seen_ids = set(int(i) for i in seen.split(',') if i.isdigit())
     for e in emails:
         e['read'] = (e['id'] in seen_ids)
@@ -3857,7 +3862,7 @@ def wargame_radio_dashboard():
     return render_template(
         'wargame_radio.html',
         emails=emails,
-        epoch=get_wargame_epoch(),  # stable across the Wargame session
+        epoch=epoch,                # stable across the Wargame session
         active='wargame'
     )
 
