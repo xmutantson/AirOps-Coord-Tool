@@ -215,8 +215,11 @@ def inventory_events():
                     yield ": keep-alive\n\n"
         finally:
             _inv_event_queues.discard(q)
-    return Response(stream(), mimetype="text/event-stream",
-                    headers={"Cache-Control":"no-cache"})
+    return Response(
+        stream(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"}
+    )
 
 # Constants: Only these ICAO4 codes will be used in Wargame Mode
 HARDCODED_AIRFIELDS = [

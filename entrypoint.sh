@@ -13,16 +13,38 @@ fi
 
 # 2) auto‐detect the “real” LAN IP if not overridden
 if [ -z "$HOST_LAN_IP" ] && [ -z "$HOST_LAN_IFACE" ]; then
-  # grab the default‐route line but ignore docker*/br*/tun* interfaces
-  route_line=$(ip route show default | grep -vE 'dev (docker|br-|tun)' | head -n1)
+  route_line=$(ip route show default | grep -vE 'dev (docker|br-|tun)' | head -n1 || true)
   iface=$(awk '/dev/ {for(i=1;i<NF;i++) if($i=="dev") print $(i+1)}' <<<"$route_line")
-  # then grab the IPv4 address assigned to that iface
-  HOST_LAN_IP=$(ip -4 addr show dev "$iface" \
-                | grep -oP '(?<=inet\s)\d+(\.\d+){3}' \
-                | head -n1)
-  export HOST_LAN_IP
-  echo "Auto‐detected LAN IP: $HOST_LAN_IP on interface $iface"
+  if [ -n "$iface" ]; then
+    HOST_LAN_IP=$(ip -4 addr show dev "$iface" \
+                  | grep -oP '(?<=inet\s)\d+(\.\d+){3}' \
+                  | head -n1 || true)
+    if [ -n "$HOST_LAN_IP" ]; then
+      export HOST_LAN_IP
+      echo "Auto‐detected LAN IP: $HOST_LAN_IP on interface $iface"
+    fi
+  fi
 fi
 
-# 3) finally exec the app via waitress
-exec waitress-serve --port=5150 app:app
+# 3) waitress settings (env‑configurable; sensible defaults)
+LISTEN_ADDR="${WAITRESS_LISTEN:-0.0.0.0:5150}"
+THREADS="${WAITRESS_THREADS:-32}"
+CONNLIM="${WAITRESS_CONNECTION_LIMIT:-200}"
+CHTIME="${WAITRESS_CHANNEL_TIMEOUT:-120}"
+BACKLOG_OPT=""
+if [ -n "${WAITRESS_BACKLOG:-}" ]; then
+  BACKLOG_OPT="--backlog=${WAITRESS_BACKLOG}"
+fi
+
+echo "Starting waitress: listen=${LISTEN_ADDR} threads=${THREADS} conn_limit=${CONNLIM} channel_timeout=${CHTIME}"
+
+# 4) finally exec the app via waitress
+#    also forward any extra args passed to this entrypoint
+exec waitress-serve \
+  --listen="${LISTEN_ADDR}" \
+  --threads="${THREADS}" \
+  --connection-limit="${CONNLIM}" \
+  --channel-timeout="${CHTIME}" \
+  ${BACKLOG_OPT} \
+  "$@" \
+  app:app
