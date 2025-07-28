@@ -545,6 +545,44 @@
     }
   });
 
+  // ← send each “Add” click up to the server with CSRF
+  advAdd.addEventListener('click', async () => {
+    const dir = advDirOut.checked ? 'outbound' : 'inbound';
+    // assemble POST body
+    const body = new URLSearchParams({
+      action:      'add',
+      manifest_id: manifestId.value,
+      direction:   dir,
+      category:    advCat.value,
+      item:        dir==='outbound' ? advItem.value   : '',
+      size:        dir==='outbound' ? advSize.value   : '',
+      name:        dir==='inbound'  ? advName.value   : '',
+      weight:      dir==='inbound'  ? advWeight.value : '',
+      wunit:       dir==='inbound'  ? advWunit.value  : '',
+      qty:         advQty.value,
+      csrf_token:  csrfToken
+    });
+
+    const resp = await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body:    body
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => null);
+      return showToast(err?.message || 'Failed to add line', 'error');
+    }
+
+    // on success, append the chip and enable “Done”
+    const entry = await resp.json();
+    pendingIds.push(entry.entry_id);
+    advLines.insertAdjacentHTML('beforeend',
+      `<span class="adv-chip">${entry.raw} ×${entry.qty}</span>`
+    );
+    advDone.disabled = false;
+  });
+
   // (Existing "add line" and "commit" logic unchanged except for the two lines below)
   document.getElementById('adv-done').addEventListener('click', async () => {
     // … your existing commit logic …

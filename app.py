@@ -4500,6 +4500,14 @@ def wargame_super_dashboard():
       active='wargame'
     )
 
+# ───────────────────────────────────────────────────────────
+# WARGAME: Inventory “last update” poll endpoint
+@app.route('/wargame/inventory/last_update')
+def wargame_inventory_last_update():
+    """Return the ISO timestamp of the last inventory change for Wargame clients."""
+    ts = last_inventory_update or datetime.utcnow().isoformat()
+    return jsonify(timestamp=ts)
+
 @app.route('/embedded')
 def embedded():
     # read the two prefs
