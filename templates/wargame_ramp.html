@@ -25,7 +25,7 @@
   {% if requests %}
     <h2>Cargo Requests</h2>
     <div class="card-container">
-      {% for r in requests %}
+      {% for b in requests %}
         <div class="card">
           <p><strong>Timestamp (UTC):</strong> {{ r.timestamp }}</p>
           <p><strong>Destination:</strong> {{ r.airfield_landing }}</p>

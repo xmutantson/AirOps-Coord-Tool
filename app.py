@@ -64,6 +64,18 @@ logger.setLevel(logging.DEBUG)
 # Cookie lifetime convenience (shared across routes)
 ONE_YEAR = 31_536_000  # seconds
 
+# ── Patch sqlite3.connect to use a longer timeout & busy_timeout ──
+import sqlite3 as _sqlite3
+_orig_connect = _sqlite3.connect
+def connect(db, timeout=30, **kwargs):
+    conn = _orig_connect(db, timeout=timeout, **kwargs)
+    try:
+        conn.execute("PRAGMA busy_timeout = 30000;")
+    except Exception:
+        pass
+    return conn
+sqlite3.connect = connect
+
 #-----------mDNS section--------------
 # ─── low-level: ask the kernel for an iface’s IPv4 ─────────────────
 def _ip_for_iface(iface: str) -> str:
@@ -554,7 +566,7 @@ the application.</p>
 def init_db():
     with sqlite3.connect(DB_FILE, timeout=30) as c:
         c.execute("PRAGMA journal_mode=WAL;")
-        c.execute("PRAGMA busy_timeout=5000;")
+        c.execute("PRAGMA busy_timeout=30000;")
 
     with sqlite3.connect(DB_FILE) as c:
         c.execute("""CREATE TABLE IF NOT EXISTS preferences(
@@ -3017,7 +3029,7 @@ def dashboard_table_partial():
     conn.row_factory = sqlite3.Row
     try:
         # Align ad‑hoc connection behavior with init_db() expectations
-        conn.execute("PRAGMA busy_timeout=5000;")
+        conn.execute("PRAGMA busy_timeout=30000;")
     except Exception:
         pass
     raw_cursor = conn.execute(sql, params)
