@@ -643,6 +643,7 @@ def init_db():
             total_weight     REAL,
             direction        TEXT    CHECK(direction IN ('in','out')),
             timestamp        TEXT    NOT NULL,
+            source           TEXT    NOT NULL DEFAULT 'inventory',
             FOREIGN KEY(category_id) REFERENCES inventory_categories(id)
           )
         """)
@@ -789,6 +790,7 @@ def run_migrations():
     ensure_column("inventory_entries", "pending",    "INTEGER DEFAULT 0")
     ensure_column("inventory_entries", "pending_ts", "TEXT")
     ensure_column("inventory_entries", "session_id", "TEXT")
+    ensure_column("inventory_entries", "source",     "TEXT DEFAULT 'inventory'")
 
     # wargame_metrics.key for linking metrics to entities (e.g., flight:<id>)
     ensure_column("wargame_metrics", "key", "TEXT")
@@ -2008,6 +2010,7 @@ def reconcile_inventory_batches(session_id: str) -> None:
               COALESCE(NULLIF(raw_name,''), '') AS raw_name
             FROM inventory_entries
             WHERE session_id=? AND pending=0
+              AND source='inventory'
         """, (session_id,)).fetchall()
         if not entries:
             return
@@ -2161,6 +2164,7 @@ def reconcile_inventory_entry(entry_id: int) -> None:
              COALESCE(NULLIF(raw_name,''), '') AS raw_name
         FROM inventory_entries
        WHERE id=? AND pending=0
+         AND source='inventory'
     """, (entry_id,))
     if not row:
         return
@@ -3635,19 +3639,23 @@ def inventory_advance_line():
         total = wpu * qty
         ts    = datetime.utcnow().isoformat()
 
+        # decide source: ramp-panel vs. inventory-detail
+        src = 'ramp' if request.form.get('advanced') == '1' else 'inventory'
         with sqlite3.connect(DB_FILE) as c:
             cur = c.execute("""
               INSERT INTO inventory_entries(
-                category_id,raw_name,sanitized_name,
-                weight_per_unit,quantity,total_weight,
-                direction,timestamp,pending,pending_ts,session_id
-              ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                category_id, raw_name, sanitized_name,
+                weight_per_unit, quantity, total_weight,
+                direction, timestamp, pending, pending_ts, session_id, source
+              ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
               cat_id, raw, sanitized,
               wpu, qty, total,
-              ('in' if direction.startswith('in') else 'out'), ts, 1, ts, mid
+              ('in' if direction.startswith('in') else 'out'),
+              ts, 1, ts, mid, src
             ))
             eid = cur.lastrowid
+
 
         return jsonify(success=True,
                        entry_id=eid,

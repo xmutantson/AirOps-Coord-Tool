@@ -267,6 +267,12 @@ input.fade-red { background-color: #ff9999; animation: fadeRed 4s ease-in-out; }
   max-height: 50vh;    /* bounded */
   resize: vertical; overflow: auto;
 }
+.radio-content-box {
+  border: 1px solid #000;
+  background-color: #eee;
+  padding: 0.5em;
+  margin-bottom: 1em;
+}
 
 /* ===============================================================
    Page: Ramp Boss
@@ -718,23 +724,25 @@ table.wg-radio-table tr.read { opacity: .8; }
 .card ul.tight li.done { text-decoration: line-through; opacity: 0.65; }
 /* Advanced‑panel “chips” */
 .adv-chip {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.25em 0.5em;
-  margin: 0.25em;
-  background: #eee;
-  border: 1px solid #ccc;
+  display: inline-block;      /* let us size it */
+  vertical-align: top;
+  padding: 0.5em 0.75em;
+  background: #fff;
+  border: 1px solid #333;
   border-radius: 4px;
-  white-space: pre;
-  font-size: 0.9em;
- }
+  white-space: normal;        /* ignore literal newlines in JS, use <br> */
+  min-width: 12ch;            /* adjust up/down until your longest name + X fits */
+  box-sizing: border-box;
+}
 
+/* style the remove button */
 .adv-chip .chip-remove {
+  margin: 0 0 0 0.5ch;        /* only left‐margin */
+  padding: 0;                 /* no extra padding */
   background: none;
   border: none;
-  color: #c33;
-  cursor: pointer;
-  font-size: 1em;
+  font-size: 1.2em;           /* make the emoji a bit larger */
   line-height: 1;
-  margin-left: 0.25em;
+  cursor: pointer;
+  vertical-align: middle;     /* line up with the name text */
 }

@@ -303,6 +303,9 @@
         </table>
       `;
 
+      // auto‑clear success after 5s so it doesn’t stick around
+      setTimeout(() => { feedbackBox.innerHTML = ''; }, 5000);
+
       form.reset();
       applyDirUI();
 
@@ -464,6 +467,8 @@
     const mid = ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g,
       c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c/4).toString(16));
     manifestId.value = mid;
+    // ── hide any existing “success” row when entering advanced mode
+    document.getElementById('rb-feedback-container').style.display = 'none';
     advMode.value    = '1';
     pendingIds       = [];
     advLines.innerHTML = '';
@@ -590,14 +595,14 @@
     chip.className = 'adv-chip';
     chip.innerHTML = `
       <span class="chip-content">${j.sanitized}</span>
-      <span class="chip-wpu">${j.wpu} lb</span>
-      <span class="chip-qty">×${j.qty}</span>
-      <button class="chip-remove" title="Remove">×</button>
+      <button class="chip-remove" title="Remove">❌</button><br>
+      <span class="chip-wpu">${j.wpu} lb</span> <span class="chip-qty">×${j.qty}</span><br>
+      <span class="chip-total">= ${j.total} lb</span>
     `;
     chip.querySelector('.chip-remove').addEventListener('click', async () => {
       try {
         await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
-          method:'POST',
+          method: 'POST',
           body: new URLSearchParams({
             csrf_token:  csrfToken,
             action:      'delete',
@@ -622,7 +627,16 @@
       cw.value  = Math.max(0, (+cw.value || 0) - j.total);
       rmf.value = rmf.value.replace(`${j.sanitized} ${j.wpu} lb×${j.qty}; `, '');
     });
+
     advLines.append(chip);
+
+    // ─── IMMEDIATELY refresh stock & rebuild size dropdown ─────────────────
+    if (dirNow === 'outbound') {
+      // if you want to debug, uncomment: console.log('advAdd: rebuilding sizes');
+      await fetchInventory();
+      updateSizeOptions(advCat.value, advItem.value);
+    }
+
     advDone.disabled = false;
 
     // ─── update main form fields ───────────────────────────────────────

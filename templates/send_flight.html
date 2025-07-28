@@ -9,14 +9,18 @@
 <h2>Flight {{ flight['tail_number'] }} (ID {{ flight['id'] }})</h2>
 
 <h3>Subject</h3>
-<pre id="subj">{{ subject_text }}</pre>
+<div class="radio-content-box">
+  <pre id="subj">{{ subject_text }}</pre>
+</div>
 <button type="button" onclick="copyText('subj','feedback-subj')">
   Copy Subject
 </button>
 <span id="feedback-subj" class="copy-feedback"></span>
 
 <h3>Body</h3>
-<pre id="body">{{ body_text }}</pre>
+<div class="radio-content-box">
+  <pre id="body">{{ body_text }}</pre>
+</div>
 <button type="button" onclick="copyText('body','feedback-body')">
   Copy Body
 </button>
