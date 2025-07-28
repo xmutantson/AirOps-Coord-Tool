@@ -289,62 +289,6 @@ def _mmss(value):
     return f"{m}:{s:02d}"
 app.jinja_env.filters['mmss'] = _mmss
 
-# ---- Server-Sent Events for inventory commits (Wargame Inventory auto‑refresh) ----
-# One‑slot per‑client mailbox so we never block on slow browsers.
-_sse_lock = Lock()
-_sse_clients: set[Queue] = set()
-
-def publish_inventory_event(payload: dict | None = None) -> None:
-    """
-    Broadcast a lightweight refresh notification to all connected Inventory pages.
-    Non‑blocking: if a client's mailbox is full, skip it (it already has a pending refresh).
-    """
-    msg = json.dumps(payload or {}, separators=(",", ":"))
-    stale = []
-    with _sse_lock:
-        for q in list(_sse_clients):
-            try:
-                q.put_nowait(msg)
-            except Full:
-                # A refresh is already queued for this client; that's sufficient.
-                pass
-            except Exception:
-                stale.append(q)
-        with _sse_lock:
-            for q in stale:
-                _sse_clients.discard(q)
-
-def _inventory_event_stream():
-    """
-    Yield a simple SSE stream. Sends a comment heartbeat every ~25s so
-    intermediaries don't time out idle connections.
-    """
-    q: Queue = Queue(maxsize=1)
-    with _sse_lock:
-        _sse_clients.add(q)
-    try:
-        # Advise the browser to retry quickly if the connection drops
-        yield "retry: 5000\n\n"
-        while True:
-            try:
-                item = q.get(timeout=25)
-                yield f"data: {item}\n\n"
-            except Empty:
-                # heartbeat (SSE comment)
-                yield ":\n\n"
-    finally:
-        with _sse_lock:
-            _sse_clients.discard(q)
-
-@app.get("/events/inventory", endpoint="inventory_events")
-def inventory_events():
-    headers = {
-        "Content-Type": "text/event-stream; charset=utf-8",
-        "Cache-Control": "no-cache",
-        "X-Accel-Buffering": "no",
-    }
-    return Response(stream_with_context(_inventory_event_stream()), headers=headers)
-
 # Remove hop‑by‑hop headers from all responses (PEP 3333)
 @app.after_request
 def _strip_hop_by_hop(resp):
@@ -4381,11 +4325,11 @@ def wargame_ramp_dashboard():
        ORDER BY created_at ASC
     """)
     # Shape to match the existing template (field names),
-    # coercing any dash‑only placeholders into real None
+    # coercing any dash‑only placeholders into None and
+    # falling back to a new random tail when empty
     requests = []
     for r in raw_reqs:
-        # normalize placeholder dashes (em‑dash, hyphens, etc.) to None
-        tail = blankish_to_none(r.get('assigned_tail'))
+        tail = blankish_to_none(r.get('assigned_tail')) or generate_tail_number()
         requests.append({
             'timestamp':        r['created_at'],
             'airfield_landing': r['destination'],
