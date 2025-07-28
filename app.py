@@ -3587,7 +3587,12 @@ def inventory_advance_line():
               ts, 1, ts, mid, src
             ))
             eid = cur.lastrowid
-
+            # current running total for this manifest/session (pending only)
+            tot = c.execute(
+              "SELECT COALESCE(SUM(total_weight),0) FROM inventory_entries "
+              "WHERE pending=1 AND session_id=?",
+              (mid,)
+            ).fetchone()[0] or 0.0
 
         return jsonify(success=True,
                        entry_id=eid,
@@ -3597,8 +3602,8 @@ def inventory_advance_line():
                        qty=qty,
                        total=total,
                        direction=direction,
-                       ts=ts)
-
+                       ts=ts,
+                       manifest_total=float(tot))
 
     elif action == 'delete':
         eid = int(request.form['entry_id'])
@@ -3607,7 +3612,13 @@ def inventory_advance_line():
               "DELETE FROM inventory_entries WHERE id=? AND pending=1 AND session_id=?",
               (eid, mid)
             )
-        return jsonify(success=(cur.rowcount>0)), (404 if cur.rowcount==0 else 200)
+            tot = c.execute(
+              "SELECT COALESCE(SUM(total_weight),0) FROM inventory_entries "
+              "WHERE pending=1 AND session_id=?",
+              (mid,)
+            ).fetchone()[0] or 0.0
+        ok = (cur.rowcount > 0)
+        return jsonify(success=ok, manifest_total=float(tot)), (404 if not ok else 200)
 
     elif action == 'commit':
         # mark all session rows committed
@@ -3644,7 +3655,8 @@ def inventory_advance_line():
             publish_inventory_event()
         except Exception:
             pass
-        return jsonify(success=True)
+        # after commit, nothing remains pending for this manifest
+        return jsonify(success=True, manifest_total=0.0)
 
     return jsonify(success=False), 400
 

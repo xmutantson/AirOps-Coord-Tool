@@ -677,4 +677,117 @@
   });
 </script>
 
+  {{ super() }}
+  <style>
+    /* Subtle pill that sits next to the Advanced “Done” control */
+    .adv-total-pill{
+      display:inline-flex; align-items:center; gap:.25rem;
+      font-weight:600; font-size:0.95rem;
+      padding:.25rem .6rem; white-space:nowrap;
+      border:1px solid #e5e7eb; border-radius:9999px;
+      background:#f8fafc; margin-left:.5rem;
+    }
+    @media (prefers-color-scheme: dark){
+      .adv-total-pill{ background:#111827; border-color:#374151; }
+    }
+  </style>
+  <script>
+  (function(){
+    function ensurePill(){
+      var pill = document.getElementById('adv-total-pill');
+      if (pill) return pill;
+      pill = document.createElement('span');
+      pill.id = 'adv-total-pill';
+      pill.className = 'adv-total-pill';
+      pill.title = 'Sum of all Advanced chips for this manifest';
+      pill.innerHTML = 'Total: <span class="val">0</span> lbs';
+      // Try to place it right after the Advanced “Done” control.
+      var doneBtn = document.querySelector('#adv-commit, [data-role="adv-done"], #advanced-cargo button[type="button"].adv-done, #advanced-cargo button[type="submit"].adv-done');
+      if (!doneBtn) {
+        // Fallbacks: last button in the Advanced controls row, or append to panel root.
+        doneBtn = document.querySelector('#advanced-cargo .adv-controls button:last-of-type') ||
+                  document.querySelector('#advanced-cargo button:last-of-type');
+      }
+      if (doneBtn && doneBtn.parentNode) {
+        doneBtn.parentNode.insertBefore(pill, doneBtn.nextSibling);
+      } else {
+        var panel = document.querySelector('#advanced-cargo, .advanced-panel') || document.body;
+        panel.appendChild(pill);
+      }
+      return pill;
+    }
+    function setTotal(val){
+      var pill = ensurePill();
+      var n = Math.round((+val)||0);
+      var slot = pill.querySelector('.val');
+      if (slot) slot.textContent = n;
+    }
+    function sumFromDOM(){
+      // Prefer explicit data-total values on chips if present…
+      var root = document.querySelector('#adv-chips, #adv-selected, .adv-chips, .manifest-chips');
+      if (!root) return 0;
+      var sum = 0;
+      root.querySelectorAll('[data-total]').forEach(function(n){
+        sum += parseFloat(n.getAttribute('data-total')) || 0;
+      });
+      if (sum > 0) return sum;
+      // …fallback: parse "25 lb×3" / "25 lbs x 3" patterns from text.
+      root.querySelectorAll('*').forEach(function(n){
+        var t = (n.textContent || '').toLowerCase();
+        var m = t.match(/(\d+(?:\.\d+)?)\s*lb[s]?\s*[×x]\s*(\d+)/i);
+        if (m) sum += (parseFloat(m[1]) * parseInt(m[2],10));
+      });
+      return sum;
+    }
+    function refreshFromDOM(){ setTotal(sumFromDOM()); }
+
+    // Observe Advanced chip list for changes to keep total in sync.
+    document.addEventListener('DOMContentLoaded', function(){
+      ensurePill();
+      refreshFromDOM();
+      var root = document.querySelector('#adv-chips, #adv-selected, .adv-chips, .manifest-chips');
+      if (root) {
+        var mo = new MutationObserver(function(){ refreshFromDOM(); });
+        mo.observe(root, {childList:true, subtree:true, characterData:true});
+      }
+    });
+
+    // Intercept calls to the Advanced line endpoint to use server-provided totals.
+    (function hookFetch(){
+      if (!window.fetch) return;
+      var orig = window.fetch;
+      window.fetch = function(resource, init){
+        var isAdv = (typeof resource === 'string' && resource.indexOf('/_advance_line') !== -1);
+        return orig.apply(this, arguments).then(function(resp){
+          if (isAdv) {
+            try {
+              resp.clone().json().then(function(data){
+                if (data && typeof data.manifest_total !== 'undefined') setTotal(data.manifest_total);
+                else refreshFromDOM();
+              }).catch(refreshFromDOM);
+            } catch(_) {}
+          }
+          return resp;
+        });
+      };
+    })();
+    (function hookJQ(){
+      if (!window.jQuery || !jQuery.post) return;
+      var orig = jQuery.post;
+      jQuery.post = function(url, data, success, dataType){
+        var isAdv = (typeof url === 'string' && url.indexOf('/_advance_line') !== -1);
+        var cb = function(resp){
+          if (isAdv && resp && typeof resp.manifest_total !== 'undefined') setTotal(resp.manifest_total);
+          else refreshFromDOM();
+          if (typeof success === 'function') success(resp);
+        };
+        return orig.call(this, url, data, cb, dataType);
+      };
+    })();
+
+    // Optional global in case other scripts want to push an update explicitly.
+    window.updateAdvTotal = setTotal;
+  })();
+  </script>
+
 {% endblock %}
