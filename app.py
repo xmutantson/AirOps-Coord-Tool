@@ -1910,11 +1910,18 @@ def generate_ramp_request():
     manifest = '; '.join(lines)
 
     with sqlite3.connect(DB_FILE) as c:
-        c.execute("""
+        cur = c.execute("""
           INSERT INTO wargame_ramp_requests(created_at, destination, requested_weight, manifest)
           VALUES (?,?,?,?)
         """, (ts, destination, float(total_wt), manifest))
-
+        rid = cur.lastrowid
+        # generate and persist a one‐off “proposed tail” for this request
+        proposed = generate_tail_number()
+        c.execute("""
+          UPDATE wargame_ramp_requests
+             SET assigned_tail = ?
+           WHERE id = ?
+        """, (proposed, rid))
 
 def _parse_manifest(manifest: str):
     """
