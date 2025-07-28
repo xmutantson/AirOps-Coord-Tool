@@ -465,9 +465,9 @@
       c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c/4).toString(16));
     manifestId.value = mid;
     advMode.value    = '1';
-    pendingIds         = [];
+    pendingIds       = [];
     advLines.innerHTML = '';
-    advDone.disabled   = true;
+    advDone.disabled = true;
     if (!inventoryAdvancedData.all_categories) {
       return showError('Inventory data not yet loaded.');
     }
@@ -481,19 +481,31 @@
     applyAdvDirUI(dir);
     rbForm.style.display   = 'none';
     advPanel.style.display = 'block';
-    startPolling();                   // ← start polling only while open
+    startPolling();
   }
   document.getElementById('open-adv').addEventListener('click', startAdvanced);
 
   advBack.addEventListener('click', async () => {
-    // attempt to clean up any pending lines (as before) …
-    // (existing deletion logic omitted here for brevity — keep yours)
+    // attempt to clean up any pending lines
+    for (const eid of pendingIds) {
+      try {
+        await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
+          method: 'POST',
+          body: new URLSearchParams({
+            csrf_token:  csrfToken,
+            action:      'delete',
+            manifest_id: manifestId.value,
+            entry_id:    eid
+          })
+        });
+      } catch {}
+    }
     pendingIds = [];
     advMode.value = '0';
     advPanel.style.display = '';
     rbForm.style.display   = '';
-    stopPolling();                   // ← stop background polling
-    fetchInventory();                // one last refresh to settle availability
+    stopPolling();
+    fetchInventory();
   });
 
   function syncFromAdvToggle() {
@@ -520,9 +532,7 @@
     if (document.body.dataset.advDir === 'outbound') {
       advItem.disabled = false;
       advItem.innerHTML = '<option value="">Item…</option>' +
-        (inventoryAdvancedData.items?.[cid]||[])
-          .map(i => `<option>${i}</option>`)
-          .join('');
+        (inventoryAdvancedData.items?.[cid]||[]).map(i => `<option>${i}</option>`).join('');
       [advSize, advQty].forEach(el => { el.disabled = true; el.value = ''; });
     }
   });
@@ -548,7 +558,6 @@
   // ← send each “Add” click up to the server with CSRF
   advAdd.addEventListener('click', async () => {
     const dirNow = advDirOut.checked ? 'outbound' : 'inbound';
-    // (build URLSearchParams exactly as before…)
     const params = new URLSearchParams({
       csrf_token:  csrfToken,
       action:      'add',
@@ -586,17 +595,32 @@
       <button class="chip-remove" title="Remove">×</button>
     `;
     chip.querySelector('.chip-remove').addEventListener('click', async () => {
-      await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
-        method:'POST',
-        body: new URLSearchParams({
-          csrf_token:  csrfToken,
-          action:      'delete',
-          entry_id:    j.entry_id
-        })
-      });
+      try {
+        await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
+          method:'POST',
+          body: new URLSearchParams({
+            csrf_token:  csrfToken,
+            action:      'delete',
+            manifest_id: manifestId.value,
+            entry_id:    j.entry_id
+          })
+        });
+      } catch {}
       chip.remove();
       pendingIds = pendingIds.filter(id => id !== j.entry_id);
       advDone.disabled = !pendingIds.length;
+
+      // refresh outbound stock & sizes
+      if (document.body.dataset.advDir === 'outbound') {
+        await fetchInventory();
+        updateSizeOptions(advCat.value, advItem.value);
+      }
+
+      // subtract from main form totals
+      const cw  = document.getElementById('cargo_weight');
+      const rmf = document.getElementById('remarks');
+      cw.value  = Math.max(0, (+cw.value || 0) - j.total);
+      rmf.value = rmf.value.replace(`${j.sanitized} ${j.wpu} lb×${j.qty}; `, '');
     });
     advLines.append(chip);
     advDone.disabled = false;
@@ -619,7 +643,7 @@
     advQty.value = '';
   });
 
-  // (Existing "add line" and "commit" logic unchanged except for the two lines below)
+  // commit logic
   advDone.addEventListener('click', async () => {
     try {
       await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
@@ -633,7 +657,6 @@
     } catch {
       return showError('Network error committing manifest.');
     }
-    // return to main form
     advPanel.style.display = '';
     rbForm.style.display   = '';
     stopPolling();

@@ -716,3 +716,25 @@ table.wg-radio-table tr.read { opacity: .8; }
 .card ul.tight { margin: 0.25rem 0 0; padding-left: 1.2rem; }
 .card ul.tight li { margin: 0.15rem 0; }
 .card ul.tight li.done { text-decoration: line-through; opacity: 0.65; }
+/* Advanced‑panel “chips” */
+.adv-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25em 0.5em;
+  margin: 0.25em;
+  background: #eee;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  white-space: pre;
+  font-size: 0.9em;
+ }
+
+.adv-chip .chip-remove {
+  background: none;
+  border: none;
+  color: #c33;
+  cursor: pointer;
+  font-size: 1em;
+  line-height: 1;
+  margin-left: 0.25em;
+}
