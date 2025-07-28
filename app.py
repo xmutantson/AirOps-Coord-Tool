@@ -1490,12 +1490,13 @@ def apply_incoming_parsed(p: dict) -> tuple[int,str]:
             ))
             return f['id'], 'updated'
 
-        # 4) new entry
+        # 4) new entry (mark pure Winlink imports as inbound)
         fid = c.execute("""
           INSERT INTO flights(
-            is_ramp_entry, tail_number, airfield_takeoff, takeoff_time,
+            is_ramp_entry, direction,
+            tail_number, airfield_takeoff, takeoff_time,
             airfield_landing, eta, cargo_type, cargo_weight, remarks
-          ) VALUES (0,?,?,?,?,?,?,?,?)
+          ) VALUES (0,'inbound',?,?,?,?,?,?,?,?)
         """, (
           p['tail_number'],
           p['airfield_takeoff'],
