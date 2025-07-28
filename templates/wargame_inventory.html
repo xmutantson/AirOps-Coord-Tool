@@ -61,26 +61,43 @@
   </form>
 
   <script>
-  // Subscribe to Inventory SSE and refresh on change.
+  // Subscribe to Inventory SSE (inv_commit) and refresh on change,
+  // deferring while hidden and freeing the connection when away.
   document.addEventListener('DOMContentLoaded', function () {
     if (window.__invSseInit) return;
     window.__invSseInit = true;
     try {
-    const es = new EventSource('{{ url_for("inventory_sse") }}');
+      const url = '{{ url_for("inventory_sse") }}';
       let pending = false;
-      es.onmessage = function () {
-        // If tab is hidden, defer; otherwise refresh immediately.
-        if (document.visibilityState === 'hidden') { pending = true; return; }
-        location.reload();
-      };
+      let es = new EventSource(url);
+
+      // Only our custom event, not default messages
+      es.addEventListener('inv_commit', function (e) {
+        if (document.visibilityState === 'hidden') {
+          pending = true;
+        } else {
+          location.reload();
+        }
+      });
+
       document.addEventListener('visibilitychange', function () {
         if (document.visibilityState === 'visible' && pending) {
           pending = false;
           location.reload();
         }
+        else if (document.visibilityState === 'hidden') {
+          // close SSE while tab is in background
+          es.close();
+        }
       });
-      es.onerror = function () { /* browser will retry automatically */ };
-    } catch (e) { /* no-op */ }
+
+      es.onerror = function (e) {
+        console.error('[SSE] inventory/events error', e);
+        // browser retries automatically
+      };
+    } catch (err) {
+      console.warn('Inventory SSE init failed:', err);
+    }
   });
   </script>
 {% endblock %}
