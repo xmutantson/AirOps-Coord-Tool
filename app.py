@@ -3618,7 +3618,7 @@ def ramp_boss():
       'ramp_boss.html',
       default_origin=default_origin,
       active='ramp_boss',
-      advanced_data=json.dumps(advanced_data)
+      advanced_data=advanced_data
     )
 
 # ─────────── Consolidated Advanced endpoint ─────────────
