@@ -823,25 +823,6 @@ def run_migrations():
     # Wargame: record which tail was assigned to a ramp request
     ensure_column("wargame_ramp_requests", "assigned_tail",   "TEXT")
 
-    # ── Wargame: start Ramp‑inbound SLA when Radio publishes an inbound flight ──
-    with sqlite3.connect(DB_FILE) as c:
-        c.execute("""
-          CREATE TRIGGER IF NOT EXISTS wg_start_ramp_inbound_sla
-          AFTER INSERT ON flights
-          WHEN NEW.direction='inbound'
-               AND NEW.is_ramp_entry=0
-               AND (SELECT value FROM preferences WHERE name='wargame_mode')='yes'
-          BEGIN
-            INSERT OR IGNORE INTO wargame_tasks
-              (role, kind, key, gen_at, sched_for, created_at)
-            VALUES
-              ('ramp','inbound','flight:' || NEW.id,
-               strftime('%Y-%m-%dT%H:%M:%f', 'now'),
-               NULL,
-               strftime('%Y-%m-%dT%H:%M:%f', 'now'));
-          END;
-        """)
-
 def cleanup_pending():
     """Purge any pending inventory‐entries older than 15 minutes."""
     cutoff = (datetime.utcnow() - timedelta(minutes=15)).isoformat()
@@ -1340,6 +1321,9 @@ def parse_winlink(subj:str, body:str):
         remark_text = re.sub(r'\s+', ' ', remark_text).strip()
         # strip leading/trailing punctuation, colons or braces
         remark_text = remark_text.strip(" .:-*{}")
+        # drop any training tags like WGID:… that slipped into the body
+        remark_text = re.sub(r'\bWGID:[a-f0-9]{16,}\b', '', remark_text, flags=re.I)
+        remark_text = re.sub(r'\s{2,}', ' ', remark_text).strip()
         d['remarks'] = escape(remark_text)
 
     return d
@@ -1722,7 +1706,6 @@ def generate_radio_message():
         "",
         "Additional notes/comments:",
         *[f"  {line}" for line in notes],
-        f"WGID:{msg_id}",
         "",
         "{DART Aircraft Takeoff Report, rev. 2024-05-14}"
     ])
@@ -1805,7 +1788,7 @@ def wargame_finish_ramp_inbound(fid: int) -> None:
 def wargame_start_ramp_inbound(fid: int, started_at: str | None = None) -> None:
     """Start ramp‑inbound timer when an inbound cue appears for this flight."""
     if get_preference('wargame_mode') == 'yes':
-        wargame_task_start(
+        wargame_task_start_once(
             role='ramp',
             kind='inbound',
             key=f"flight:{fid}",
@@ -1989,12 +1972,11 @@ def _create_inventory_batch(direction: str, manifest: str, created_at: str | Non
 def reconcile_inventory_batches(session_id: str) -> None:
     """
     For the just-committed /inventory session:
-      • FIRST try exact item match (sanitized name + exact size) using either:
-          – parsed lines from raw_name (e.g., 'beans 25 lb×3'), OR
-          – the structured columns (sanitized_name, weight_per_unit, quantity)
-            when raw_name is not parseable (typical for outbound entries).
-      • ONLY if there are no open matching items anywhere, fall back to weight
-        allocation (size * leftover_qty) into the most-complete batch.
+      • Match **only** by exact item (sanitized name) **and** exact size.
+      • Use either parsed lines from raw_name (e.g., "beans 25 lb×3"), or the
+        structured columns (sanitized_name, weight_per_unit, quantity).
+      • There is **no weight-based fallback**; any remainder stays unapplied
+        until exact stock lines are logged.
       • When a batch completes, set satisfied_at and write one inventory SLA metric.
     """
     with sqlite3.connect(DB_FILE) as c:
@@ -2054,15 +2036,6 @@ def reconcile_inventory_batches(session_id: str) -> None:
                   VALUES ('inventory', ?, ?, ?)
                 """, (delta, now_ts, f"invbatch:{batch_id}"))
 
-        def _any_open_match(direction: str, san_name: str, size_lb: float) -> bool:
-            """Is there any *open* batch item needing this sanitized name+size?"""
-            for r in load_batches(direction):
-                for it in r['items']:
-                    if sanitize_name(it['name']) == san_name and abs(it['size_lb'] - size_lb) < 1e-6:
-                        if it['qty_done'] < it['qty_required']:
-                            return True
-            return False
-
         def apply_item(direction: str, name_raw: str, size_lb: float, qty: int) -> int:
             """
             Allocate `qty` units of (sanitized(name_raw), size_lb) across batches that still need them.
@@ -2100,27 +2073,6 @@ def reconcile_inventory_batches(session_id: str) -> None:
                 close_if_complete(pick['b']['id'], pick['b']['created_at'])
             return applied
 
-        def apply_weight(direction: str, total_wt: float):
-            """Greedy weight-based allocation into the most-complete batch."""
-            if total_wt <= 0:
-                return
-            pick = pick_most_complete(load_batches(direction))
-            if not pick:
-                return
-            remaining = total_wt
-            for it in pick['items']:
-                need = it['qty_required'] - it['qty_done']
-                if need <= 0:
-                    continue
-                fit_qty = min(need, int(remaining // max(it['size_lb'], 1e-6)))
-                if fit_qty > 0:
-                    c.execute("UPDATE wargame_inventory_batch_items SET qty_done=qty_done+? WHERE id=?",
-                              (fit_qty, it['id']))
-                    remaining -= fit_qty * it['size_lb']
-                if remaining < 1e-6:
-                    break
-            close_if_complete(pick['b']['id'], pick['b']['created_at'])
-
         for e in entries:
             # 1) Try parsing raw_name ("beans 25 lb×3" etc.)
             parsed = _parse_manifest(e['raw_name'])
@@ -2129,9 +2081,7 @@ def reconcile_inventory_batches(session_id: str) -> None:
                     q = int(e['quantity'] or it['qty'] or 1)
                     size = float(it['size_lb'])
                     used = apply_item(e['direction'], it['name'], size, q)
-                    left = q - used
-                    if left > 0 and not _any_open_match(e['direction'], sanitize_name(it['name']), size):
-                        apply_weight(e['direction'], size * left)
+
                 continue  # next entry
 
             # 2) No parse → use structured columns (typical for outbound entries)
@@ -2141,23 +2091,13 @@ def reconcile_inventory_batches(session_id: str) -> None:
             used = 0
             if qty > 0 and size > 0 and name:
                 used = apply_item(e['direction'], name, size, qty)
-            left = qty - used
-
-            # 3) Only fall back to weight if there is no open exact match anywhere
-            if left > 0:
-                if not _any_open_match(e['direction'], sanitize_name(name), size):
-                    apply_weight(e['direction'], size * left)
-            # If qty<=0 (shouldn’t happen), last resort: allocate by total_weight
-            elif qty <= 0 and float(e['total_weight'] or 0.0) > 0:
-                apply_weight(e['direction'], float(e['total_weight'] or 0.0))
-
 
 def reconcile_inventory_entry(entry_id: int) -> None:
     """
     Reconcile a single committed Inventory entry (used by Inventory Detail form).
     Mirrors batch reconciliation:
-      • Prefer exact (sanitized name + size) match using parsed raw_name or
-        the structured columns; fall back to weight only if no open match exists.
+      • Require exact (sanitized name + size) match using parsed raw_name or
+        the structured columns.
     """
     row = dict_rows("""
       SELECT id, direction, quantity, total_weight, weight_per_unit, sanitized_name,
@@ -2210,14 +2150,6 @@ def reconcile_inventory_entry(entry_id: int) -> None:
                   VALUES ('inventory', ?, ?, ?)
                 """, (delta, now_ts, f"invbatch:{batch_id}"))
 
-        def _any_open_match(direction: str, san_name: str, size_lb: float) -> bool:
-            for r in load_batches(direction):
-                for it in r['items']:
-                    if sanitize_name(it['name']) == san_name and abs(it['size_lb'] - size_lb) < 1e-6:
-                        if it['qty_done'] < it['qty_required']:
-                            return True
-            return False
-
         def apply_item(direction: str, name_raw: str, size_lb: float, qty: int) -> int:
             if qty <= 0 or size_lb <= 0: return 0
             applied = 0
@@ -2246,22 +2178,6 @@ def reconcile_inventory_entry(entry_id: int) -> None:
                 close_if_complete(pick['b']['id'], pick['b']['created_at'])
             return applied
 
-        def apply_weight(direction: str, total_wt: float):
-            if total_wt <= 0: return
-            pick = pick_most_complete(load_batches(direction))
-            if not pick: return
-            remaining = total_wt
-            for it in pick['items']:
-                need = it['qty_required'] - it['qty_done']
-                if need <= 0: continue
-                fit_qty = min(need, int(remaining // max(it['size_lb'], 1e-6)))
-                if fit_qty > 0:
-                    c.execute("UPDATE wargame_inventory_batch_items SET qty_done=qty_done+? WHERE id=?",
-                              (fit_qty, it['id']))
-                    remaining -= fit_qty * it['size_lb']
-                if remaining < 1e-6: break
-            close_if_complete(pick['b']['id'], pick['b']['created_at'])
-
         # Prefer parsed raw_name if present, else the structured columns
         parsed = _parse_manifest(e['raw_name'])
         if parsed:
@@ -2269,9 +2185,6 @@ def reconcile_inventory_entry(entry_id: int) -> None:
                 q = int(e['quantity'] or it['qty'] or 1)
                 size = float(it['size_lb'])
                 used = apply_item(e['direction'], it['name'], size, q)
-                left = q - used
-                if left > 0 and not _any_open_match(e['direction'], sanitize_name(it['name']), size):
-                    apply_weight(e['direction'], size * left)
         else:
             qty  = int(e['quantity'] or 0)
             size = float(e['weight_per_unit'] or 0.0)
@@ -2279,13 +2192,6 @@ def reconcile_inventory_entry(entry_id: int) -> None:
             used = 0
             if qty > 0 and size > 0 and name:
                 used = apply_item(e['direction'], name, size, qty)
-            left = qty - used
-            if left > 0:
-                if not _any_open_match(e['direction'], sanitize_name(name), size):
-                    apply_weight(e['direction'], size * left)
-            elif qty <= 0 and float(e['total_weight'] or 0.0) > 0:
-                apply_weight(e['direction'], float(e['total_weight'] or 0.0))
-
 
 def generate_inventory_outbound_request():
     """Generate a multi-line outbound request batch (to be fulfilled by Inventory)."""
@@ -2399,8 +2305,14 @@ def generate_ramp_flight():
         except Exception: pass
 
 def process_inbound_schedule():
-    """Every minute: publish due inbound flights into `flights` and start a ramp‑inbound timer."""
-    now = datetime.utcnow().isoformat()
+    """
+    Every minute:
+      (a) publish due entries from wargame_inbound_schedule → flights and start a Ramp inbound timer immediately;
+      (b) promote radio‑parsed inbound flights (already in flights) to Ramp after they’ve existed ≥ 5 minutes
+          and are destined for the configured default origin.
+    """
+    now_dt  = datetime.utcnow()
+    now_iso = now_dt.isoformat()
     settings_row = dict_rows("SELECT value FROM preferences WHERE name='wargame_settings'")
     settings  = json.loads(settings_row[0]['value'] or '{}') if settings_row else {}
     max_ramp  = int(settings.get('max_ramp', 3) or 3)
@@ -2416,7 +2328,7 @@ def process_inbound_schedule():
        WHERE eta <= ?
        ORDER BY eta ASC
        LIMIT ?
-    """, (now, allow))
+    """, (now_iso, allow))
 
     for r in due:
         tko_hhmm = hhmm_from_iso(r['scheduled_at'])
@@ -2457,10 +2369,49 @@ def process_inbound_schedule():
                 ))
                 fid = cur.lastrowid
         # start ramp inbound SLA when the cue card becomes visible
-        wargame_start_ramp_inbound(fid, started_at=now)
+        wargame_start_ramp_inbound(fid, started_at=now_iso)
 
         with sqlite3.connect(DB_FILE) as c:
             c.execute("DELETE FROM wargame_inbound_schedule WHERE id=?", (r['id'],))
+
+    # ── (b) Promote radio‑parsed inbound flights after 5 minutes, within remaining headroom ──
+    # Recompute remaining capacity after scheduling the due items above.
+    pend2 = dict_rows("""
+      SELECT COUNT(*) AS c FROM wargame_tasks
+       WHERE role='ramp' AND kind='inbound'
+    """)[0]['c'] or 0
+    remaining = max(0, max_ramp - pend2)
+    if remaining <= 0:
+        return
+
+    default_dest = (get_preference('default_origin') or '').strip().upper()
+    with sqlite3.connect(DB_FILE) as c:
+        c.row_factory = sqlite3.Row
+        candidates = c.execute("""
+          SELECT id, timestamp, airfield_landing
+            FROM flights
+           WHERE direction='inbound'
+             AND IFNULL(complete,0)=0
+             AND IFNULL(is_ramp_entry,0)=0
+        """).fetchall()
+
+    created = 0
+    for f in candidates:
+        # Filter to default origin when configured
+        if default_dest and (f['airfield_landing'] or '').strip().upper() != default_dest:
+            continue
+        # Must be ≥ 5 minutes old
+        try:
+            born = datetime.fromisoformat(f['timestamp'])
+        except Exception:
+            continue
+        if (now_dt - born).total_seconds() < 600:
+            continue
+        # Start Ramp inbound SLA once (anchor at the time it becomes visible)
+        wargame_task_start_once('ramp', 'inbound', key=f"flight:{f['id']}", gen_at=now_iso)
+        created += 1
+        if created >= remaining:
+            break
 
 
 def process_remote_confirmations():
@@ -2491,18 +2442,19 @@ def process_remote_confirmations():
 
     for f in pending:
         msg_id = uuid.uuid4().hex
-        # Compose a subject Radio can parse: includes "landed HHMM"
         landed_hhmm = datetime.utcnow().strftime('%H%M')
-        subject = (
-          f"Air Ops: {f['tail_number']} landed {landed_hhmm} at {f['airfield_landing']} "
-          f"from {f['airfield_takeoff']} [WGID:{msg_id}]"
-        )
+        tko = (f.get('takeoff_time') or '').strip()
+        # Build “Air Ops: tail | FROM to TO | [took off HHMM | ]landed HHMM [WGID:…]”
+        base = f"Air Ops: {f['tail_number']} | {f['airfield_takeoff']} to {f['airfield_landing']} | "
+        took = (f"took off {tko} | " if tko else "")
+        subject = f"{base}{took}landed {landed_hhmm} [WGID:{msg_id}]"
         body = (
-          "Arrival confirmation from remote airport.\n"
+          "(auto landed flight in wg mode).\n"
           f"Tail: {f['tail_number']}\n"
           f"From: {f['airfield_takeoff']}\n"
           f"To: {f['airfield_landing']}\n"
-          f"WGID:{msg_id}\n"
+          f"T/O: {tko or '----'}\n"
+          f"Landed: {landed_hhmm}\n"
         )
         with sqlite3.connect(DB_FILE) as c:
             # Start radio inbound SLA for this message (batch semantics handled by dispatcher)
@@ -2588,6 +2540,15 @@ def configure_wargame_jobs():
         trigger='interval',
         seconds=60,
         id='job_radio_dispatch',
+        replace_existing=True
+    )
+
+    # publish due inbound schedule entries + promote radio-parsed inbounds every minute
+    scheduler.add_job(
+        func=process_inbound_schedule,
+        trigger='interval',
+        seconds=60,
+        id='job_inbound_schedule',
         replace_existing=True
     )
 
@@ -2708,12 +2669,9 @@ def radio():
         sender = escape(request.form.get('sender','').strip())
         ts     = datetime.utcnow().isoformat()
 
-        # --- extract WGID once (subject first, then body) ---
+        # --- extract WGID once (subject only) ---
         def _extract_wgid(subject, body):
             m = re.search(r'\[?WGID:([a-f0-9]{16,})\]?', str(subject), re.I)
-            if m:
-                return m.group(1).lower()
-            m = re.search(r'\bWGID:([a-f0-9]{16,})\b', str(body), re.I)
             return m.group(1).lower() if m else None
         wgid = _extract_wgid(subj, body)
 
@@ -2821,40 +2779,13 @@ def radio():
                     flash(f"Landed notice ignored – flight #{dup['id']} already recorded.")
                     return redirect(url_for('radio'))
 
-                # ── genuinely new inbound landing ──────────────────────────
-                fid = c.execute("""
-                  INSERT INTO flights(
-                    is_ramp_entry, direction, tail_number,
-                    airfield_takeoff, takeoff_time,
-                    airfield_landing, eta,
-                    cargo_type, cargo_weight, remarks,
-                    complete, sent
-                  ) VALUES (0,'inbound',?,?,?,?,?,?,?,?,1,0)
-                """, (
-                  p['tail_number'],
-                  p['airfield_takeoff'],
-                  '',                # takeoff_time empty for inbound
-                  p['airfield_landing'],
-                  arrival,           # eta = arrival
-                  p['cargo_type'],
-                  p['cargo_weight'],
-                  p.get('remarks','')
-                )).lastrowid
-
-                c.commit()
-
-                c.execute("""
-                  INSERT INTO flight_history(flight_id, timestamp, data)
-                  VALUES (?,?,?)
-                """, (fid, datetime.utcnow().isoformat(),
-                      json.dumps({'inbound_landing': arrival})))
-
+                # No matching outbound → ignore creating any flight.
+                # We still keep incoming_messages (already inserted above) for audit.
                 if is_ajax:
-                    row = dict_rows("SELECT * FROM flights WHERE id=?", (fid,))[0]
-                    row['action'] = 'new'
-                    return jsonify(row)
-
-                flash(f"Landed notice logged as new inbound entry #{fid}.")
+                    return jsonify({'action': 'ignored_landing_no_match',
+                                    'tail': p['tail_number'],
+                                    'arrival': arrival})
+                flash("Remote landing confirmation ignored (no matching outbound leg).")
                 return redirect(url_for('radio'))
 
             # ── fallback: pure “landed” with no time given ──
@@ -2954,6 +2885,7 @@ def radio():
                 fid = c.execute("""
                   INSERT INTO flights(
                     is_ramp_entry,
+                    direction,
                     tail_number,
                     airfield_takeoff,
                     takeoff_time,
@@ -2962,7 +2894,7 @@ def radio():
                     cargo_type,
                     cargo_weight,
                     remarks
-                  ) VALUES (0,?,?,?,?,?,?,?,?)
+                  ) VALUES (0,'inbound',?,?,?,?,?,?,?,?)
                 """, (
                   p['tail_number'],
                   p['airfield_takeoff'],
@@ -3640,7 +3572,7 @@ def inventory_advance_line():
         ts    = datetime.utcnow().isoformat()
 
         # decide source: ramp-panel vs. inventory-detail
-        src = 'ramp' if request.form.get('advanced') == '1' else 'inventory'
+        src = 'ramp'
         with sqlite3.connect(DB_FILE) as c:
             cur = c.execute("""
               INSERT INTO inventory_entries(
@@ -3681,6 +3613,11 @@ def inventory_advance_line():
         # mark all session rows committed
         with sqlite3.connect(DB_FILE) as c:
             c.row_factory = sqlite3.Row
+            # ensure all pending rows in this Advanced manifest carry source='ramp'
+            c.execute(
+              "UPDATE inventory_entries SET source='ramp' WHERE session_id=? AND pending=1",
+              (mid,)
+            )
             rows = c.execute("""
               SELECT id, timestamp
                 FROM inventory_entries
@@ -4340,22 +4277,31 @@ def wargame_ramp_dashboard():
     if session.get('wargame_role') != 'ramp':
         return redirect(url_for('wargame_index'))
 
-    # Arrived cargo (inbound legs)
-    arrivals = dict_rows("""
-      SELECT id, timestamp, tail_number,
-             airfield_takeoff, airfield_landing,
-             takeoff_time, eta, cargo_type,
-             COALESCE(cargo_weight_real,
+    # Arrivals cue cards: only flights that have been promoted to Ramp (pending task)
+    dest = (get_preference('default_origin') or '').strip().upper()
+    base_sql = """
+      SELECT f.id, f.timestamp, f.tail_number,
+             f.airfield_takeoff, f.airfield_landing,
+             f.takeoff_time, f.eta, f.cargo_type,
+             COALESCE(f.cargo_weight_real,
                       CASE
-                        WHEN cargo_weight LIKE '%lb%' THEN CAST(REPLACE(REPLACE(cargo_weight,' lbs',''),' lb','') AS REAL)
-                        ELSE CAST(cargo_weight AS REAL)
+                        WHEN f.cargo_weight LIKE '%lb%' THEN CAST(REPLACE(REPLACE(f.cargo_weight,' lbs',''),' lb','') AS REAL)
+                        ELSE CAST(f.cargo_weight AS REAL)
                       END) AS cargo_weight,
-             remarks
-        FROM flights
-       WHERE is_ramp_entry=0
-         AND direction='inbound'
-       ORDER BY id DESC
-    """)
+             f.remarks
+        FROM flights f
+        JOIN wargame_tasks t
+          ON t.role='ramp' AND t.kind='inbound' AND t.key='flight:' || f.id
+       WHERE f.direction='inbound'
+         AND IFNULL(f.is_ramp_entry,0)=0
+         AND IFNULL(f.complete,0)=0
+    """
+    params = ()
+    if dest:
+        base_sql += " AND UPPER(f.airfield_landing)=?\n"
+        params += (dest,)
+    base_sql += " ORDER BY t.gen_at ASC, f.id DESC"
+    arrivals = dict_rows(base_sql, params)
 
     # Cargo requests waiting to be satisfied by creating an outbound flight
     raw_reqs = dict_rows("""
