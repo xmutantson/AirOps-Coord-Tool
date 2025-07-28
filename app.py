@@ -35,7 +35,7 @@ from flask_limiter.errors import RateLimitExceeded
 import uuid
 
 from flask_wtf import CSRFProtect
-from flask_wtf.csrf import generate_csrf CSRFError
+from flask_wtf.csrf import generate_csrf, CSRFError
 from markupsafe import escape
 
 import sqlite3, csv, io, re, os, json
