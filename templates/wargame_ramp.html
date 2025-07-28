@@ -25,16 +25,13 @@
   {% if requests %}
     <h2>Cargo Requests</h2>
     <div class="card-container">
-      {% for b in requests %}
+      {% for r in requests %}
         <div class="card">
           <p><strong>Timestamp (UTC):</strong> {{ r.timestamp }}</p>
           <p><strong>Destination:</strong> {{ r.airfield_landing }}</p>
           <p><strong>Quantity:</strong> {{ r.cargo_weight }} lb</p>
           <p><strong>Type:</strong> {{ r.cargo_type }}</p>
-          <p><strong>Assigned Tail #:</strong>
-            {{ b.proposed_tail|hide_tbd
-               or '—' }}
-          </p>
+          <p><strong>Assigned Tail #:</strong> {{ r.proposed_tail|hide_tbd or '—' }}</p>
           <p><strong>Remarks:</strong> {{ r.remarks or '—' }}</p>
         </div>
       {% endfor %}

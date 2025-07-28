@@ -55,7 +55,7 @@ import struct
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.schedulers.base import STATE_RUNNING
 
-import logging
+import logging, sys
 
 # convenience logger
 logger = logging.getLogger(__name__)
@@ -64,16 +64,98 @@ logger.setLevel(logging.DEBUG)
 # Cookie lifetime convenience (shared across routes)
 ONE_YEAR = 31_536_000  # seconds
 
-# ── Patch sqlite3.connect to use a longer timeout & busy_timeout ──
-import sqlite3 as _sqlite3
-_orig_connect = _sqlite3.connect
+SQL_TRACE           = os.getenv("SQL_TRACE", "0") == "1"          # enable tracer
+SQL_TRACE_ALL       = os.getenv("SQL_TRACE_ALL", "0") == "1"      # log every stmt
+SQL_TRACE_EXPANDED  = os.getenv("SQL_TRACE_EXPANDED", "0") == "1" # include expanded SQL
+SLOW_MS             = float(os.getenv("SQL_SLOW_MS", "50"))       # threshold (ms)
+LOG_LEVEL           = os.getenv("LOG_LEVEL", "INFO").upper()
+_SKIP_RE_S          = os.getenv("SQL_TRACE_SKIP_RE", "")
+_SKIP_RE            = re.compile(_SKIP_RE_S) if _SKIP_RE_S else None
+
+## ── Patch sqlite3.connect (guarded) + optional SQL tracing ─────────────────
+# Capture the real connect exactly once on the module object to avoid recursion.
+if not hasattr(sqlite3, "_original_connect"):
+    sqlite3._original_connect = sqlite3.connect
+
+_sql_logger = logging.getLogger("sql")
+_sql_logger.setLevel(logging.DEBUG if SQL_TRACE else logging.WARNING)
+_sql_logger.propagate = True
+_sql_logger.debug("SQL tracing %s (SLOW_MS=%s)", "ENABLED" if SQL_TRACE else "disabled", SLOW_MS)
+
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=getattr(logging, LOG_LEVEL, logging.INFO),
+        format="%(asctime)s %(levelname)s:%(name)s: %(message)s",
+        stream=sys.stdout,
+    )
+# Dedicated handler for 'sql' so DEBUG always prints when SQL_TRACE=1
+if not _sql_logger.handlers:
+    _sql_logger.setLevel(logging.DEBUG if SQL_TRACE else getattr(logging, LOG_LEVEL, logging.INFO))
+    _h = logging.StreamHandler(sys.stdout)
+    _h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s:%(name)s: %(message)s"))
+    _h.setLevel(logging.DEBUG if SQL_TRACE else getattr(logging, LOG_LEVEL, logging.INFO))
+    _sql_logger.addHandler(_h)
+    _sql_logger.propagate = False
+
+class TraceCursor(sqlite3.Cursor):
+    def execute(self, sql, params=()):
+        t0 = time.perf_counter()
+        try:
+            return super().execute(sql, params)
+        finally:
+            if SQL_TRACE:
+                dt = (time.perf_counter() - t0) * 1000.0
+                should_log = SQL_TRACE_ALL or (dt >= SLOW_MS)
+                if should_log and not (_SKIP_RE and _SKIP_RE.search(sql)):
+                    _sql_logger.debug("SQL %6.1f ms | %s | %s", dt, sql.strip(), params)
+                if dt >= SLOW_MS:
+                    try:
+                        plan = super().execute("EXPLAIN QUERY PLAN " + sql, params).fetchall()
+                        _sql_logger.debug("PLAN        | %s", plan)
+                    except Exception:
+                        pass
+
+class TraceConn(sqlite3.Connection):
+    def cursor(self, *args, **kwargs):
+        kwargs.setdefault("factory", TraceCursor)
+        return super().cursor(*args, **kwargs)
+    def execute(self, sql, params=()):
+        t0 = time.perf_counter()
+        try:
+            return super().execute(sql, params)
+        finally:
+            if SQL_TRACE:
+                dt = (time.perf_counter() - t0) * 1000.0
+                should_log = SQL_TRACE_ALL or (dt >= SLOW_MS)
+                if should_log and not (_SKIP_RE and _SKIP_RE.search(sql)):
+                    _sql_logger.debug("SQL %6.1f ms | %s | %s", dt, sql.strip(), params)
+                if dt >= SLOW_MS:
+                    try:
+                        plan = super().execute("EXPLAIN QUERY PLAN " + sql, params).fetchall()
+                        _sql_logger.debug("PLAN        | %s", plan)
+                    except Exception:
+                        pass
+
 def connect(db, timeout=30, **kwargs):
-    conn = _orig_connect(db, timeout=timeout, **kwargs)
+    # Only add the tracing connection factory when requested
+    if SQL_TRACE:
+        kwargs.setdefault("factory", TraceConn)
+
+    # create the connection first
+    conn = sqlite3._original_connect(db, timeout=timeout, **kwargs)
+
     try:
         conn.execute("PRAGMA busy_timeout = 30000;")
+        conn.execute("PRAGMA journal_mode=WAL;")
+        # Expanded SQL is VERY noisy — only when explicitly enabled
+        if SQL_TRACE and SQL_TRACE_EXPANDED:
+            conn.set_trace_callback(lambda s: _sql_logger.debug("SQL EXPANDED | %s", s))
     except Exception:
         pass
+
     return conn
+
+# Publish the wrapper on the sqlite3 module (idempotent if re-imported)
 sqlite3.connect = connect
 
 #-----------mDNS section--------------
@@ -694,6 +776,18 @@ def init_db():
             FOREIGN KEY(batch_id) REFERENCES wargame_inventory_batches(id)
           )
         """)
+        # ── Wargame: cargo requests shown on Ramp dashboard ─────────────
+        c.execute("""
+          CREATE TABLE IF NOT EXISTS wargame_ramp_requests (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at       TEXT    NOT NULL,
+            destination      TEXT    NOT NULL,
+            requested_weight REAL    NOT NULL,
+            manifest         TEXT,
+            satisfied_at     TEXT,
+            assigned_tail    TEXT
+          )
+        """)
 
 # ───────────────────────────────────────────────────────────
 #  schema migrations – run on every start or after DB reset
@@ -903,7 +997,14 @@ def sanitize_name(raw: str) -> str:
 
 def ensure_column(table, col, ctype="TEXT"):
     with sqlite3.connect(DB_FILE) as c:
-        have={r[1] for r in c.execute(f"PRAGMA table_info({table})")}
+        # If the table doesn't exist yet, don't try to ALTER it.
+        exists = c.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (table,)
+        ).fetchone()
+        if not exists:
+            return
+        have = {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
         if col not in have:
             c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ctype}")
 
@@ -1918,17 +2019,27 @@ def _create_inventory_batch(direction: str, manifest: str, created_at: str | Non
 def reconcile_inventory_batches(session_id: str) -> None:
     """
     For the just-committed /inventory session:
-      • Attribute entries to the most-complete pending batch of the same direction.
-      • Prefer item-level match (**sanitized_name** + exact size); can spread across batches.
-      • Fallback to weight-based allocation only if no open matching items exist.
+      • FIRST try exact item match (sanitized name + exact size) using either:
+          – parsed lines from raw_name (e.g., 'beans 25 lb×3'), OR
+          – the structured columns (sanitized_name, weight_per_unit, quantity)
+            when raw_name is not parseable (typical for outbound entries).
+      • ONLY if there are no open matching items anywhere, fall back to weight
+        allocation (size * leftover_qty) into the most-complete batch.
       • When a batch completes, set satisfied_at and write one inventory SLA metric.
     """
     with sqlite3.connect(DB_FILE) as c:
         c.row_factory = sqlite3.Row
         entries = c.execute("""
-            SELECT id, direction, quantity, total_weight, COALESCE(NULLIF(raw_name,''), '') AS raw_name
-              FROM inventory_entries
-             WHERE session_id=? AND pending=0
+            SELECT
+              id,
+              direction,             -- 'in' | 'out'
+              quantity,
+              total_weight,
+              weight_per_unit,
+              sanitized_name,
+              COALESCE(NULLIF(raw_name,''), '') AS raw_name
+            FROM inventory_entries
+            WHERE session_id=? AND pending=0
         """, (session_id,)).fetchall()
         if not entries:
             return
@@ -1954,7 +2065,6 @@ def reconcile_inventory_batches(session_id: str) -> None:
         def pick_most_complete(cands):
             if not cands:
                 return None
-            # fewest remaining lines, then oldest
             cands.sort(key=lambda r: (r['remain'], r['b']['created_at']))
             return cands[0]
 
@@ -1987,26 +2097,23 @@ def reconcile_inventory_batches(session_id: str) -> None:
             Allocate `qty` units of (sanitized(name_raw), size_lb) across batches that still need them.
             Returns the number of units actually applied.
             """
-            if qty <= 0:
+            if qty <= 0 or size_lb <= 0:
                 return 0
             applied = 0
             san = sanitize_name(name_raw)
             while qty > 0:
-                # Build candidates each round; state changes as we update.
                 cands = []
                 for r in load_batches(direction):
-                    need_here = False
-                    for it in r['items']:
-                        if sanitize_name(it['name']) == san and abs(it['size_lb'] - size_lb) < 1e-6:
-                            if it['qty_done'] < it['qty_required']:
-                                need_here = True
-                                break
+                    need_here = any(
+                        sanitize_name(it['name']) == san and abs(it['size_lb'] - size_lb) < 1e-6 and
+                        it['qty_done'] < it['qty_required']
+                        for it in r['items']
+                    )
                     if need_here:
                         cands.append(r)
                 pick = pick_most_complete(cands)
                 if not pick:
                     break
-                # Apply to the picked batch’s matching item
                 for it in pick['items']:
                     if sanitize_name(it['name']) == san and abs(it['size_lb'] - size_lb) < 1e-6:
                         remaining = it['qty_required'] - it['qty_done']
@@ -2023,6 +2130,7 @@ def reconcile_inventory_batches(session_id: str) -> None:
             return applied
 
         def apply_weight(direction: str, total_wt: float):
+            """Greedy weight-based allocation into the most-complete batch."""
             if total_wt <= 0:
                 return
             pick = pick_most_complete(load_batches(direction))
@@ -2043,41 +2151,57 @@ def reconcile_inventory_batches(session_id: str) -> None:
             close_if_complete(pick['b']['id'], pick['b']['created_at'])
 
         for e in entries:
+            # 1) Try parsing raw_name ("beans 25 lb×3" etc.)
             parsed = _parse_manifest(e['raw_name'])
             if parsed:
                 for it in parsed:
                     q = int(e['quantity'] or it['qty'] or 1)
                     size = float(it['size_lb'])
-                    # First try sanitized item match (across batches, if multiple exist)
                     used = apply_item(e['direction'], it['name'], size, q)
                     left = q - used
-                    if left > 0:
-                        # Fallback only if there are NO open matching items left anywhere.
-                        if not _any_open_match(e['direction'], sanitize_name(it['name']), size):
-                            apply_weight(e['direction'], size * left)
-            else:
+                    if left > 0 and not _any_open_match(e['direction'], sanitize_name(it['name']), size):
+                        apply_weight(e['direction'], size * left)
+                continue  # next entry
+
+            # 2) No parse → use structured columns (typical for outbound entries)
+            qty  = int(e['quantity'] or 0)
+            size = float(e['weight_per_unit'] or 0.0)
+            name = e['sanitized_name'] or e['raw_name']
+            used = 0
+            if qty > 0 and size > 0 and name:
+                used = apply_item(e['direction'], name, size, qty)
+            left = qty - used
+
+            # 3) Only fall back to weight if there is no open exact match anywhere
+            if left > 0:
+                if not _any_open_match(e['direction'], sanitize_name(name), size):
+                    apply_weight(e['direction'], size * left)
+            # If qty<=0 (shouldn’t happen), last resort: allocate by total_weight
+            elif qty <= 0 and float(e['total_weight'] or 0.0) > 0:
                 apply_weight(e['direction'], float(e['total_weight'] or 0.0))
+
 
 def reconcile_inventory_entry(entry_id: int) -> None:
     """
     Reconcile a single committed Inventory entry (used by Inventory Detail form).
-    Mirrors the logic in reconcile_inventory_batches() for one row.
+    Mirrors batch reconciliation:
+      • Prefer exact (sanitized name + size) match using parsed raw_name or
+        the structured columns; fall back to weight only if no open match exists.
     """
     row = dict_rows("""
-      SELECT id, direction, quantity, total_weight, COALESCE(NULLIF(raw_name,''), '') AS raw_name
+      SELECT id, direction, quantity, total_weight, weight_per_unit, sanitized_name,
+             COALESCE(NULLIF(raw_name,''), '') AS raw_name
         FROM inventory_entries
        WHERE id=? AND pending=0
     """, (entry_id,))
     if not row:
         return
     e = row[0]
-    # Reuse the session-based reconciler by faking a one-off list:
-    # implement minimal inline logic to avoid SQL gymnastics
+
     with sqlite3.connect(DB_FILE) as c:
         c.row_factory = sqlite3.Row
         now_ts = datetime.utcnow().isoformat()
 
-        # Inline helpers copied (lightly) from reconcile_inventory_batches
         def load_batches(direction: str):
             bs = c.execute("""
                 SELECT id, created_at FROM wargame_inventory_batches
@@ -2123,7 +2247,7 @@ def reconcile_inventory_entry(entry_id: int) -> None:
             return False
 
         def apply_item(direction: str, name_raw: str, size_lb: float, qty: int) -> int:
-            if qty <= 0: return 0
+            if qty <= 0 or size_lb <= 0: return 0
             applied = 0
             san = sanitize_name(name_raw)
             while qty > 0:
@@ -2166,6 +2290,7 @@ def reconcile_inventory_entry(entry_id: int) -> None:
                 if remaining < 1e-6: break
             close_if_complete(pick['b']['id'], pick['b']['created_at'])
 
+        # Prefer parsed raw_name if present, else the structured columns
         parsed = _parse_manifest(e['raw_name'])
         if parsed:
             for it in parsed:
@@ -2176,7 +2301,19 @@ def reconcile_inventory_entry(entry_id: int) -> None:
                 if left > 0 and not _any_open_match(e['direction'], sanitize_name(it['name']), size):
                     apply_weight(e['direction'], size * left)
         else:
-            apply_weight(e['direction'], float(e['total_weight'] or 0.0))
+            qty  = int(e['quantity'] or 0)
+            size = float(e['weight_per_unit'] or 0.0)
+            name = e['sanitized_name'] or e['raw_name']
+            used = 0
+            if qty > 0 and size > 0 and name:
+                used = apply_item(e['direction'], name, size, qty)
+            left = qty - used
+            if left > 0:
+                if not _any_open_match(e['direction'], sanitize_name(name), size):
+                    apply_weight(e['direction'], size * left)
+            elif qty <= 0 and float(e['total_weight'] or 0.0) > 0:
+                apply_weight(e['direction'], float(e['total_weight'] or 0.0))
+
 
 def generate_inventory_outbound_request():
     """Generate a multi-line outbound request batch (to be fulfilled by Inventory)."""
@@ -2599,6 +2736,15 @@ def radio():
         sender = escape(request.form.get('sender','').strip())
         ts     = datetime.utcnow().isoformat()
 
+        # --- extract WGID once (subject first, then body) ---
+        def _extract_wgid(subject, body):
+            m = re.search(r'\[?WGID:([a-f0-9]{16,})\]?', str(subject), re.I)
+            if m:
+                return m.group(1).lower()
+            m = re.search(r'\bWGID:([a-f0-9]{16,})\b', str(body), re.I)
+            return m.group(1).lower() if m else None
+        wgid = _extract_wgid(subj, body)
+
         # --- override parse_winlink tail on bare “landed” notices ---
         m_tail = re.match(r"Air Ops:\s*(?P<tail>\S+)\s*\|\s*landed", subj, re.I)
         tail_override = m_tail.group('tail').strip() if m_tail else None
@@ -2613,11 +2759,9 @@ def radio():
             if not t:
                 return ''
             u = t.upper().strip()
-            # Any flavour of “UNK / UNKN / UNKNOWN” => blank
-            if re.match(r'^UNK(?:N|KNOWN)?$', u):
+            if re.match(r'^UNK(?:N|KNOWN)?$', u):  # UNK/UNKN/UNKNOWN → blank
                 return ''
-            # Strip trailing “L” / “LOCAL”
-            u = re.sub(r'\b(?:L|LOCAL)$', '', u).strip()
+            u = re.sub(r'\b(?:L|LOCAL)$', '', u).strip()  # strip trailing L/LOCAL
             return u                  # already zero-padded by parse_winlink()
 
         p['takeoff_time'] = _clean(p['takeoff_time'])
@@ -2640,27 +2784,23 @@ def radio():
               p.get('remarks','')
             ))
 
-            # ✅ Wargame: finish Radio‑inbound metric if this message came from the generator
-            wgid = extract_wgid_from_subject(subj)
+            # ---- end the write txn, then finish SLA BEFORE any early return ----
+            c.commit()
             if wgid:
                 try:
-                    # directly finish the SLA task (key = "msg:<wgid>")
-                    wargame_task_finish('radio', 'inbound', key=f"msg:{wgid}")
+                    recorded = wargame_task_finish('radio', 'inbound', key=f"msg:{wgid}")
+                    logger.debug("Radio SLA finish WGID=%s recorded=%s", wgid, recorded)
                 except Exception as exc:
-                    # log but don’t crash the operator’s flow
-                    logger.debug(f"Could not finish Radio‑inbound SLA for WGID {wgid}: {exc}")
+                    logger.debug("Could not finish Radio‑inbound SLA for WGID %s: %s", wgid, exc)
             else:
-                # no WGID found → nothing to finish
-                logger.debug(f"No WGID in subject, skipping SLA finish: “{subj}”")
+                logger.debug("No WGID in message; skipping Radio SLA finish.")
 
             # 2) landing-report?
-            # look for “landed HHMM” (allow “09:53” or “0953”)
             lm = re.search(r'\blanded\s*(\d{1,2}:?\d{2})\b', subj, re.I)
             if lm:
                 arrival = hhmm_norm(lm.group(1))
 
                 # try updating the matching “in-flight” entry (by tail & takeoff_time)
-                # don't self-limit to outbound ramp boss flights, update regardless
                 match = c.execute("""
                   SELECT id, remarks
                     FROM flights
@@ -2670,7 +2810,6 @@ def radio():
                 """, (p['tail_number'], p['takeoff_time'])).fetchone()
 
                 if match:
-                    # snapshot & update it
                     before = dict_rows("SELECT * FROM flights WHERE id=?", (match['id'],))[0]
                     c.execute("""
                       INSERT INTO flight_history(flight_id, timestamp, data)
@@ -2679,24 +2818,18 @@ def radio():
 
                     old_rem = (match.get('remarks') or '').strip()
                     new_rem = (f"{old_rem} / Arrived {arrival}" if old_rem else f"Arrived {arrival}")
-                    # close the matching flight; keep `sent` as-is (do not reset it)
                     c.execute("""
                       UPDATE flights
                          SET eta=?, complete=1, remarks=?
                        WHERE id=?
                     """, (arrival, new_rem, match['id']))
-                    c.commit()  # ensure subsequent reads see the closure
+                    c.commit()
 
-                    # ── JSON reply for XHR caller (blue success row) ──
                     if is_ajax:
-                        row = dict_rows(
-                                "SELECT * FROM flights WHERE id=?",
-                                (match['id'],)
-                              )[0]
+                        row = dict_rows("SELECT * FROM flights WHERE id=?", (match['id'],))[0]
                         row['action'] = 'updated'
                         return jsonify(row)
 
-                    # normal (form-submit) path
                     flash(f"Flight {match['id']} marked as landed at {arrival}.")
                     return redirect(url_for('radio'))
 
@@ -2709,12 +2842,7 @@ def radio():
 
                 if dup:
                     if is_ajax:
-                        # Always return the *entire* flight row so the
-                        # feedback table can show real data instead of TBD
-                        full = dict_rows(
-                                   "SELECT * FROM flights WHERE id=?",
-                                   (dup['id'],)
-                               )
+                        full = dict_rows("SELECT * FROM flights WHERE id=?", (dup['id'],))
                         row = full[0] if full else {'id': dup['id']}
                         row['action'] = 'update_ignored'
                         return jsonify(row)
@@ -2741,21 +2869,16 @@ def radio():
                   p.get('remarks','')
                 )).lastrowid
 
-                # 1) make the INSERT visible to any parallel reads
                 c.commit()
 
-                # 2) record history BEFORE we might return
                 c.execute("""
                   INSERT INTO flight_history(flight_id, timestamp, data)
                   VALUES (?,?,?)
                 """, (fid, datetime.utcnow().isoformat(),
                       json.dumps({'inbound_landing': arrival})))
 
-                # 3) AJAX caller wants the fresh row back
                 if is_ajax:
-                    row = dict_rows(
-                            "SELECT * FROM flights WHERE id=?", (fid,)
-                          )[0]
+                    row = dict_rows("SELECT * FROM flights WHERE id=?", (fid,))[0]
                     row['action'] = 'new'
                     return jsonify(row)
 
@@ -2764,16 +2887,12 @@ def radio():
 
             # ── fallback: pure “landed” with no time given ──
             elif re.search(r'\blanded\b', subj, re.I):
-                # find the most‐recent open flight
                 match = c.execute(
                     "SELECT id FROM flights WHERE tail_number=? AND complete=0 ORDER BY id DESC LIMIT 1",
                     (p['tail_number'],)
                 ).fetchone()
                 if match:
-                    c.execute(
-                        "UPDATE flights SET complete=1, sent=0 WHERE id=?",
-                        (match['id'],)
-                    )
+                    c.execute("UPDATE flights SET complete=1, sent=0 WHERE id=?", (match['id'],))
                     flash(f"Flight {match['id']} marked as landed (no time given).")
                 return redirect(url_for('radio'))
 
@@ -2784,10 +2903,8 @@ def radio():
             ).fetchone()
 
             if f:
-                # snapshot current row
                 before = dict_rows("SELECT * FROM flights WHERE id=?", (f['id'],))[0]
 
-                # --- decide if anything would really change ---------------
                 no_change = (
                     before['airfield_takeoff'] == p['airfield_takeoff'] and
                     before['airfield_landing'] == p['airfield_landing'] and
@@ -2799,18 +2916,13 @@ def radio():
 
                 if no_change:
                     if is_ajax:
-                        # Always return the *entire* flight row so the feedback
-                        # table can display real values instead of all “TBD”.
-                        full = dict_rows(
-                                   "SELECT * FROM flights WHERE id=?", (f['id'],)
-                               )
+                        full = dict_rows("SELECT * FROM flights WHERE id=?", (f['id'],))
                         row = full[0] if full else {'id': f['id']}
                         row['action'] = 'update_ignored'
                         return jsonify(row)
                     flash(f"Duplicate Winlink ignored (flight #{f['id']}).")
                     return redirect(url_for('radio'))
 
-                # ----- real change → record history then update ----------
                 c.execute("""
                   INSERT INTO flight_history(flight_id, timestamp, data)
                   VALUES (?,?,?)
@@ -2834,29 +2946,18 @@ def radio():
                   p.get('remarks',''), p.get('remarks',''),
                   f['id']
                 ))
-
-                # ── commit now so another connection can see the change ──
                 c.commit()
 
-                # ── JSON reply for AJAX caller ───────────────────────────
                 if is_ajax:
-                    row_id = f['id']                 # should always exist
-                    rs     = dict_rows(
-                               "SELECT * FROM flights WHERE id=?", (row_id,)
-                             )
-                    if rs:                           # happy path
-                        row = rs[0]
-                        row['action'] = 'updated'
-                    else:                            # defensive fallback
-                        row = {'id': row_id, 'action': 'updated'}
+                    rs = dict_rows("SELECT * FROM flights WHERE id=?", (f['id'],))
+                    row = rs[0] if rs else {'id': f['id']}
+                    row['action'] = 'updated'
                     return jsonify(row)
 
-                # ── normal (form-submit) path ────────────────────────────
                 flash(f"Flight {f['id']} updated from incoming message.")
 
             else:
                 # ── NEW NON-RAMP ENTRY ────────────────────────────
-                # ── auto-close earlier open legs for this tail ──
                 open_prev = c.execute("""
                     SELECT id, remarks FROM flights
                      WHERE tail_number=? AND complete=0
@@ -2867,8 +2968,7 @@ def radio():
                     c.execute("""
                         INSERT INTO flight_history(flight_id,timestamp,data)
                         VALUES (?,?,?)
-                    """, (prev['id'], datetime.utcnow().isoformat(),
-                          json.dumps(before)))
+                    """, (prev['id'], datetime.utcnow().isoformat(), json.dumps(before)))
 
                     suffix  = f"Auto-closed at {p['takeoff_time'] or 'next leg'}"
                     new_rem = (prev['remarks'] + " / " if prev['remarks'] else "") + suffix
@@ -2878,6 +2978,7 @@ def radio():
                            SET complete=1, sent=0, remarks=?
                          WHERE id=?
                     """, (new_rem, prev['id']))
+
                 fid = c.execute("""
                   INSERT INTO flights(
                     is_ramp_entry,
@@ -2901,29 +3002,22 @@ def radio():
                   p.get('remarks','')
                 )).lastrowid
 
-                # ensure INSERT is visible to the next SELECT
                 c.commit()
 
-                if is_ajax:          # ── JSON reply for AJAX caller (new) ──
-                    row = dict_rows(
-                            "SELECT * FROM flights WHERE id=?",
-                            (fid,)
-                          )[0]
+                if is_ajax:
+                    row = dict_rows("SELECT * FROM flights WHERE id=?", (fid,))[0]
                     row['action'] = 'new'
                     return jsonify(row)
 
-                # normal (form-submit) path
                 flash(f"Incoming flight logged as new entry #{fid}.")
 
         # normal (non-AJAX) POST → redirect back to Radio screen
         return redirect(url_for('radio'))
 
     # ─── GET: fetch & order ramp entries ────────────────────────────────
-    # read new preference toggle
     show_unsent_only = request.cookies.get('radio_show_unsent_only','yes') == 'yes'
     hide_tbd         = request.cookies.get('hide_tbd','yes') == 'yes'
 
-    # build your query
     base_sql = """
       SELECT *
         FROM flights
@@ -2943,7 +3037,6 @@ def radio():
 
     flights = dict_rows(base_sql)
 
-    # ─── display prefs & compute view fields ────────────────────────────
     pref     = dict_rows("SELECT value FROM preferences WHERE name='code_format'")
     code_fmt = request.cookies.get('code_format') or (pref[0]['value'] if pref else 'icao4')
     mass_fmt = request.cookies.get('mass_unit', 'lbs')
@@ -2958,7 +3051,6 @@ def radio():
         else:
             f['eta_view'] = f.get('eta','TBD')
 
-        # mass-unit conversion
         cw    = (f.get('cargo_weight') or '').strip()
         m_lbs = re.match(r'([\d.]+)\s*lbs', cw, re.I)
         m_kg  = re.match(r'([\d.]+)\s*kg',  cw, re.I)
@@ -2966,7 +3058,7 @@ def radio():
             v  = round(float(m_lbs.group(1)) / 2.20462, 1)
             cw = f'{v} kg'
         elif mass_fmt=='lbs' and m_kg:
-            v = round(float(m_kg.group(1)) * 2.20462, 1)
+            v  = round(float(m_kg.group(1)) * 2.20462, 1)
             cw = f'{v} lbs'
         f['cargo_view'] = cw or 'TBD'
 
