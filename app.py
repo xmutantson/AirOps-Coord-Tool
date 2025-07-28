@@ -55,6 +55,12 @@ import struct
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.schedulers.base import STATE_RUNNING
 
+import logging
+
+# convenience logger
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
 # Cookie lifetime convenience (shared across routes)
 ONE_YEAR = 31_536_000  # seconds
 
@@ -473,6 +479,20 @@ def maybe_start_distances():
     t.start()
     _distance_thread_started = True
 
+# Normalize values that are visually blank (em/en dashes, hyphens, UNDERSCORE lines),
+# or common sentinels to actual None/"" so gating logic is correct.
+DASHY_RE = re.compile(r'^[\s\-_‒–—―]+$')  # hyphen, en/em/horz bars, underscores
+def blankish_to_none(v: str | None):
+    if v is None:
+        return None
+    s = str(v).strip()
+    if not s:
+        return None
+    u = s.upper()
+    if DASHY_RE.match(s) or u in {"N/A","NONE","UNK","UNKNOWN","TBD"}:
+        return None
+    return s
+
 # ───────────────── Login Flows ──────────────────
 
 @app.before_request
@@ -731,6 +751,9 @@ def run_migrations():
 
     # Wargame: hold cargo manifest on inbound schedule so it becomes flight.remarks
     ensure_column("wargame_inbound_schedule", "manifest", "TEXT")
+
+    # Wargame: record which tail was assigned to a ramp request
+    ensure_column("wargame_ramp_requests", "assigned_tail",   "TEXT")
 
     # ── Wargame: start Ramp‑inbound SLA when Radio publishes an inbound flight ──
     with sqlite3.connect(DB_FILE) as c:
@@ -1660,9 +1683,12 @@ def generate_radio_message():
           af, callsign, 'OPERATOR', subject, body
         ))
 
-def extract_wgid_from_text(subject: str, body: str) -> str | None:
-    """Return WGID hex if present in subject+body, else None."""
-    m = re.search(r'\bWGID:([a-f0-9]{16,})\b', f"{subject}\n{body}", re.I)
+def extract_wgid_from_subject(subject: str) -> str | None:
+    """
+    Return WGID hex if present in the *subject* line, else None.
+    Matches both “WGID:…” or “[WGID:…]”.
+    """
+    m = re.search(r'\[?WGID:([a-f0-9]{16,})\]?', subject, re.I)
     return m.group(1) if m else None
 
 def wargame_finish_radio_inbound_if_tagged(subject: str, body: str) -> None:
@@ -2603,7 +2629,17 @@ def radio():
             ))
 
             # ✅ Wargame: finish Radio‑inbound metric if this message came from the generator
-            wargame_finish_radio_inbound_if_tagged(subj, body)
+            wgid = extract_wgid_from_subject(subj)
+            if wgid:
+                try:
+                    # directly finish the SLA task (key = "msg:<wgid>")
+                    wargame_task_finish('radio', 'inbound', key=f"msg:{wgid}")
+                except Exception as exc:
+                    # log but don’t crash the operator’s flow
+                    logger.debug(f"Could not finish Radio‑inbound SLA for WGID {wgid}: {exc}")
+            else:
+                # no WGID found → nothing to finish
+                logger.debug(f"No WGID in subject, skipping SLA finish: “{subj}”")
 
             # 2) landing-report?
             # look for “landed HHMM” (allow “09:53” or “0953”)
@@ -3398,10 +3434,15 @@ def ramp_boss():
                    LIMIT 1
                 """, (row['airfield_landing'],))
                 if req and wt >= float(req[0]['requested_weight'] or 0):
-                    rid = req[0]['id']
+                    rid     = req[0]['id']
+                    now_iso = datetime.utcnow().isoformat()
+                    tail    = row['tail_number']
                     with sqlite3.connect(DB_FILE) as c:
-                        c.execute("UPDATE wargame_ramp_requests SET satisfied_at=? WHERE id=?",
-                                  (datetime.utcnow().isoformat(), rid))
+                        c.execute("""
+                          UPDATE wargame_ramp_requests
+                             SET satisfied_at=?, assigned_tail=?
+                           WHERE id=?
+                        """, (now_iso, tail, rid))
                         # (optional) metric: request SLA
                         c.execute("""
                           INSERT INTO wargame_metrics(event_type, delta_seconds, recorded_at, key)
@@ -4230,7 +4271,7 @@ def wargame_ramp_dashboard():
 
     # Cargo requests waiting to be satisfied by creating an outbound flight
     raw_reqs = dict_rows("""
-      SELECT id, created_at, destination, requested_weight, manifest
+      SELECT id, created_at, destination, requested_weight, manifest, assigned_tail
         FROM wargame_ramp_requests
        WHERE satisfied_at IS NULL
        ORDER BY created_at ASC
@@ -4241,7 +4282,7 @@ def wargame_ramp_dashboard():
       'airfield_landing': r['destination'],
       'cargo_weight': r['requested_weight'],
       'cargo_type': 'Mixed',
-      'proposed_tail': '',
+      'proposed_tail'    : r.get('assigned_tail'),
       'remarks': r['manifest'] or '—'
     } for r in raw_reqs]
 
