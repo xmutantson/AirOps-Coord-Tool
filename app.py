@@ -4294,7 +4294,7 @@ def wargame_radio_dashboard():
 
     # only a “radio” user may visit this page
     if session.get('role') != 'radio':
-        return redirect(url_for('choose_role'))
+        return redirect(url_for('wargame_choose_role'))
 
     # 2) fetch all generated e‑mails, newest first
     emails = dict_rows("""
@@ -4330,7 +4330,7 @@ def wargame_ramp_dashboard():
 
     # only a “ramp” user may visit this page
     if session.get('role') != 'ramp':
-        return redirect(url_for('choose_role'))
+        return redirect(url_for('wargame_choose_role'))
 
     # Arrived cargo (inbound legs)
     arrivals = dict_rows("""
@@ -4390,7 +4390,7 @@ def wargame_inventory_dashboard():
 
     # only an “inventory” user may visit this page
     if session.get('role') != 'inventory':
-        return redirect(url_for('choose_role'))
+        return redirect(url_for('wargame_choose_role'))
 
     # Pending batches (in/out)
     incoming_deliveries = dict_rows("""
@@ -4431,7 +4431,7 @@ def wargame_super_dashboard():
 
     # only a “supervisor (super)” user may visit this page
     if session.get('role') != 'super':
-        return redirect(url_for('choose_role'))
+        return redirect(url_for('wargame_choose_role'))
 
     # 1) per‑role delay metrics
     metrics = {}
