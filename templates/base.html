@@ -12,7 +12,23 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <meta name="csrf-token" content="{{ csrf_token() }}">
 
-  {# Auto-refresh only on Wargame dashboards #}
+    <!-- Auto‑reload on CSRF expiry: any fetch that returns 401 → full page reload -->
+    <script>
+    (function(){
+      const _origFetch = window.fetch;
+      window.fetch = function(...args){
+        return _origFetch.apply(this,args).then(resp => {
+          if (resp.status === 401) {
+            // CSRF token expired or invalid → reload to get a fresh one
+            window.location.reload();
+            return new Promise(()=>{});  // never resolve downstream
+          }
+          return resp;
+        });
+      };
+    })();
+    </script>
+{# Auto-refresh only on Wargame dashboards #}
 {# auto-refresh for Wargame pages is JS-driven so we can pause while modals are open #}
 </head>
 

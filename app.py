@@ -35,7 +35,7 @@ from flask_limiter.errors import RateLimitExceeded
 import uuid
 
 from flask_wtf import CSRFProtect
-from flask_wtf.csrf import generate_csrf
+from flask_wtf.csrf import generate_csrf CSRFError
 from markupsafe import escape
 
 import sqlite3, csv, io, re, os, json
@@ -587,6 +587,24 @@ the application.</p>
     resp = make_response(html, 500)
     resp.headers["Content-Type"] = "text/html; charset=UTF-8"
     return resp
+
+@app.errorhandler(CSRFError)
+def handle_csrf_error(e):
+    """
+    Catch any CSRF failures:
+      - For AJAX (X-Requested-With), return 401+JSON so client JS can detect expiry.
+      - For normal form posts, flash a message and redirect to the same path (forces reload).
+    """
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        resp = jsonify({
+            'csrf_expired': True,
+            'message': e.description or 'Session expired; please reload.'
+        })
+        resp.status_code = 401
+        return resp
+
+    flash('Your session has expired. Please reload this page.', 'error')
+    return redirect(request.path)
 
 # ───────────────── DB init & migrations ──────────────────
 def init_db():
