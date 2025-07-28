@@ -43,8 +43,6 @@ from datetime import datetime, timedelta
 import threading, time, socket, math
 from urllib.request import urlopen
 import queue
-from queue import Queue, Empty, Full
-from threading import Lock
 
 from functools import lru_cache
 
@@ -4294,6 +4292,10 @@ def wargame_radio_dashboard():
     if not (wm and wm[0]['value']=='yes'):
         return redirect(url_for('dashboard'))
 
+    # only a “radio” user may visit this page
+    if session.get('role') != 'radio':
+        return redirect(url_for('choose_role'))
+
     # 2) fetch all generated e‑mails, newest first
     emails = dict_rows("""
       SELECT id, generated_at, message_id, size_bytes,
@@ -4325,6 +4327,10 @@ def wargame_ramp_dashboard():
     wm = dict_rows("SELECT value FROM preferences WHERE name='wargame_mode'")
     if not (wm and wm[0]['value']=='yes'):
         return redirect(url_for('dashboard'))
+
+    # only a “ramp” user may visit this page
+    if session.get('role') != 'ramp':
+        return redirect(url_for('choose_role'))
 
     # Arrived cargo (inbound legs)
     arrivals = dict_rows("""
@@ -4382,6 +4388,10 @@ def wargame_inventory_dashboard():
     if not (wm and wm[0]['value']=='yes'):
         return redirect(url_for('dashboard'))
 
+    # only an “inventory” user may visit this page
+    if session.get('role') != 'inventory':
+        return redirect(url_for('choose_role'))
+
     # Pending batches (in/out)
     incoming_deliveries = dict_rows("""
       SELECT id, created_at, manifest
@@ -4406,9 +4416,9 @@ def wargame_inventory_dashboard():
       'wargame_inventory.html',
       incoming_deliveries=[{**b, 'lines': lines_for(b['id'])} for b in incoming_deliveries],
       outgoing_requests=[{**b, 'lines': lines_for(b['id'])} for b in outgoing_requests],
+      last_inventory_timestamp=last_inventory_update or datetime.utcnow().isoformat(),
       active='wargame'
     )
-
 
 # ───────────────────────────────────────────────────────────
 #  WARGAME: Exercise Supervisor Dashboard
@@ -4418,6 +4428,10 @@ def wargame_super_dashboard():
     wm = dict_rows("SELECT value FROM preferences WHERE name='wargame_mode'")
     if not (wm and wm[0]['value']=='yes'):
         return redirect(url_for('dashboard'))
+
+    # only a “supervisor (super)” user may visit this page
+    if session.get('role') != 'super':
+        return redirect(url_for('choose_role'))
 
     # 1) per‑role delay metrics
     metrics = {}
@@ -4820,65 +4834,14 @@ def inventory_delete(entry_id):
 # register the inventory blueprint
 app.register_blueprint(inventory_bp)
 
-# ───────────────────────────────────────────────────────────
-#  Server‑Sent Events for Wargame Inventory refresh
-#    • Per‑client bounded queues (non‑blocking publish)
-#    • 25s heartbeat so channels stay alive and stale clients prune
-# ───────────────────────────────────────────────────────────
-_sse_clients = set()
-_sse_lock = Lock()
-
-def _inventory_event_stream():
-    q = Queue(maxsize=1)                 # single-slot "mailbox" for client
-    with _sse_lock:
-        _sse_clients.add(q)
-    try:
-        # Connected comment line keeps some proxies happy
-        yield ": connected\n\n"
-        while True:
-            try:
-                payload = q.get(timeout=25)   # wake at least every 25s
-                yield f"event: inv_commit\ndata: {payload}\n\n"
-            except Empty:
-                # heartbeat to keep waitress channel alive & detect disconnects
-                yield ": keepalive\n\n"
-    finally:
-        with _sse_lock:
-            _sse_clients.discard(q)
+last_inventory_update: str | None = None
 
 def publish_inventory_event(data=None):
     """
-    Broadcast an inventory refresh notification to connected SSE clients.
-    Non‑blocking: drops messages for overfull client queues.
+    Record the time of the last inventory change for polling clients.
     """
-    if data is None:
-        data = {}
-    msg = json.dumps(data, separators=(',', ':'))
-    stale = []
-    with _sse_lock:
-        for q in list(_sse_clients):
-            try:
-                # If the mailbox already has a trigger, that’s enough.
-                # Don’t block and don’t drop the client—just skip this one.
-                q.put_nowait(msg)
-            except Full:
-                pass  # already has a pending trigger
-            except Exception:
-                stale.append(q)
-        for q in stale:
-            _sse_clients.discard(q)
-
-@app.get('/inventory/events', endpoint='inventory_sse')
-@app.get('/events/inventory', endpoint='inventory_sse_legacy')
-def inventory_events():
-    headers = {
-        'Content-Type': 'text/event-stream; charset=utf-8',
-        'Cache-Control': 'no-cache',
-        # Do NOT send hop-by-hop headers (PEP 3333). Let the server manage the connection.
-        # If you ever sit behind nginx, this disables response buffering there:
-        'X-Accel-Buffering': 'no',
-    }
-    return Response(stream_with_context(_inventory_event_stream()), headers=headers)
+    global last_inventory_update
+    last_inventory_update = datetime.utcnow().isoformat()
 
 # ───────────────────────────────────────────────────────────
 if __name__=="__main__":

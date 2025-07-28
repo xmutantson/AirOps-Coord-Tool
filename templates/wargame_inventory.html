@@ -60,44 +60,22 @@
     <button type="submit" class="btn btn-yellow">Exit Role</button>
   </form>
 
-  <script>
-  // Subscribe to Inventory SSE (inv_commit) and refresh on change,
-  // deferring while hidden and freeing the connection when away.
+<script>
+  // Poll for inventory updates every 10 seconds when tab is active
   document.addEventListener('DOMContentLoaded', function () {
-    if (window.__invSseInit) return;
-    window.__invSseInit = true;
-    try {
-      const url = '{{ url_for("inventory_sse") }}';
-      let pending = false;
-      let es = new EventSource(url);
-
-      // Only our custom event, not default messages
-      es.addEventListener('inv_commit', function (e) {
-        if (document.visibilityState === 'hidden') {
-          pending = true;
-        } else {
-          location.reload();
-        }
-      });
-
-      document.addEventListener('visibilitychange', function () {
-        if (document.visibilityState === 'visible' && pending) {
-          pending = false;
-          location.reload();
-        }
-        else if (document.visibilityState === 'hidden') {
-          // close SSE while tab is in background
-          es.close();
-        }
-      });
-
-      es.onerror = function (e) {
-        console.error('[SSE] inventory/events error', e);
-        // browser retries automatically
-      };
-    } catch (err) {
-      console.warn('Inventory SSE init failed:', err);
+    let last = '{{ last_inventory_timestamp }}';
+    function check() {
+      if (document.visibilityState !== 'visible') return;
+      fetch('{{ url_for("wargame_inventory_last_update") }}')
+        .then(r => r.json())
+        .then(data => {
+          if (data.timestamp !== last) location.reload();
+        })
+        .catch(() => {});
     }
+    document.addEventListener('visibilitychange', check);
+    setInterval(check, 3000);
   });
-  </script>
+</script>
+
 {% endblock %}
