@@ -547,48 +547,96 @@
 
   // ← send each “Add” click up to the server with CSRF
   advAdd.addEventListener('click', async () => {
-    const dir = advDirOut.checked ? 'outbound' : 'inbound';
-    // assemble POST body
-    const body = new URLSearchParams({
+    const dirNow = advDirOut.checked ? 'outbound' : 'inbound';
+    // (build URLSearchParams exactly as before…)
+    const params = new URLSearchParams({
+      csrf_token:  csrfToken,
       action:      'add',
       manifest_id: manifestId.value,
-      direction:   dir,
+      direction:   dirNow,
       category:    advCat.value,
-      item:        dir==='outbound' ? advItem.value   : '',
-      size:        dir==='outbound' ? advSize.value   : '',
-      name:        dir==='inbound'  ? advName.value   : '',
-      weight:      dir==='inbound'  ? advWeight.value : '',
-      wunit:       dir==='inbound'  ? advWunit.value  : '',
-      qty:         advQty.value,
-      csrf_token:  csrfToken
+      item:        dirNow === 'outbound' ? advItem.value   : '',
+      size:        dirNow === 'outbound' ? advSize.value   : '',
+      name:        dirNow === 'inbound'  ? advName.value   : '',
+      weight:      dirNow === 'inbound'  ? advWeight.value : '',
+      wunit:       dirNow === 'inbound'  ? advWunit.value  : '',
+      qty:         advQty.value
     });
 
-    const resp = await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body:    body
-    });
-
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => null);
-      return showToast(err?.message || 'Failed to add line', 'error');
+    let resp;
+    try {
+      resp = await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
+        method: 'POST',
+        body:   params
+      });
+    } catch {
+      return showError('Network error.');
     }
+    const j = await resp.json();
+    if (!resp.ok) return showError(j.message || 'Error adding line');
 
-    // on success, append the chip and enable “Done”
-    const entry = await resp.json();
-    pendingIds.push(entry.entry_id);
-    advLines.insertAdjacentHTML('beforeend',
-      `<span class="adv-chip">${entry.raw} ×${entry.qty}</span>`
-    );
+    // ─── build the old “chip” with delete button ─────────────────────────
+    pendingIds.push(j.entry_id);
+    const chip = document.createElement('div');
+    chip.className = 'adv-chip';
+    chip.innerHTML = `
+      <span class="chip-content">${j.sanitized}</span>
+      <span class="chip-wpu">${j.wpu} lb</span>
+      <span class="chip-qty">×${j.qty}</span>
+      <button class="chip-remove" title="Remove">×</button>
+    `;
+    chip.querySelector('.chip-remove').addEventListener('click', async () => {
+      await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
+        method:'POST',
+        body: new URLSearchParams({
+          csrf_token:  csrfToken,
+          action:      'delete',
+          entry_id:    j.entry_id
+        })
+      });
+      chip.remove();
+      pendingIds = pendingIds.filter(id => id !== j.entry_id);
+      advDone.disabled = !pendingIds.length;
+    });
+    advLines.append(chip);
     advDone.disabled = false;
+
+    // ─── update main form fields ───────────────────────────────────────
+    const cw  = document.getElementById('cargo_weight');
+    const rmf = document.getElementById('remarks');
+    cw.value = (+cw.value || 0) + j.total;
+    rmf.value += `${j.sanitized} ${j.wpu} lb×${j.qty}; `;
+
+    // auto‑fill Cargo Type
+    const catName = inventoryAdvancedData
+      .all_categories.find(c => String(c.id) === advCat.value)
+      ?.display_name || advCat.value;
+    window._rbCategories = window._rbCategories || new Set();
+    window._rbCategories.add(catName);
+    document.getElementById('cargo_type').value =
+      window._rbCategories.size === 1 ? catName : 'Mixed';
+
+    advQty.value = '';
   });
 
   // (Existing "add line" and "commit" logic unchanged except for the two lines below)
-  document.getElementById('adv-done').addEventListener('click', async () => {
-    // … your existing commit logic …
+  advDone.addEventListener('click', async () => {
+    try {
+      await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
+        method:'POST',
+        body: new URLSearchParams({
+          csrf_token:  csrfToken,
+          action:      'commit',
+          manifest_id: manifestId.value
+        })
+      });
+    } catch {
+      return showError('Network error committing manifest.');
+    }
+    // return to main form
     advPanel.style.display = '';
     rbForm.style.display   = '';
-    stopPolling();                   // ← stop polling when done
+    stopPolling();
   });
 </script>
 
