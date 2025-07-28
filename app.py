@@ -4380,15 +4380,20 @@ def wargame_ramp_dashboard():
        WHERE satisfied_at IS NULL
        ORDER BY created_at ASC
     """)
-    # Shape to match the existing template (field names)
-    requests = [{
-      'timestamp': r['created_at'],
-      'airfield_landing': r['destination'],
-      'cargo_weight': r['requested_weight'],
-      'cargo_type': 'Mixed',
-      'proposed_tail'    : r.get('assigned_tail'),
-      'remarks': r['manifest'] or '—'
-    } for r in raw_reqs]
+    # Shape to match the existing template (field names),
+    # coercing any dash‑only placeholders into real None
+    requests = []
+    for r in raw_reqs:
+        # normalize placeholder dashes (em‑dash, hyphens, etc.) to None
+        tail = blankish_to_none(r.get('assigned_tail'))
+        requests.append({
+            'timestamp':        r['created_at'],
+            'airfield_landing': r['destination'],
+            'cargo_weight':     r['requested_weight'],
+            'cargo_type':       'Mixed',
+            'proposed_tail':    tail,
+            'remarks':          r['manifest'] or '—'
+        })
 
     return render_template(
       'wargame_ramp.html',
