@@ -4292,9 +4292,9 @@ def wargame_radio_dashboard():
     if not (wm and wm[0]['value']=='yes'):
         return redirect(url_for('dashboard'))
 
-    # only a “radio” user may visit this page
-    if session.get('role') != 'radio':
-        return redirect(url_for('wargame_choose_role'))
+    # only the “radio” role may visit; everyone else bounces to /wargame
+    if session.get('wargame_role') != 'radio':
+        return redirect(url_for('wargame_index'))
 
     # 2) fetch all generated e‑mails, newest first
     emails = dict_rows("""
@@ -4328,9 +4328,9 @@ def wargame_ramp_dashboard():
     if not (wm and wm[0]['value']=='yes'):
         return redirect(url_for('dashboard'))
 
-    # only a “ramp” user may visit this page
-    if session.get('role') != 'ramp':
-        return redirect(url_for('wargame_choose_role'))
+    # only the “ramp” role may visit; everyone else bounces to /wargame
+    if session.get('wargame_role') != 'ramp':
+        return redirect(url_for('wargame_index'))
 
     # Arrived cargo (inbound legs)
     arrivals = dict_rows("""
@@ -4388,9 +4388,9 @@ def wargame_inventory_dashboard():
     if not (wm and wm[0]['value']=='yes'):
         return redirect(url_for('dashboard'))
 
-    # only an “inventory” user may visit this page
-    if session.get('role') != 'inventory':
-        return redirect(url_for('wargame_choose_role'))
+    # only the “inventory” role may visit; everyone else bounces to /wargame
+    if session.get('wargame_role') != 'inventory':
+        return redirect(url_for('wargame_index'))
 
     # Pending batches (in/out)
     incoming_deliveries = dict_rows("""
@@ -4429,9 +4429,9 @@ def wargame_super_dashboard():
     if not (wm and wm[0]['value']=='yes'):
         return redirect(url_for('dashboard'))
 
-    # only a “supervisor (super)” user may visit this page
-    if session.get('role') != 'super':
-        return redirect(url_for('wargame_choose_role'))
+    # only the “super” role may visit; everyone else bounces to /wargame
+    if session.get('wargame_role') != 'super':
+        return redirect(url_for('wargame_index'))
 
     # 1) per‑role delay metrics
     metrics = {}
