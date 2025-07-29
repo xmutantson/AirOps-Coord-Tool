@@ -87,7 +87,7 @@
 <!-- ── 30 s heartbeat: paint body.red when server unreachable ── -->
 <script>
 (()=>{               /* IIFE keeps global scope clean */
-  const CHECK_EVERY = 30_000;          // 30 s
+  const CHECK_EVERY = 38_000;          // 30 s
   const TIMEOUT_MS  = 5_000;           // abort after 5 s
 
   async function beat(){
@@ -115,7 +115,7 @@
     }
   }
   beat();                              // run once at page-load
-  setInterval(beat, CHECK_EVERY);      // …then every 30 s
+  setInterval(beat, CHECK_EVERY);      // …then every interval
 })();
 </script>
 
