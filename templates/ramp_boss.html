@@ -599,6 +599,11 @@
       <span class="chip-wpu">${j.wpu} lb</span> <span class="chip-qty">×${j.qty}</span><br>
       <span class="chip-total">= ${j.total} lb</span>
     `;
+
+
+    // added so sumFromDOM() can pick it up in O(N) time:
+    chip.setAttribute('data-total', j.total);
+
     chip.querySelector('.chip-remove').addEventListener('click', async () => {
       try {
         await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
@@ -702,16 +707,19 @@
       pill.title = 'Sum of all Advanced chips for this manifest';
       pill.innerHTML = 'Total: <span class="val">0</span> lbs';
       // Try to place it right after the Advanced “Done” control.
-      var doneBtn = document.querySelector('#adv-commit, [data-role="adv-done"], #advanced-cargo button[type="button"].adv-done, #advanced-cargo button[type="submit"].adv-done');
-      if (!doneBtn) {
-        // Fallbacks: last button in the Advanced controls row, or append to panel root.
-        doneBtn = document.querySelector('#advanced-cargo .adv-controls button:last-of-type') ||
-                  document.querySelector('#advanced-cargo button:last-of-type');
-      }
+      // include your real #adv-done and panel #adv-panel
+      var doneBtn = document.querySelector(
+        '#adv-done, ' +
+        '#advanced-cargo #adv-done, ' +
+        '[data-role="adv-done"], ' +
+        '#advanced-cargo button.adv-done'
+      );
       if (doneBtn && doneBtn.parentNode) {
         doneBtn.parentNode.insertBefore(pill, doneBtn.nextSibling);
       } else {
-        var panel = document.querySelector('#advanced-cargo, .advanced-panel') || document.body;
+        var panel = document.querySelector('#adv-panel') ||
+                    document.querySelector('#advanced-cargo, .advanced-panel') ||
+                    document.body;
         panel.appendChild(pill);
       }
       return pill;
@@ -724,7 +732,7 @@
     }
     function sumFromDOM(){
       // Prefer explicit data-total values on chips if present…
-      var root = document.querySelector('#adv-chips, #adv-selected, .adv-chips, .manifest-chips');
+      var root = document.querySelector('#adv-lines, #adv-chips, #adv-selected, .adv-chips, .manifest-chips');
       if (!root) return 0;
       var sum = 0;
       root.querySelectorAll('[data-total]').forEach(function(n){
@@ -745,7 +753,7 @@
     document.addEventListener('DOMContentLoaded', function(){
       ensurePill();
       refreshFromDOM();
-      var root = document.querySelector('#adv-chips, #adv-selected, .adv-chips, .manifest-chips');
+      var root = document.querySelector('#adv-lines, #adv-chips, #adv-selected, .adv-chips, .manifest-chips');
       if (root) {
         var mo = new MutationObserver(function(){ refreshFromDOM(); });
         mo.observe(root, {childList:true, subtree:true, characterData:true});

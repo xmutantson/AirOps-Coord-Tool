@@ -746,3 +746,15 @@ table.wg-radio-table tr.read { opacity: .8; }
   cursor: pointer;
   vertical-align: middle;     /* line up with the name text */
 }
+.adv-total-pill {
+  /* for light mode, you probably inherit a dark‑gray from your base.css */
+  /* color: inherit;  // this is usually fine */
+}
+
+@media (prefers-color-scheme: dark) {
+  .adv-total-pill {
+    background: #111827;
+    border-color: #374151;
+    color: #f8fafc;    /* <-- force light text on dark bg */
+  }
+}

@@ -2556,45 +2556,9 @@ def configure_wargame_jobs():
     settings_row = dict_rows("SELECT value FROM preferences WHERE name='wargame_settings'")
     settings = json.loads(settings_row[0]['value'] or '{}') if settings_row else {}
 
-    radio_rate = float(settings.get('radio_rate', 0) or 0)
-    if radio_rate > 0:
-        scheduler.add_job(
-            func=generate_radio_message,
-            trigger='interval',
-            seconds=max(5, 3600.0 / radio_rate),
-            id='job_radio',
-            replace_existing=True
-        )
+    #rates have been moved out to a different function, to allow super settings to affect
+    #includes radio_rate, inv_out_rate, inv_in_rate, and ramp_rate
 
-    inv_out_rate = float(settings.get('inv_out_rate', settings.get('inv_rate', 0) or 0) or 0)
-    if inv_out_rate > 0:
-        scheduler.add_job(
-            func=generate_inventory_outbound_request,
-            trigger='interval',
-            seconds=max(5, 3600.0 / inv_out_rate),
-            id='job_inventory_out',
-            replace_existing=True
-        )
-
-    inv_in_rate = float(settings.get('inv_in_rate', settings.get('inv_rate', 0) or 0) or 0)
-    if inv_in_rate > 0:
-        scheduler.add_job(
-            func=generate_inventory_inbound_delivery,
-            trigger='interval',
-            seconds=max(5, 3600.0 / inv_in_rate),
-            id='job_inventory_in',
-            replace_existing=True
-        )
-
-    ramp_rate = float(settings.get('ramp_rate', 0) or 0)
-    if ramp_rate > 0:
-        scheduler.add_job(
-            func=generate_ramp_request,
-            trigger='interval',
-            seconds=max(5, 3600.0 / ramp_rate),
-            id='job_ramp_requests',
-            replace_existing=True
-        )
 
     scheduler.add_job(
         func=process_remote_confirmations,
@@ -2606,6 +2570,56 @@ def configure_wargame_jobs():
 
     if scheduler.state != STATE_RUNNING:
         scheduler.start()
+
+def apply_supervisor_settings():
+    # clear out any existing rate‐based jobs
+    for job_id in ('job_radio','job_inventory_out','job_inventory_in','job_ramp_requests'):
+        try:
+            scheduler.remove_job(job_id)
+        except Exception:
+            pass
+
+    # re‐read settings
+    srow     = dict_rows("SELECT value FROM preferences WHERE name='wargame_settings'")
+    settings = json.loads(srow[0]['value'] or '{}')
+    radio_rate   = float(settings.get('radio_rate', 0)    or 0)
+    inv_out_rate = float(settings.get('inv_out_rate', settings.get('inv_rate', 0)) or 0)
+    inv_in_rate  = float(settings.get('inv_in_rate', settings.get('inv_rate', 0)) or 0)
+    ramp_rate    = float(settings.get('ramp_rate', 0)     or 0)
+
+    if radio_rate  > 0:
+      scheduler.add_job(
+        func=generate_radio_message,
+        trigger='interval',
+        seconds=max(5, 3600.0 / radio_rate),
+        id='job_radio',
+        replace_existing=True
+      )
+    if inv_out_rate> 0:
+      scheduler.add_job(
+        func=generate_inventory_outbound_request,
+        trigger='interval',
+        seconds=max(5, 3600.0 / inv_out_rate),
+        id='job_inventory_out',
+        replace_existing=True
+      )
+    if inv_in_rate > 0:
+      scheduler.add_job(
+        func=generate_inventory_inbound_delivery,
+        trigger='interval',
+        seconds=max(5, 3600.0 / inv_in_rate),
+        id='job_inventory_in',
+        replace_existing=True
+      )
+    if ramp_rate   > 0:
+      scheduler.add_job(
+        func=generate_ramp_request,
+        trigger='interval',
+        seconds=max(5, 3600.0 / ramp_rate),
+        id='job_ramp_requests',
+        replace_existing=True
+      )
+
 
 # ───────────────── routes ─────────────────────────────────
 
@@ -4221,6 +4235,8 @@ def wargame_choose_role():
               VALUES('wargame_settings', ?)
               ON CONFLICT(name) DO UPDATE SET value=excluded.value
             """, (json.dumps(settings),))
+        # now tear down & rebuild *all* rate-based jobs with the new settings
+        apply_supervisor_settings()
 
     session['wargame_role'] = role
     resp = make_response(redirect(url_for(f"wargame_{role}_dashboard")))
