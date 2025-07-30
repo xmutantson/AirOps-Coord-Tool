@@ -25,7 +25,7 @@ from flask import (
     Flask, render_template, request, redirect,
     url_for, send_file, flash, make_response,
     jsonify, Response, stream_with_context,
-    session, Blueprint
+    session, Blueprint, abort
 )
 
 inventory_bp = Blueprint('inventory', __name__, url_prefix='/inventory')
@@ -537,6 +537,9 @@ def require_login():
     exempt = ('static','setup','login','logout')
     # guard against endpoint==None (e.g. favicon) and skip any "static" blueprint
     ep = request.endpoint or ''
+    # allow unauthenticated access to /dashboard/plain *only* from localhost
+    if ep == 'dashboard_plain' and request.remote_addr in ('127.0.0.1', '::1'):
+        return
     if ep in exempt or ep.startswith('static'):
         return
     # if no password set yet → force setup
@@ -2672,6 +2675,28 @@ def dashboard():
         active='dashboard',
         tail_filter=tail_filter
     )
+
+# --- Stripped-down dashboard, allows transmission over an AX.25 link or similar ----
+@app.route('/dashboard/plain')
+def dashboard_plain():
+     1) only allow calls from localhost
+    if request.remote_addr not in ('127.0.0.1', '::1'):
+        abort(403)
+
+    # 2) pull the top 20 by your normal priority logic
+    flights = dict_rows("""
+      SELECT *
+        FROM flights
+       ORDER BY
+         CASE
+           WHEN sent=0     THEN 0
+           WHEN complete=0 THEN 1
+           ELSE 2
+         END,
+         id DESC
+       LIMIT 20
+    """)
+    return jsonify(flights)
 
 # ─── Radio Operator out-box (sortable, clickable table) ───
 @app.route('/radio', methods=['GET','POST'])
