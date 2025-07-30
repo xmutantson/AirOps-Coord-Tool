@@ -2623,6 +2623,15 @@ def apply_supervisor_settings():
         replace_existing=True
       )
 
+# ————— Proxy for embedded site ——————————————————————————————————————
+def _filter_headers(headers):
+    # strip hop-by-hop headers
+    block = {
+        'connection', 'keep-alive', 'proxy-authenticate',
+        'proxy-authorization', 'te', 'trailers',
+        'transfer-encoding', 'upgrade'
+    }
+    return [(k, v) for k, v in headers.items() if k.lower() not in block]
 
 # ───────────────── routes ─────────────────────────────────
 
@@ -2639,6 +2648,28 @@ def too_large(e):
             max_mb=app.config['MAX_CONTENT_LENGTH'] // (1024*1024)
         ),
         413
+    )
+
+@app.route('/embedded/proxy/', defaults={'path': ''})
+@app.route('/embedded/proxy/<path:path>')
+def embedded_proxy(path):
+    # dynamically read the admin-configured embedded_url
+    upstream_base = get_preference('embedded_url') or ''
+    if not upstream_base:
+        abort(503, "No embedded_url configured")
+    # preserve any sub‑path and query string
+    upstream = f"{upstream_base.rstrip('/')}/{path}"
+    resp = requests.get(
+        upstream,
+        params=request.args,
+        headers={'User-Agent': request.headers.get('User-Agent', '')},
+        stream=True,
+    )
+    filtered = _filter_headers(resp.raw.headers)
+    return Response(
+        stream_with_context(resp.raw),
+        status=resp.status_code,
+        headers=filtered,
     )
 
 # ───────────────────────────────────────────────────────────
