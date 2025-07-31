@@ -940,8 +940,13 @@ with open(ADJECTIVES_FILE, encoding='utf-8') as f:
 def sanitize_name(raw: str) -> str:
     cleaned = re.sub(r'[^\w\s]', ' ', raw or '')
     words   = cleaned.lower().split()
-    nouns   = [w for w in words if w not in ENGLISH_ADJECTIVES]
-    return nouns[-1] if nouns else (words[-1] if words else '')
+    # strip out any “English adjectives” but preserve all remaining words
+    nouns = [w for w in words if w not in ENGLISH_ADJECTIVES]
+    if nouns:
+        # join them back into a multi-word phrase
+        return " ".join(nouns)
+    # if everything was filtered, fall back to last token
+    return words[-1] if words else ''
 
 
 def ensure_column(table, col, ctype="TEXT"):
