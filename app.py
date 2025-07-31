@@ -4553,39 +4553,33 @@ def wargame_super_dashboard():
     # 2) throughput over the past hour
     cutoff = (datetime.utcnow() - timedelta(hours=1)).isoformat()
 
-    # 2a) flights moved = ramp completions in the last hour
+    # 2a) ramp boss entries in the last hour (all inbound & outbound)
     frow = dict_rows("""
       SELECT COUNT(*) AS cnt
-        FROM wargame_metrics
-       WHERE event_type='ramp'
-         AND recorded_at >= ?
-         AND key LIKE 'flight:%'
+        FROM flights
+       WHERE is_ramp_entry=1
+         AND timestamp >= ?
     """, (cutoff,))[0]
-    flights_per_hour = frow['cnt'] or 0
+    aircraft_entries_per_hour = frow['cnt'] or 0
 
-    # 2b) cargo moved = sum(cargo_weight) for those ramp completions
-    # key format is "flight:<id>"
+    # 2b) total cargo weight entered by ramp boss in the last hour
     crow = dict_rows("""
       SELECT SUM(
-               COALESCE(f.cargo_weight_real,
+               COALESCE(cargo_weight_real,
                         CASE
-                          WHEN f.cargo_weight LIKE '%lb%' THEN CAST(REPLACE(REPLACE(f.cargo_weight,' lbs',''),' lb','') AS REAL)
-                          ELSE CAST(f.cargo_weight AS REAL)
+                          WHEN cargo_weight LIKE '%lb%' THEN CAST(REPLACE(REPLACE(cargo_weight,' lbs',''),' lb','') AS REAL)
+                          ELSE CAST(cargo_weight AS REAL)
                         END)
              ) AS sum_wt
-        FROM wargame_metrics wm
-        JOIN flights f
-          ON f.id = CAST(SUBSTR(wm.key, 8) AS INTEGER)
-       WHERE wm.event_type='ramp'
-         AND wm.recorded_at >= ?
-         AND wm.key LIKE 'flight:%'
+        FROM flights
+       WHERE is_ramp_entry=1
+         AND timestamp >= ?
     """, (cutoff,))[0]
-    # round to 1 decimal place
-    cargo_per_hour = round(crow['sum_wt'] or 0, 1)
+    air_cargo_entries_per_hour = round(crow['sum_wt'] or 0, 1)
 
     stats = {
-      'cargo_per_hour': cargo_per_hour,
-      'flights_per_hour': flights_per_hour
+      'aircraft_entries_per_hour': aircraft_entries_per_hour,
+      'air_cargo_entries_per_hour': air_cargo_entries_per_hour
     }
 
     # 3) read‑only difficulty settings
