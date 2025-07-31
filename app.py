@@ -3553,7 +3553,7 @@ def ramp_boss():
                     wt = float(cw.strip() or 0)
                 # find oldest open request with same destination and <= weight
                 req = dict_rows("""
-                  SELECT id, requested_weight
+                  SELECT id, requested_weight, created_at
                     FROM wargame_ramp_requests
                    WHERE satisfied_at IS NULL
                      AND destination = ?
@@ -3570,11 +3570,13 @@ def ramp_boss():
                              SET satisfied_at=?, assigned_tail=?
                            WHERE id=?
                         """, (now_iso, tail, rid))
-                        # (optional) metric: request SLA
+                        # record the *actual* SLA latency
+                        created_dt = datetime.fromisoformat(req[0]['created_at'])
+                        delta = (datetime.utcnow() - created_dt).total_seconds()
                         c.execute("""
                           INSERT INTO wargame_metrics(event_type, delta_seconds, recorded_at, key)
                           VALUES ('ramp', ?, ?, ?)
-                        """, (0, datetime.utcnow().isoformat(), f"rampreq:{rid}"))
+                        """, (delta, now_iso, f"rampreq:{rid}"))
             except Exception:
                 pass
         row['action'] = action
