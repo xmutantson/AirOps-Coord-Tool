@@ -69,5 +69,15 @@
       } catch (_) {}
     }
     loadInventoryDetail();
+
+    // Auto‐fill item name when Water category is selected
+    const categorySelect = document.getElementById('category');
+    const nameInput      = document.getElementById('name');
+    categorySelect.addEventListener('change', () => {
+      const selText = categorySelect.options[categorySelect.selectedIndex].text;
+      if (selText === 'Water') {
+        nameInput.value = 'water';
+      }
+    });
   </script>
 {% endblock %}
