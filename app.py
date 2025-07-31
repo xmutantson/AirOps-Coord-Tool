@@ -1394,7 +1394,7 @@ def apply_incoming_parsed(p: dict) -> tuple[int,str]:
         # detect “landed HHMM” too (e.g. “landed 09:53” or “landed 0953”)
         lm = re.search(r'\blanded\s*(\d{1,2}:?\d{2})\b', p['subject'], re.I)
         if lm:
-             arrival = hhmm_norm(lm.group(1))
+            arrival = hhmm_norm(lm.group(1))
             # 1) strict tail + latest open
             match = c.execute("""
               SELECT id, remarks

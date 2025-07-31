@@ -24,6 +24,16 @@
     </div>
   </div>
 
+{# show current cargo‐flow mode #}
+<div class="container mt-4">
+  <div class="alert alert-info">
+    <strong>Cargo Flow Mode:</strong>
+    {{ settings.get('cargo_flow','hybrid') 
+       |replace('_',' → ') 
+       |title }}
+  </div>
+</div>
+
   <div class="super-settings">
     <h2 style="margin-top:1.25rem;">Difficulty settings</h2>
     {% set pretty = {
