@@ -43,6 +43,7 @@ from datetime import datetime, timedelta
 import threading, time, socket, math
 from urllib.request import urlopen
 import queue
+import requests
 
 from functools import lru_cache
 
@@ -414,6 +415,7 @@ def inject_globals():
          'wargame_mode',
          'embedded_url',
          'embedded_name',
+         'embedded_mode',
          'enable_1090_distances',
          'code_format',
          'session_salt'
@@ -426,6 +428,7 @@ def inject_globals():
       'wargame_role': session.get('wargame_role') or request.cookies.get('wargame_role',''),
       'embedded_url': prefs.get('embedded_url',''),
       'embedded_name': prefs.get('embedded_name',''),
+      'embedded_mode': prefs.get('embedded_mode','iframe'),
       'enable_1090_distances': prefs.get('enable_1090_distances')=='yes',
       'mdns_name': MDNS_NAME,
       'mdns_reason': globals().get('MDNS_REASON', ''),
@@ -2652,6 +2655,7 @@ def too_large(e):
 
 @app.route('/embedded/proxy/', defaults={'path': ''})
 @app.route('/embedded/proxy/<path:path>')
+@limiter.exempt
 def embedded_proxy(path):
     # dynamically read the admin-configured embedded_url
     upstream_base = get_preference('embedded_url') or ''
@@ -2710,7 +2714,7 @@ def dashboard():
 # --- Stripped-down dashboard, allows transmission over an AX.25 link or similar ----
 @app.route('/dashboard/plain')
 def dashboard_plain():
-     1) only allow calls from localhost
+    #  1) only allow calls from localhost
     if request.remote_addr not in ('127.0.0.1', '::1'):
         abort(403)
 
@@ -4192,11 +4196,20 @@ def admin():
             flash("Embedded‑tab removed.", "info")
             return redirect(url_for('admin'))
 
+        # ── Toggle Embedded Mode ─────────────────────────────
+        if 'embedded_mode' in request.form:
+            mode = request.form.get('embedded_mode')
+            set_preference('embedded_mode', mode)
+            flash(f"Embedded mode set to {mode}.", "info")
+            return redirect(url_for('admin'))
+
         # ── Save Embedded‑Tab URL / Name / Distances Flag ──
-        if any(k in request.form for k in ('embedded_url','embedded_name','enable_1090_distances')):
+        if any(k in request.form for k in ('embedded_url','embedded_name','embedded_mode','enable_1090_distances')):
             url  = request.form.get('embedded_url','').strip()
             name = request.form.get('embedded_name','').strip()
             if url and name:
+                # persist mode
+                set_preference('embedded_mode', request.form.get('embedded_mode','iframe'))
                 set_preference('embedded_url', url)
                 set_preference('embedded_name', name)
                 set_preference(
@@ -4231,6 +4244,7 @@ def admin():
     wargame_mode          = get_preference('wargame_mode') == 'yes'
     embedded_url          = get_preference('embedded_url') or ''
     embedded_name         = get_preference('embedded_name') or ''
+    embedded_mode         = get_preference('embedded_mode') or 'iframe'
     enable_1090_distances = get_preference('enable_1090_distances') == 'yes'
 
     return render_template(
@@ -4241,6 +4255,7 @@ def admin():
       wargame_mode=wargame_mode,
       embedded_url=embedded_url,
       embedded_name=embedded_name,
+      embedded_mode=embedded_mode,
       enable_1090_distances=enable_1090_distances
     )
 
@@ -4547,6 +4562,7 @@ def wargame_inventory_last_update():
     return jsonify(timestamp=ts)
 
 @app.route('/embedded')
+@limiter.exempt
 def embedded():
     # read the two prefs
     url  = dict_rows("SELECT value FROM preferences WHERE name='embedded_url'")
@@ -4558,10 +4574,15 @@ def embedded():
     if not (embedded_url and embedded_name):
         return redirect(url_for('dashboard'))
 
-    return render_template('embedded.html',
-                           url=embedded_url,
-                           active='embedded',
-                           embedded_name=embedded_name)
+    mode = get_preference('embedded_mode') or 'iframe'
+    template = mode == 'proxy' and 'embedded.html' or 'embedded-iframe.html'
+
+    return render_template(
+        template,
+        url=embedded_url,
+        active='embedded',
+        embedded_name=embedded_name
+    )
 
 @inventory_bp.route('/')
 def inventory_overview():

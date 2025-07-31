@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}{{ embedded_name }} – Aircraft Ops{% endblock %}
+
+{% block content %}
+<style>
+  /* Reset full page and prevent scrolling */
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  /* Pin content between header & footer and allow full-bleed width */
+  body.embedded main.container {
+    position: absolute;
+    top: 3.5rem;    /* header height */
+    bottom: 2.5rem; /* footer height */
+    left: 0;
+    right: 0;
+    margin: 0;
+    padding: 0;
+    max-width: none !important;   /* override base max-width */
+  }
+
+  /* Scoped iframe fills the container */
+  #tar1090-frame {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;    /* ensure initial correct sizing */
+    height: 100%;   /* ensure initial correct sizing */
+    border: none;
+    touch-action: none;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+</style>
+
+<!-- iframe width/height attributes ensure the browser allocates correct space before load -->
+<iframe id="tar1090-frame" src="{{ url }}" width="100%" height="100%"></iframe>
+
+<script>
+(function(){
+  const iframe = document.getElementById('tar1090-frame');
+  if (!iframe) return;
+
+  iframe.addEventListener('load', () => {
+    const src = iframe.getAttribute('src') || '';
+    if (!/tar1090/i.test(src)) {
+      console.warn('[embed] Skip: not a tar1090 URL:', src);
+      return;
+    }
+
+    let childWin;
+    try {
+      childWin = iframe.contentWindow;
+      // Touching document will throw if cross-origin
+      void childWin.document;
+    } catch (e) {
+      console.warn('[embed] tar1090 is cross-origin; cannot inject handlers.', e);
+      return;
+    }
+
+    const MAX_TRIES = 50;
+    let tries = 0;
+    const wait = setInterval(() => {
+      const map = childWin?.map;
+      const ol  = childWin?.ol;
+      if (!(map && typeof map.updateSize === 'function' && ol?.interaction)) {
+        if (++tries >= MAX_TRIES) {
+          clearInterval(wait);
+          console.warn('[embed] Map not ready; giving up.');
+        }
+        return;
+      }
+      clearInterval(wait);
+
+      // Remove box-zoom and double-click zoom
+      const interactions = map.getInteractions().getArray().slice();
+      interactions.forEach(i => {
+        if (i instanceof childWin.ol.interaction.DragZoom ||
+            i instanceof childWin.ol.interaction.DoubleClickZoom) {
+          map.removeInteraction(i);
+        }
+      });
+
+      // Unified updater
+      const update = () => map.updateSize();
+
+      // Parent + child window resizes
+      window.addEventListener('resize', update);
+      childWin.addEventListener('resize', update);
+      childWin.addEventListener('orientationchange', update);
+
+      // Touch-end on map viewport (helps after mobile UI bars collapse)
+      const vp = map.getViewport?.();
+      if (vp) vp.addEventListener('touchend', () => childWin.setTimeout(update, 0), { passive: true });
+
+      // First repaint after load
+      childWin.setTimeout(update, 0);
+
+      console.log('[embed] tar1090 integration ready: resize hooks installed; interactions trimmed.');
+    }, 120);
+  });
+})();
+</script>
+{% endblock %}

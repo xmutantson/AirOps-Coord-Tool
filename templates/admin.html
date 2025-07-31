@@ -43,6 +43,19 @@
         class="danger">
         Clear
       </button>
+      <label for="embedded-mode" style="margin-left:1rem">Embed Mode:</label>
+      <select
+        id="embedded-mode"
+        name="embedded_mode"
+        style="width:16ch; display:inline-block; margin-left:0.5rem;"
+        onchange="this.form.submit()">
+        <option value="iframe" {% if embedded_mode=='iframe' %}selected{% endif %}>
+          Iframe
+        </option>
+        <option value="proxy" {% if embedded_mode=='proxy' %}selected{% endif %}>
+          Proxy
+        </option>
+      </select>
     </div>
       <!-- distances controlled automatically; hide manual toggle -->
       <label id="distances-toggle" style="display:none; margin-top:1rem;">
@@ -57,6 +70,11 @@
       <option value="no"  {% if show_debug_logs=='no'  %}selected{% endif %}>No</option>
       <option value="yes" {% if show_debug_logs=='yes' %}selected{% endif %}>Yes</option>
     </select>
+  </form>
+
+  <!-- ── Wargame Mode ───────────────────────────────────────────── -->
+  <form method="POST" action="{{ url_for('admin') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label>Wargame Mode:</label>
     <select name="toggle_wargame" onchange="this.form.submit()">
       <option value="off" {% if not wargame_mode %}selected{% endif %}>Off</option>
