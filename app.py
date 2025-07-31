@@ -1389,18 +1389,37 @@ def apply_incoming_parsed(p: dict) -> tuple[int,str]:
         # detect “landed HHMM” too (e.g. “landed 09:53” or “landed 0953”)
         lm = re.search(r'\blanded\s*(\d{1,2}:?\d{2})\b', p['subject'], re.I)
         if lm:
-            arrival = hhmm_norm(lm.group(1))
+             arrival = hhmm_norm(lm.group(1))
+            # 1) strict tail + latest open
             match = c.execute("""
               SELECT id, remarks
                 FROM flights
                WHERE tail_number=? AND complete=0
-            ORDER BY id DESC
+               ORDER BY id DESC
                LIMIT 1
             """, (p['tail_number'],)).fetchone()
-
+            # 2) route-based fallback
+            if not match and p['airfield_takeoff'] and p['airfield_landing']:
+                match = c.execute("""
+                  SELECT id, remarks
+                    FROM flights
+                   WHERE tail_number=?
+                     AND airfield_takeoff=? AND airfield_landing=? AND complete=0
+                   ORDER BY id DESC
+                   LIMIT 1
+                """, (p['tail_number'], p['airfield_takeoff'], p['airfield_landing'])).fetchone()
+            # 3) most-recent fallback
+            if not match:
+                match = c.execute("""
+                  SELECT id, remarks
+                    FROM flights
+                   WHERE tail_number=? AND complete=0
+                   ORDER BY timestamp DESC
+                   LIMIT 1
+                """, (p['tail_number'],)).fetchone()
             if match:
                 before = dict_rows(
-                    "SELECT * FROM flights WHERE id=?", 
+                    "SELECT * FROM flights WHERE id=?",
                     (match['id'],)
                 )[0]
                 c.execute("""
@@ -2447,21 +2466,32 @@ def process_remote_confirmations():
     """, (cutoff,))
 
     for f in pending:
-        msg_id = uuid.uuid4().hex
-        landed_hhmm = datetime.utcnow().strftime('%H%M')
-        tko = (f.get('takeoff_time') or '').strip()
-        # Build “Air Ops: tail | FROM to TO | [took off HHMM | ]landed HHMM [WGID:…]”
-        base = f"Air Ops: {f['tail_number']} | {f['airfield_takeoff']} to {f['airfield_landing']} | "
-        took = (f"took off {tko} | " if tko else "")
-        subject = f"{base}{took}landed {landed_hhmm} [WGID:{msg_id}]"
-        body = (
-          "(auto landed flight in wg mode).\n"
-          f"Tail: {f['tail_number']}\n"
-          f"From: {f['airfield_takeoff']}\n"
-          f"To: {f['airfield_landing']}\n"
-          f"T/O: {tko or '----'}\n"
-          f"Landed: {landed_hhmm}\n"
+        msg_id         = uuid.uuid4().hex
+        landed_hhmm    = datetime.utcnow().strftime('%H%M')
+        takeoff_hhmm   = (f.get('takeoff_time') or '').strip() or '----'
+        # Build subject with take-off AND landed times, Winlink-style
+        subject = (
+            f"Air Ops: {f['tail_number']} | "
+            f"{f['airfield_takeoff']} to {f['airfield_landing']} | "
+            f"took off {takeoff_hhmm} | landed {landed_hhmm} [WGID:{msg_id}]"
         )
+
+        # Build a Winlink-style body matching our Ramp-Boss outbound format
+        # so parse_winlink (Cargo Type, Total Weight, etc) still works if needed.
+        sender_call = get_airfield_callsign(f['airfield_landing'])
+        body_lines = [
+            f"{sender_call} message number AUTO.",
+            "",
+            f"Aircraft {f['tail_number']}:",
+            f"  Cargo Type(s) ................. {f.get('cargo_type','none')}",
+            f"  Total Weight of the Cargo ..... {f.get('cargo_weight','none')}",
+            "",
+            "Additional notes/comments:",
+            f"  Arrived {landed_hhmm}",
+            "",
+            "{DART Aircraft Takeoff Report, rev. 2024-05-14}"
+        ]
+        body = "\n".join(body_lines)
         with sqlite3.connect(DB_FILE) as c:
             # Start radio inbound SLA for this message (batch semantics handled by dispatcher)
             wargame_task_start('radio','inbound', key=f"msg:{msg_id}",
@@ -2803,24 +2833,40 @@ def radio():
             lm = re.search(r'\blanded\s*(\d{1,2}:?\d{2})\b', subj, re.I)
             if lm:
                 arrival = hhmm_norm(lm.group(1))
-
-                # try updating the matching “in-flight” entry (by tail & takeoff_time)
+                # 1) strict tail + takeoff_time
                 match = c.execute("""
                   SELECT id, remarks
                     FROM flights
                    WHERE tail_number=? AND takeoff_time=? AND complete=0
-                ORDER BY id DESC
+                   ORDER BY id DESC
                    LIMIT 1
                 """, (p['tail_number'], p['takeoff_time'])).fetchone()
-
+                # 2) route-based fallback
+                if not match and p['airfield_takeoff'] and p['airfield_landing']:
+                    match = c.execute("""
+                      SELECT id, remarks
+                        FROM flights
+                       WHERE tail_number=?
+                         AND airfield_takeoff=? AND airfield_landing=? AND complete=0
+                       ORDER BY id DESC
+                       LIMIT 1
+                    """, (p['tail_number'], p['airfield_takeoff'], p['airfield_landing'])).fetchone()
+                # 3) most-recent fallback
+                if not match:
+                    match = c.execute("""
+                      SELECT id, remarks
+                        FROM flights
+                       WHERE tail_number=? AND complete=0
+                       ORDER BY timestamp DESC
+                       LIMIT 1
+                    """, (p['tail_number'],)).fetchone()
                 if match:
                     before = dict_rows("SELECT * FROM flights WHERE id=?", (match['id'],))[0]
                     c.execute("""
                       INSERT INTO flight_history(flight_id, timestamp, data)
                       VALUES (?,?,?)
                     """, (match['id'], datetime.utcnow().isoformat(), json.dumps(before)))
-
-                    old_rem = (match.get('remarks') or '').strip()
+                    old_rem = (before.get('remarks') or '').strip()
                     new_rem = (f"{old_rem} / Arrived {arrival}" if old_rem else f"Arrived {arrival}")
                     c.execute("""
                       UPDATE flights
@@ -2828,14 +2874,13 @@ def radio():
                        WHERE id=?
                     """, (arrival, new_rem, match['id']))
                     c.commit()
-
                     if is_ajax:
                         row = dict_rows("SELECT * FROM flights WHERE id=?", (match['id'],))[0]
                         row['action'] = 'updated'
                         return jsonify(row)
-
                     flash(f"Flight {match['id']} marked as landed at {arrival}.")
                     return redirect(url_for('radio'))
+                # fall through to duplicate/ignore logic if still no match
 
                 # ── no matching outbound.  Do we already have this landing? ──
                 dup = c.execute("""
