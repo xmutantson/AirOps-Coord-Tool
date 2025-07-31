@@ -41,6 +41,18 @@
       <div id="super-settings" class="super-panel" style="display:none;">
         <h3>Supervisor Settings</h3>
 
+
+        <div class="form-group">
+          <label for="cargo_flow">Cargo Flow Mode</label>
+          <select id="cargo_flow" name="cargo_flow" class="form-control">
+            <option value="air_air"       {{ 'selected' if settings.get('cargo_flow')=='air_air'       else '' }}>Air → Air</option>
+            <option value="air_ground"    {{ 'selected' if settings.get('cargo_flow')=='air_ground'    else '' }}>Air → Ground</option>
+            <option value="ground_air"    {{ 'selected' if settings.get('cargo_flow')=='ground_air'    else '' }}>Ground → Air</option>
+            <option value="ground_ground" {{ 'selected' if settings.get('cargo_flow')=='ground_ground' else '' }}>Ground → Ground</option>
+            <option value="hybrid"        {{ 'selected' if settings.get('cargo_flow','hybrid')=='hybrid' else '' }}>Hybrid</option>
+          </select>
+        </div>
+
         <div class="form-row">
           <label>Radio messages/hr:</label>
           <input type="number" name="radio_rate" min="0" value="{{ settings.get('radio_rate', 12) }}">

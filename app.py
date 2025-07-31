@@ -1902,6 +1902,11 @@ def generate_ramp_request():
     # enforce cap
     settings_row = dict_rows("SELECT value FROM preferences WHERE name='wargame_settings'")
     settings  = json.loads(settings_row[0]['value'] or '{}') if settings_row else {}
+    # Cargo-flow gating: only generate ramp cargo requests in these modes
+    flow = settings.get('cargo_flow', 'hybrid')
+    if flow not in ('air_air', 'ground_air', 'hybrid'):
+        return
+
     max_ramp  = int(settings.get('max_ramp', 3) or 3)
     open_cnt  = int(dict_rows("""
         SELECT COUNT(*) AS c
@@ -2228,6 +2233,11 @@ def generate_inventory_outbound_request():
     ts = datetime.utcnow().isoformat()
     settings_row = dict_rows("SELECT value FROM preferences WHERE name='wargame_settings'")
     settings  = json.loads(settings_row[0]['value'] or '{}') if settings_row else {}
+    # Cargo-flow gating: only run outbound inventory in these modes
+    flow = settings.get('cargo_flow', 'hybrid')
+    if flow not in ('ground_ground', 'air_ground'):
+        return
+
     max_inv   = int(settings.get('max_inventory', 3) or 3)
     # only count UNSATISFIED outbound batches as 'pending'
     pending = dict_rows("""
@@ -2275,6 +2285,11 @@ def generate_inventory_inbound_delivery():
     ts = datetime.utcnow().isoformat()
     settings_row = dict_rows("SELECT value FROM preferences WHERE name='wargame_settings'")
     settings  = json.loads(settings_row[0]['value'] or '{}') if settings_row else {}
+    # Cargo-flow gating: only run inbound inventory deliveries in these modes
+    flow = settings.get('cargo_flow', 'hybrid')
+    if flow not in ('ground_ground', 'ground_air', 'hybrid'):
+        return
+
     max_inv   = int(settings.get('max_inventory', 3) or 3)
     pending = dict_rows("""
       SELECT COUNT(*) AS c FROM wargame_inventory_batches
@@ -2345,6 +2360,11 @@ def process_inbound_schedule():
     now_iso = now_dt.isoformat()
     settings_row = dict_rows("SELECT value FROM preferences WHERE name='wargame_settings'")
     settings  = json.loads(settings_row[0]['value'] or '{}') if settings_row else {}
+    # Cargo-flow gating: only schedule inbound flights for ramp boss in these modes
+    flow = settings.get('cargo_flow', 'hybrid')
+    if flow not in ('air_air', 'air_ground', 'hybrid'):
+        return
+
     max_ramp  = int(settings.get('max_ramp', 3) or 3)
     pend = dict_rows("""
       SELECT COUNT(*) AS c FROM wargame_tasks
