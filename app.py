@@ -1704,6 +1704,11 @@ def generate_radio_message():
     # Respect Radio max-pending (only tasks that are visible to the operator)
     settings_row = dict_rows("SELECT value FROM preferences WHERE name='wargame_settings'")
     settings  = json.loads(settings_row[0]['value'] or '{}') if settings_row else {}
+    # exit without completing generation if not in correct modes
+    flow = settings.get('cargo_flow', 'hybrid')
+    if flow not in ('air_air', 'air_ground', 'hybrid'):
+        return
+
     max_radio = int(settings.get('max_radio', 3) or 3)
     now_iso   = now.isoformat()
     due_cnt = dict_rows("""
