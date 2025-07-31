@@ -58,32 +58,35 @@
 
       <!-- Weight per Unit -->
       <label for="weight">Wt/Unit</label>
-      <!-- inbound: free-text -->
-      <input id="weight" name="weight" type="number" step="any" min="0" required
-             value="{{ request.form.get('weight','') }}"
-             style="flex:1; min-width:16ch;">
-      <!-- outbound: dropdown -->
-      <select id="weight-select" name="weight" style="display:none;" required>
-        {% if request.form.get('weight') %}
-          <!-- pre-selected on error -->
-          <option value="{{ request.form.get('weight') }}" selected>
-            {{ request.form.get('weight') }}
+      <div style="display:flex; align-items:center; gap:0.5rem;">
+        <!-- inbound: free-text -->
+        <input id="weight" name="weight" type="number" step="any" min="0" required
+               value="{{ request.form.get('weight','') }}"
+               style="flex:1; min-width:16ch;">
+
+        <!-- outbound: weight dropdown -->
+        <select id="weight-select" name="weight" style="display:none;" required>
+          {% if request.form.get('weight') %}
+            <option value="{{ request.form.get('weight') }}" selected>
+              {{ request.form.get('weight') }}
+            </option>
+          {% endif %}
+        </select>
+
+        <!-- unit toggle (inbound only), capped width -->
+        <select id="weight_unit" name="weight_unit" style="max-width:10ch;">
+          <option value="lbs"
+                  {% if request.form.get('weight_unit')=='lbs' or inv_weight_unit=='lbs' %}
+                    selected{% endif %}>
+            lbs
           </option>
-        {% endif %}
-      </select>
-      <!-- unit toggle -->
-      <select id="weight_unit" name="weight_unit">
-        <option value="lbs"
-                {% if request.form.get('weight_unit')=='lbs'
-                       or inv_weight_unit=='lbs' %}selected{% endif %}>
-          lbs
-        </option>
-        <option value="kg"
-                {% if request.form.get('weight_unit')=='kg'
-                       or inv_weight_unit=='kg' %}selected{% endif %}>
-          kg
-        </option>
-      </select>
+          <option value="kg"
+                  {% if request.form.get('weight_unit')=='kg' or inv_weight_unit=='kg' %}
+                    selected{% endif %}>
+            kg
+          </option>
+        </select>
+      </div>
 
       <!-- Quantity -->
       <label for="qty">Quantity</label>
@@ -113,24 +116,38 @@
       // Preloaded inventory data for outbound lookups
       const invData     = {{ advanced_data|tojson }};
       // Form controls
-      const dirIn       = document.getElementById('dir-in');
-      const dirOut      = document.getElementById('dir-out');
-      const categoryEl  = document.getElementById('category');
-      const nameTxt     = document.getElementById('name');
-      const nameSel     = document.getElementById('name-select');
-      const weightTxt   = document.getElementById('weight');
-      const weightSel   = document.getElementById('weight-select');
-      const qtyFld      = document.getElementById('qty');
+      const dirIn        = document.getElementById('dir-in');
+      const dirOut       = document.getElementById('dir-out');
+      const categoryEl   = document.getElementById('category');
+      const nameTxt      = document.getElementById('name');
+      const nameSel      = document.getElementById('name-select');
+      const weightTxt    = document.getElementById('weight');
+      const weightSel    = document.getElementById('weight-select');
+      const weightUnitEl = document.getElementById('weight_unit');
+      const qtyFld       = document.getElementById('qty');
+
+      // preserved on-error selections
+      const allCats       = invData.all_categories;
+      const stockCats     = invData.stock_categories;
+
 
       // Show/hide the appropriate fields when direction changes
       function updateMode() {
         if (dirOut.checked) {
+          // remember what was just selected
+          const curCat = categoryEl.value;
           // — Outbound mode —
           // Name → dropdown
-          nameTxt.style.display    = 'none';
-          nameTxt.required         = false;
-          nameSel.style.display    = '';
-          nameSel.required         = true;
+          // rebuild category dropdown to only stocked categories
+          categoryEl.innerHTML = '<option value="" disabled>— choose category —</option>' +
+            stockCats.map(c =>
+              `<option value="${c.id}"${c.id===curCat?' selected':''}>${c.display_name}</option>`
+            ).join('');
+
+          nameTxt.style.display     = 'none';
+          nameTxt.required          = false;
+          nameSel.style.display     = '';
+          nameSel.required          = true;
 
           // Weight → dropdown
           weightTxt.style.display  = 'none';
@@ -142,38 +159,57 @@
           qtyFld.value              = '';
           qtyFld.removeAttribute('max');
 
-          // Populate item dropdown for this category
-          const cid  = categoryEl.value;
-          const items = invData.items[cid] || [];
+          // Populate item dropdown for this category (dedupe names)
+          const cid   = categoryEl.value;
+          const items = Array.from(new Set(invData.items[cid] || []));
           nameSel.innerHTML = '<option value="">Item…</option>' +
             items.map(i => `<option>${i}</option>`).join('');
 
+
+          weightTxt.style.display    = 'none';
+          weightTxt.required         = false;
+          weightSel.style.display    = '';
+          weightSel.required         = true;
+          weightUnitEl.style.display = 'none';
+          weightUnitEl.required      = false;
+
         } else {
-          // — Inbound mode —
-          // Name → free-text
-          nameTxt.style.display    = '';
-          nameTxt.required         = true;
-          nameSel.style.display    = 'none';
-          nameSel.required         = false;
+          // restore full category list (start on blank)
+          // inbound: restore full category list
+          const curCat = categoryEl.value;
+          categoryEl.innerHTML = '<option value="" disabled>— choose category —</option>' +
+            allCats.map(c =>
+              `<option value="${c.id}"${c.id===curCat?' selected':''}>${c.display_name}</option>`
+            ).join('');
 
-          // Weight → free-text
-          weightTxt.style.display  = '';
-          weightTxt.required       = true;
-          weightSel.style.display  = 'none';
-          weightSel.required       = false;
 
-          // No outbound max-quantity enforcement client-side
+          nameTxt.style.display     = '';
+          nameTxt.required          = true;
+          nameSel.style.display     = 'none';
+          nameSel.required          = false;
+
+          weightTxt.style.display    = '';
+          weightTxt.required         = true;
+          weightSel.style.display     = 'none';
+          weightSel.required          = false;
+          weightUnitEl.style.display  = '';
+          weightUnitEl.required       = true;
+
           qtyFld.removeAttribute('max');
         }
       }
 
-      // Auto-insert “water” if they pick the Water category
       categoryEl.addEventListener('change', e => {
+        updateMode();
         const label = e.target.selectedOptions[0].text;
         if (label === 'Water') {
-          nameTxt.value = 'water';
+          if (dirOut.checked) {
+            nameSel.value = 'water';
+            nameSel.dispatchEvent(new Event('change'));
+          } else {
+            nameTxt.value = 'water';
+          }
         }
-        updateMode();
       });
 
       // Wire up the direction toggle

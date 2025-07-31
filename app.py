@@ -4806,14 +4806,57 @@ def inventory_detail():
 
                 # full‐page path: flash + re‐render
                 flash(msg, 'error')
-                # re‐build form context
+                # rebuild form context & advanced_data for the template
                 categories = dict_rows("SELECT id, display_name FROM inventory_categories")
+                # ── build advanced_data exactly as the template expects ──
+                cats = dict_rows("""
+                  SELECT id AS cid, display_name AS cname
+                    FROM inventory_categories
+                   ORDER BY display_name
+                """)
+                advanced_data = {
+                  "all_categories": [
+                    {"id": str(c["cid"]), "display_name": c["cname"]} for c in cats
+                  ],
+                  "stock_categories": [],
+                  "items": {}, "sizes": {}, "avail": {}
+                }
+                rows = dict_rows("""
+                  SELECT category_id AS cid,
+                         sanitized_name,
+                         weight_per_unit,
+                         SUM(
+                           CASE WHEN direction='in'  THEN quantity
+                                WHEN direction='out' THEN -quantity
+                           END
+                         ) AS qty
+                    FROM inventory_entries
+                   WHERE pending=0
+                   GROUP BY category_id, sanitized_name, weight_per_unit
+                   HAVING qty>0
+                """)
+                for r in rows:
+                    cid = str(r["cid"])
+                    # availability
+                    advanced_data["avail"].setdefault(cid, {})\
+                         .setdefault(r["sanitized_name"], {})[str(r["weight_per_unit"])] = r["qty"]
+                    # set up items & sizes
+                    advanced_data["items"].setdefault(cid, []).append(r["sanitized_name"])
+                    advanced_data["sizes"].setdefault(cid, {})\
+                         .setdefault(r["sanitized_name"], []).append(str(r["weight_per_unit"]))
+                    # record stock-only categories
+                    if not any(c["id"] == cid for c in advanced_data["stock_categories"]):
+                        name = next((c["cname"] for c in cats if str(c["cid"]) == cid), "")
+                        advanced_data["stock_categories"].append({
+                          "id": cid, "display_name": name
+                        })
                 return render_template(
                     'inventory_detail.html',
                     initial_direction=session.get('inv_direction','inbound'),
                     categories=categories,
                     inv_weight_unit=session.get('inv_weight_unit', request.cookies.get('mass_unit','lbs')),
                     active='inventory',
+                    advanced_data=advanced_data,
                     form_data=request.form  # you can use these to pre-fill your template
                 )
 
@@ -4844,7 +4887,46 @@ def inventory_detail():
 
         return redirect(url_for('inventory.inventory_detail'))
 
+    # build categories + advanced_data for the initial GET render
     categories = dict_rows("SELECT id, display_name FROM inventory_categories")
+    cats = dict_rows("""
+      SELECT id AS cid, display_name AS cname
+        FROM inventory_categories
+       ORDER BY display_name
+    """)
+    advanced_data = {
+      "all_categories": [
+        {"id": str(c["cid"]), "display_name": c["cname"]} for c in cats
+      ],
+      "stock_categories": [],
+      "items": {}, "sizes": {}, "avail": {}
+    }
+    rows = dict_rows("""
+      SELECT category_id AS cid,
+             sanitized_name,
+             weight_per_unit,
+             SUM(
+               CASE WHEN direction='in'  THEN quantity
+                    WHEN direction='out' THEN -quantity
+               END
+             ) AS qty
+        FROM inventory_entries
+       WHERE pending=0
+       GROUP BY category_id, sanitized_name, weight_per_unit
+       HAVING qty>0
+    """)
+    for r in rows:
+        cid = str(r["cid"])
+        advanced_data["avail"].setdefault(cid, {})\
+             .setdefault(r["sanitized_name"], {})[str(r["weight_per_unit"])] = r["qty"]
+        advanced_data["items"].setdefault(cid, []).append(r["sanitized_name"])
+        advanced_data["sizes"].setdefault(cid, {})\
+             .setdefault(r["sanitized_name"], []).append(str(r["weight_per_unit"]))
+        if not any(c["id"] == cid for c in advanced_data["stock_categories"]):
+            name = next((c["cname"] for c in cats if str(c["cid"]) == cid), "")
+            advanced_data["stock_categories"].append({
+              "id": cid, "display_name": name
+            })
 
     # Fetch everything for display
     entries    = dict_rows("""
@@ -4872,10 +4954,11 @@ def inventory_detail():
     # render skeleton; entries come from AJAX
     return render_template(
         'inventory_detail.html',
-        initial_direction=session.get('inv_direction','inbound'),
         categories=categories,
-        inv_weight_unit=session.get('inv_weight_unit', request.cookies.get('mass_unit','lbs')),
-        active='inventory'
+        inv_weight_unit=session.get('inv_weight_unit',
+                                    request.cookies.get('mass_unit','lbs')),
+        active='inventory',
+        advanced_data=advanced_data
     )
 
 # ───────────────────────── STOCK (collapsed summary) ─────────────────────────
