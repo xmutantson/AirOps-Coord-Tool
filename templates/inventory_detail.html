@@ -126,6 +126,9 @@
       const weightUnitEl = document.getElementById('weight_unit');
       const qtyFld       = document.getElementById('qty');
 
+      // Only preserve initial category on first render; clear on toggles
+      let firstMode = true;
+
       // preserved on-error selections
       const allCats       = invData.all_categories;
       const stockCats     = invData.stock_categories;
@@ -135,15 +138,15 @@
 
       // Show/hide the appropriate fields when direction changes
       function updateMode() {
+        // decide whether to keep or reset the category placeholder
+        const curCat = firstMode ? categoryEl.value : '';
         if (dirOut.checked) {
           // remember what was just selected
-          const curCat = categoryEl.value;
           // — Outbound mode —
-          // Name → dropdown
           // rebuild category dropdown to only stocked categories,
-          // keeping placeholder selected on fresh GET (selectedCat=="")
-          categoryEl.innerHTML = 
-            '<option value="" disabled' + (!selectedCat ? ' selected' : '') + '>— choose category —</option>' +
+          // placeholder selected only when curCat is empty
+          categoryEl.innerHTML =
+            '<option value="" disabled' + (curCat === '' ? ' selected' : '') + '>— choose category —</option>' +
             stockCats.map(c =>
               `<option value="${c.id}"${c.id===curCat?' selected':''}>${c.display_name}</option>`
             ).join('');
@@ -158,6 +161,8 @@
           weightTxt.required       = false;
           weightSel.style.display  = '';
           weightSel.required       = true;
+          // clear any stale size/options
+          weightSel.innerHTML      = '<option value="">Size…</option>';
 
           // Clear any previous quantity
           qtyFld.value              = '';
@@ -179,12 +184,16 @@
 
         } else {
           // inbound: show all categories,
-          // keeping placeholder selected on fresh GET (when selectedCat=="")
+          // rebuild full category list, placeholder if curCat empty
           categoryEl.innerHTML =
-            '<option value="" disabled' + (!selectedCat ? ' selected' : '') + '>— choose category —</option>' +
+            '<option value="" disabled' + (curCat === '' ? ' selected' : '') + '>— choose category —</option>' +
             allCats.map(c =>
-              `<option value="${c.id}"${c.id===selectedCat?' selected':''}>${c.display_name}</option>`
+              `<option value="${c.id}"${c.id===curCat?' selected':''}>${c.display_name}</option>`
             ).join('');
+
+          // clear any previous quantity
+          qtyFld.value              = '';
+          qtyFld.removeAttribute('max');
 
 
 
@@ -202,9 +211,18 @@
 
           qtyFld.removeAttribute('max');
         }
+        firstMode = false;
       }
 
       categoryEl.addEventListener('change', e => {
+        // if in outbound mode, rebuild item dropdown for the new category
+        if (dirOut.checked) {
+          const cid   = e.target.value;
+          const items = Array.from(new Set(invData.items[cid] || []));
+          nameSel.innerHTML = '<option value="">Item…</option>' +
+            items.map(i => `<option>${i}</option>`).join('');
+        }
+        // auto-insert "water" if Water category
         const label = e.target.selectedOptions[0].text;
         if (label === 'Water') {
           if (dirOut.checked) {
