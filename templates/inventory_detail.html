@@ -17,43 +17,80 @@
           autocomplete="off">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
+      <!-- Direction toggle: sticky at top -->
+      <label>Direction</label>
+      <div class="radio-toggle">
+        <input type="radio" id="dir-in"  name="direction" value="inbound"
+               {% if session.get('inv_direction','inbound') != 'outbound' %}checked{% endif %}>
+        <label for="dir-in">Inbound</label>
+
+        <input type="radio" id="dir-out" name="direction" value="outbound"
+               {% if session.get('inv_direction','inbound') == 'outbound' %}checked{% endif %}>
+        <label for="dir-out">Outbound</label>
+      </div>
+
+      <!-- Category -->
       <label for="category">Category</label>
       <select id="category" name="category" required>
-        <option value="" disabled selected>— choose category —</option>
+        <option value="" disabled
+                {% if not request.form.get('category') %}selected{% endif %}>
+          — choose category —
+        </option>
         {% for c in categories %}
-          <option value="{{ c.id }}">{{ c.display_name }}</option>
+          <option value="{{ c.id }}"
+                  {% if request.form.get('category') == c.id|string %}selected{% endif %}>
+            {{ c.display_name }}
+          </option>
         {% endfor %}
       </select>
 
+      <!-- Item Name -->
       <label for="name">Item Name</label>
-      <input id="name" name="name" required>
-
-      <label for="weight">Wt/Unit</label>
-      <div style="display:flex; align-items:center; gap:0.5rem;">
-        <input id="weight"
-               name="weight"
-               type="number"
-               step="any"
-               min="0"
-               required
-               style="flex:1; min-width:16ch">
-        <select id="weight_unit" name="weight_unit">
-          <option value="lbs" {% if inv_weight_unit=='lbs' %}selected{% endif %}>lbs</option>
-          <option value="kg"  {% if inv_weight_unit=='kg'  %}selected{% endif %}>kg</option>
-        </select>
-      </div>
-
-      <label for="qty">Quantity</label>
-      <input id="qty" name="qty" type="number" step="1" min="0" required>
-
-      <label for="direction">Direction</label>
-      <select id="direction" name="direction" required>
-        <option value="" disabled selected>— choose direction —</option>
-        <option value="in">Incoming</option>
-        <option value="out">Outgoing</option>
+      <!-- inbound: free-text -->
+      <input id="name" name="name" required
+             value="{{ request.form.get('name','') }}">
+      <!-- outbound: dropdown -->
+      <select id="name-select" name="name" style="display:none;" required>
+        {% if request.form.get('name') %}
+          <option selected>{{ request.form.get('name') }}</option>
+        {% endif %}
       </select>
 
-      <button type="submit" style="grid-column:span 2; margin-top:1rem;">
+      <!-- Weight per Unit -->
+      <label for="weight">Wt/Unit</label>
+      <!-- inbound: free-text -->
+      <input id="weight" name="weight" type="number" step="any" min="0" required
+             value="{{ request.form.get('weight','') }}"
+             style="flex:1; min-width:16ch;">
+      <!-- outbound: dropdown -->
+      <select id="weight-select" name="weight" style="display:none;" required>
+        {% if request.form.get('weight') %}
+          <!-- pre-selected on error -->
+          <option value="{{ request.form.get('weight') }}" selected>
+            {{ request.form.get('weight') }}
+          </option>
+        {% endif %}
+      </select>
+      <!-- unit toggle -->
+      <select id="weight_unit" name="weight_unit">
+        <option value="lbs"
+                {% if request.form.get('weight_unit')=='lbs'
+                       or inv_weight_unit=='lbs' %}selected{% endif %}>
+          lbs
+        </option>
+        <option value="kg"
+                {% if request.form.get('weight_unit')=='kg'
+                       or inv_weight_unit=='kg' %}selected{% endif %}>
+          kg
+        </option>
+      </select>
+
+      <!-- Quantity -->
+      <label for="qty">Quantity</label>
+      <input id="qty" name="qty" type="number" step="1" min="0" required
+             value="{{ request.form.get('qty','') }}">
+
+      <button type="submit" style="grid-column: span 2; margin-top: 1rem;">
         Save Entry
       </button>
     </form>
@@ -62,6 +99,7 @@
   <div id="inventory-detail-table"><!-- AJAX detail table loads here --></div>
 
   <script>
+    // Load the list of past entries via AJAX
     async function loadInventoryDetail() {
       try {
         const resp = await fetch("{{ url_for('inventory.inventory_detail_table') }}");
@@ -70,14 +108,94 @@
     }
     loadInventoryDetail();
 
-    // Auto‐fill item name when Water category is selected
-    const categorySelect = document.getElementById('category');
-    const nameInput      = document.getElementById('name');
-    categorySelect.addEventListener('change', () => {
-      const selText = categorySelect.options[categorySelect.selectedIndex].text;
-      if (selText === 'Water') {
-        nameInput.value = 'water';
+    // --- Inventory Detail: dynamic UI tweaks ---
+    document.addEventListener('DOMContentLoaded', () => {
+      // Preloaded inventory data for outbound lookups
+      const invData     = {{ advanced_data|tojson }};
+      // Form controls
+      const dirIn       = document.getElementById('dir-in');
+      const dirOut      = document.getElementById('dir-out');
+      const categoryEl  = document.getElementById('category');
+      const nameTxt     = document.getElementById('name');
+      const nameSel     = document.getElementById('name-select');
+      const weightTxt   = document.getElementById('weight');
+      const weightSel   = document.getElementById('weight-select');
+      const qtyFld      = document.getElementById('qty');
+
+      // Show/hide the appropriate fields when direction changes
+      function updateMode() {
+        if (dirOut.checked) {
+          // — Outbound mode —
+          // Name → dropdown
+          nameTxt.style.display    = 'none';
+          nameTxt.required         = false;
+          nameSel.style.display    = '';
+          nameSel.required         = true;
+
+          // Weight → dropdown
+          weightTxt.style.display  = 'none';
+          weightTxt.required       = false;
+          weightSel.style.display  = '';
+          weightSel.required       = true;
+
+          // Clear any previous quantity
+          qtyFld.value              = '';
+          qtyFld.removeAttribute('max');
+
+          // Populate item dropdown for this category
+          const cid  = categoryEl.value;
+          const items = invData.items[cid] || [];
+          nameSel.innerHTML = '<option value="">Item…</option>' +
+            items.map(i => `<option>${i}</option>`).join('');
+
+        } else {
+          // — Inbound mode —
+          // Name → free-text
+          nameTxt.style.display    = '';
+          nameTxt.required         = true;
+          nameSel.style.display    = 'none';
+          nameSel.required         = false;
+
+          // Weight → free-text
+          weightTxt.style.display  = '';
+          weightTxt.required       = true;
+          weightSel.style.display  = 'none';
+          weightSel.required       = false;
+
+          // No outbound max-quantity enforcement client-side
+          qtyFld.removeAttribute('max');
+        }
       }
+
+      // Auto-insert “water” if they pick the Water category
+      categoryEl.addEventListener('change', e => {
+        const label = e.target.selectedOptions[0].text;
+        if (label === 'Water') {
+          nameTxt.value = 'water';
+        }
+        updateMode();
+      });
+
+      // Wire up the direction toggle
+      [dirIn, dirOut].forEach(radio => {
+        radio.addEventListener('change', updateMode);
+      });
+      updateMode();  // initialize on load
+
+      // When an outbound item is picked, fill the weight-per-unit dropdown
+      nameSel.addEventListener('change', () => {
+        if (!dirOut.checked) return;
+        const cid   = categoryEl.value;
+        const item  = nameSel.value;
+        const sizes = invData.sizes?.[cid]?.[item] || [];
+        weightSel.innerHTML = '<option value="">Size…</option>' +
+          sizes.map(sz => {
+            const avail = invData.avail?.[cid]?.[item]?.[String(sz)] || 0;
+            return `<option value="${sz}" data-avail="${avail}">` +
+                     `${sz} lb (${avail} avail)` +
+                   `</option>`;
+          }).join('');
+      });
     });
   </script>
 {% endblock %}

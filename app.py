@@ -4776,7 +4776,46 @@ def inventory_detail():
         qty        = int(request.form['qty'] or 0)
         total_lbs  = wpu_lbs * qty
         dirn       = request.form['direction']
+        # persist direction selection so it stays sticky on render
+        session['inv_direction'] = dirn
         ts         = datetime.utcnow().isoformat()
+
+        # ── enforce no‐overdraw on OUTBOUND ─────────────────────────────────
+        if dirn == 'outbound':
+            # re‐compute on‐hand in DB
+            row = dict_rows("""
+              SELECT SUM(
+                CASE WHEN direction='in'  THEN  quantity
+                     WHEN direction='out' THEN -quantity
+                END
+              ) AS avail
+                FROM inventory_entries
+               WHERE pending=0
+                 AND category_id=?
+                 AND sanitized_name=?
+                 AND weight_per_unit=?
+            """, (cat_id, noun, wpu_lbs))[0]
+            on_hand = row.get('avail', 0) or 0
+
+            # reject if they asked for more than exists
+            if qty > on_hand:
+                msg = f'Cannot exceed available qty ({on_hand})'
+                # AJAX path
+                if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                    return jsonify({'message': msg}), 400
+
+                # full‐page path: flash + re‐render
+                flash(msg, 'error')
+                # re‐build form context
+                categories = dict_rows("SELECT id, display_name FROM inventory_categories")
+                return render_template(
+                    'inventory_detail.html',
+                    initial_direction=session.get('inv_direction','inbound'),
+                    categories=categories,
+                    inv_weight_unit=session.get('inv_weight_unit', request.cookies.get('mass_unit','lbs')),
+                    active='inventory',
+                    form_data=request.form  # you can use these to pre-fill your template
+                )
 
         with sqlite3.connect(DB_FILE) as c:
             cur = c.execute("""
@@ -4833,6 +4872,7 @@ def inventory_detail():
     # render skeleton; entries come from AJAX
     return render_template(
         'inventory_detail.html',
+        initial_direction=session.get('inv_direction','inbound'),
         categories=categories,
         inv_weight_unit=session.get('inv_weight_unit', request.cookies.get('mass_unit','lbs')),
         active='inventory'
