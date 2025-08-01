@@ -278,8 +278,23 @@
 
       // ── AJAXify the form submit ───────────────────────────────────────
       const invForm = document.getElementById('inventory-form');
+      function fixFieldEnabling() {
+        // Always enable only the fields that should submit
+        if (dirOut.checked) {
+          nameTxt.disabled    = true;
+          nameSel.disabled    = false;
+          weightTxt.disabled  = true;
+          weightSel.disabled  = false;
+        } else {
+          nameTxt.disabled    = false;
+          nameSel.disabled    = true;
+          weightTxt.disabled  = false;
+          weightSel.disabled  = true;
+        }
+      }
       invForm.addEventListener('submit', async e => {
         e.preventDefault();
+        fixFieldEnabling(); // CRITICAL: only enabled fields are submitted!
         const form = e.target;
         const resp = await fetch(form.action, {
           method: 'POST',
@@ -289,14 +304,24 @@
         if (resp.ok) {
           showToast('Entry saved', 'success');
           form.reset();
-          updateMode();               // reset form UI to current direction
-          await loadInventoryDetail(); // refresh the table via AJAX
+          updateMode();
+          fixFieldEnabling(); // keep fields in sync after reset
+          await loadInventoryDetail();
         } else {
           let err = { message: 'Save failed' };
           try { err = await resp.json(); } catch (_) {}
           showToast(err.message || 'Error', 'error');
         }
       });
+      // Call after any mode update or reset
+      [dirIn, dirOut].forEach(radio => {
+        radio.addEventListener('change', () => {
+          updateMode();
+          fixFieldEnabling();
+        });
+      });
+      fixFieldEnabling();
+
     });
   </script>
 {% endblock %}
