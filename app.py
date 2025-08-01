@@ -4759,26 +4759,22 @@ def inventory_overview_table():
 @inventory_bp.route('/detail', methods=('GET','POST'))
 def inventory_detail():
     if request.method=='POST':
-        # read form + persist last‐used unit in session
-        cat_id      = int(request.form['category'])
-        raw         = request.form['name']
-        noun        = sanitize_name(raw)
-        weight_val  = float(request.form['weight'] or 0)
-        weight_unit = request.form['weight_unit']
-        session['inv_weight_unit'] = weight_unit
 
-        # normalize storage in pounds
+        cat_id = int(request.form['category'])
+        raw = request.form['name']
+        noun = sanitize_name(raw)
+        weight_val = float(request.form['weight'] or 0)
+        weight_unit = request.form.get('weight_unit', 'lbs')
+        session['inv_weight_unit'] = weight_unit
         if weight_unit == 'kg':
             wpu_lbs = kg_to_lbs(weight_val)
         else:
             wpu_lbs = weight_val
-
-        qty        = int(request.form['qty'] or 0)
-        total_lbs  = wpu_lbs * qty
-        dirn       = request.form['direction']
-        # persist direction selection so it stays sticky on render
+        qty = int(request.form['qty'] or 0)
+        total_lbs = wpu_lbs * qty
+        dirn = request.form['direction']
         session['inv_direction'] = dirn
-        ts         = datetime.utcnow().isoformat()
+        ts = datetime.utcnow().isoformat()
 
         # ── enforce no‐overdraw on OUTBOUND ─────────────────────────────────
         if dirn == 'out':
@@ -4794,15 +4790,9 @@ def inventory_detail():
              WHERE (pending IS NULL OR pending=0)
                AND category_id=?
                AND sanitized_name=?
-               AND weight_per_unit=?
+               AND ABS(weight_per_unit - ?) < 0.001
             """, (cat_id, noun, wpu_lbs))[0]
             on_hand = row['avail']
-
-            # DEBUG: see exactly what we're comparing
-            logger.debug(
-                "Overdraw check → category_id=%s, name=%s, wpu=%s ⇒ on_hand=%s",
-                cat_id, noun, wpu_lbs, on_hand
-            )
 
             # reject if they asked for more than exists
             if qty > on_hand:

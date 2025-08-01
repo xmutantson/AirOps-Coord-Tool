@@ -111,10 +111,19 @@
     }
     loadInventoryDetail();
 
-    // --- Inventory Detail: dynamic UI tweaks ---
     document.addEventListener('DOMContentLoaded', () => {
-      // Preloaded inventory data for outbound lookups
-      const invData     = {{ advanced_data|tojson }};
+      // Dynamic inventory data for outbound lookups
+      let inventoryAdvancedData = {{ advanced_data|tojson }};
+      const inventoryUrl = "{{ url_for('inventory.inventory_advance_data') }}";
+      async function fetchInventory() {
+        try {
+          const fresh = await fetch(inventoryUrl + "?_=" + Date.now()).then(r => r.json());
+          inventoryAdvancedData.stock_categories = fresh.categories;
+          inventoryAdvancedData.items            = fresh.items;
+          inventoryAdvancedData.sizes            = fresh.sizes;
+          inventoryAdvancedData.avail            = fresh.avail;
+        } catch (e) {}
+      }
       // Form controls
       const dirIn        = document.getElementById('dir-in');
       const dirOut       = document.getElementById('dir-out');
@@ -126,124 +135,80 @@
       const weightUnitEl = document.getElementById('weight_unit');
       const qtyFld       = document.getElementById('qty');
 
-      // Only preserve initial category on first render; clear on toggles
       let firstMode = true;
-
       // preserved on-error selections
-      const allCats       = invData.all_categories;
-      const stockCats     = invData.stock_categories;
-
-      // remember what (if anything) was submitted last time:
+      const allCats   = inventoryAdvancedData.all_categories;
+      const stockCats = inventoryAdvancedData.stock_categories;
       const selectedCat = "{{ request.form.get('category','') }}";
 
-      // Show/hide the appropriate fields when direction changes
       function updateMode() {
-        // decide whether to keep or reset the category placeholder
         const curCat = firstMode ? categoryEl.value : '';
         if (dirOut.checked) {
-          // remember what was just selected
-          // — Outbound mode —
-          // rebuild category dropdown to only stocked categories,
-          // placeholder selected only when curCat is empty
           categoryEl.innerHTML =
             '<option value="" disabled' + (curCat === '' ? ' selected' : '') + '>— choose category —</option>' +
             stockCats.map(c =>
               `<option value="${c.id}"${c.id===curCat?' selected':''}>${c.display_name}</option>`
             ).join('');
-
-          // inbound‐input is hidden & disabled in Outbound
           nameTxt.style.display     = 'none';
           nameTxt.required          = false;
           nameTxt.disabled          = true;
-          // outbound‐select is shown & enabled
           nameSel.style.display     = '';
           nameSel.required          = true;
           nameSel.disabled          = false;
-
-          // Weight → dropdown
-          // inbound weight‐input hidden & disabled
           weightTxt.style.display   = 'none';
           weightTxt.required        = false;
           weightTxt.disabled        = true;
-
-          // outbound weight‐select shown & enabled
           weightSel.style.display   = '';
           weightSel.required        = true;
           weightSel.disabled        = false;
-          // clear any stale size/options
-          weightSel.innerHTML      = '<option value="">Size…</option>';
-
-          // Clear any previous quantity
+          weightSel.innerHTML       = '<option value="">Size…</option>';
           qtyFld.value              = '';
           qtyFld.removeAttribute('max');
-
-          // Populate item dropdown for this category (dedupe names)
           const cid   = categoryEl.value;
-          const items = Array.from(new Set(invData.items[cid] || []));
+          const items = Array.from(new Set(inventoryAdvancedData.items[cid] || []));
           nameSel.innerHTML = '<option value="">Item…</option>' +
             items.map(i => `<option>${i}</option>`).join('');
-
-
           weightTxt.style.display    = 'none';
           weightTxt.required         = false;
           weightSel.style.display    = '';
           weightSel.required         = true;
-          // unit‐toggle only for inbound
           weightUnitEl.style.display = 'none';
           weightUnitEl.required      = false;
           weightUnitEl.disabled      = true;
-
         } else {
-          // inbound: show all categories,
-          // rebuild full category list, placeholder if curCat empty
           categoryEl.innerHTML =
             '<option value="" disabled' + (curCat === '' ? ' selected' : '') + '>— choose category —</option>' +
             allCats.map(c =>
               `<option value="${c.id}"${c.id===curCat?' selected':''}>${c.display_name}</option>`
             ).join('');
-
-          // clear any previous quantity
           qtyFld.value              = '';
           qtyFld.removeAttribute('max');
-
-
-
-          // inbound: show & enable free‐text
           nameTxt.style.display     = '';
           nameTxt.required          = true;
           nameTxt.disabled          = false;
-          // disable outbound select
           nameSel.style.display     = 'none';
           nameSel.required          = false;
           nameSel.disabled          = true;
-
-          // inbound weight‐input shown & enabled
-          weightTxt.style.display    = '';
-          weightTxt.required         = true;
-          weightTxt.disabled         = false;
-          // disable outbound weight‐select
-          weightSel.style.display     = 'none';
-          weightSel.required          = false;
-          weightSel.disabled          = true;
-          // unit toggle re‐enabled
+          weightTxt.style.display   = '';
+          weightTxt.required        = true;
+          weightTxt.disabled        = false;
+          weightSel.style.display   = 'none';
+          weightSel.required        = false;
+          weightSel.disabled        = true;
           weightUnitEl.style.display  = '';
           weightUnitEl.required       = true;
           weightUnitEl.disabled       = false;
-
           qtyFld.removeAttribute('max');
         }
         firstMode = false;
       }
-
       categoryEl.addEventListener('change', e => {
-        // if in outbound mode, rebuild item dropdown for the new category
         if (dirOut.checked) {
           const cid   = e.target.value;
-          const items = Array.from(new Set(invData.items[cid] || []));
+          const items = Array.from(new Set(inventoryAdvancedData.items[cid] || []));
           nameSel.innerHTML = '<option value="">Item…</option>' +
             items.map(i => `<option>${i}</option>`).join('');
         }
-        // auto-insert "water" if Water category
         const label = e.target.selectedOptions[0].text;
         if (label === 'Water') {
           if (dirOut.checked) {
@@ -254,32 +219,25 @@
           }
         }
       });
-
-      // Wire up the direction toggle
       [dirIn, dirOut].forEach(radio => {
         radio.addEventListener('change', updateMode);
       });
-      updateMode();  // initialize on load
-
-      // When an outbound item is picked, fill the weight-per-unit dropdown
+      updateMode();
       nameSel.addEventListener('change', () => {
         if (!dirOut.checked) return;
         const cid   = categoryEl.value;
         const item  = nameSel.value;
-        const sizes = invData.sizes?.[cid]?.[item] || [];
+        const sizes = inventoryAdvancedData.sizes?.[cid]?.[item] || [];
         weightSel.innerHTML = '<option value="">Size…</option>' +
           sizes.map(sz => {
-            const avail = invData.avail?.[cid]?.[item]?.[String(sz)] || 0;
+            const avail = inventoryAdvancedData.avail?.[cid]?.[item]?.[String(sz)] || 0;
             return `<option value="${sz}" data-avail="${avail}">` +
                      `${sz} lb (${avail} avail)` +
                    `</option>`;
           }).join('');
       });
-
-      // ── AJAXify the form submit ───────────────────────────────────────
       const invForm = document.getElementById('inventory-form');
       function fixFieldEnabling() {
-        // Always enable only the fields that should submit
         if (dirOut.checked) {
           nameTxt.disabled    = true;
           nameSel.disabled    = false;
@@ -294,7 +252,9 @@
       }
       invForm.addEventListener('submit', async e => {
         e.preventDefault();
-        fixFieldEnabling(); // CRITICAL: only enabled fields are submitted!
+        fixFieldEnabling();
+        // Preserve direction state after reset (sticky)
+        const prevDir = dirOut.checked ? 'out' : 'in';
         const form = e.target;
         const resp = await fetch(form.action, {
           method: 'POST',
@@ -304,8 +264,11 @@
         if (resp.ok) {
           showToast('Entry saved', 'success');
           form.reset();
+          if (prevDir === 'out') dirOut.checked = true;
+          else dirIn.checked = true;
+          await fetchInventory();      // fetch new inventory after save
           updateMode();
-          fixFieldEnabling(); // keep fields in sync after reset
+          fixFieldEnabling();
           await loadInventoryDetail();
         } else {
           let err = { message: 'Save failed' };
@@ -313,7 +276,6 @@
           showToast(err.message || 'Error', 'error');
         }
       });
-      // Call after any mode update or reset
       [dirIn, dirOut].forEach(radio => {
         radio.addEventListener('change', () => {
           updateMode();
@@ -321,7 +283,6 @@
         });
       });
       fixFieldEnabling();
-
     });
   </script>
 {% endblock %}
