@@ -20,7 +20,10 @@
     </div>
     <div class="metric throughput" style="margin-left:auto;">
       <h3>Air Cargo Throughput (last hour)</h3>
-      <div>{{ stats.aircraft_entries_per_hour }} flights / {{ stats.air_cargo_entries_per_hour }} lb</div>
+      <div>
+        {{ stats.aircraft_entries_per_hour }} flights /
+        {{ stats.air_cargo_entries_per_hour|round(1) }} {{ mass_unit or "lb" }}
+      </div>
     </div>
   </div>
 

@@ -1030,6 +1030,9 @@ seed_default_categories()
 
 # ───────────────── helper funcs ──────────────────────────
 
+def round_half_kg(val):
+    return round(val * 2) / 2
+
 def _create_tables_wargame_ramp_requests(c):
     # Air‑cargo requests that appear on Wargame → Ramp dashboard
     c.execute("""
@@ -4942,8 +4945,8 @@ def inventory_detail():
 
     for e in entries:
         if mass_pref == 'kg':
-            e['weight_view'] = round(e['weight_per_unit'] / 2.20462, 1)
-            e['total_view']  = round(e['total_weight']    / 2.20462, 1)
+            e['weight_view'] = round_half_kg(e['weight_per_unit'] / 2.20462)
+            e['total_view']  = round_half_kg(e['total_weight']    / 2.20462)
         else:
             e['weight_view'] = e['weight_per_unit']
             e['total_view']  = e['total_weight']

@@ -228,14 +228,24 @@
         const cid   = categoryEl.value;
         const item  = nameSel.value;
         const sizes = inventoryAdvancedData.sizes?.[cid]?.[item] || [];
+        // Grab unit preference (from cookie, or default to 'lbs')
+        const massPref = (document.cookie.match(/(?:^|;\s*)mass_unit=([^;]*)/) || [,'lbs'])[1];
+
         weightSel.innerHTML = '<option value="">Size…</option>' +
           sizes.map(sz => {
             const avail = inventoryAdvancedData.avail?.[cid]?.[item]?.[String(sz)] || 0;
+            let dispSz = sz, dispAvail = avail, labelUnit = 'lb';
+            if (massPref === 'kg') {
+              dispSz = (parseFloat(sz) / 2.20462).toFixed(2).replace(/\.00$/,'');
+              dispAvail = avail ? (parseFloat(avail) / 2.20462).toFixed(2).replace(/\.00$/,'') : avail;
+              labelUnit = 'kg';
+            }
             return `<option value="${sz}" data-avail="${avail}">` +
-                     `${sz} lb (${avail} avail)` +
+                     `${dispSz} ${labelUnit} (${dispAvail} avail)` +
                    `</option>`;
           }).join('');
       });
+
       const invForm = document.getElementById('inventory-form');
       function fixFieldEnabling() {
         if (dirOut.checked) {
