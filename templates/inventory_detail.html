@@ -17,15 +17,15 @@
           autocomplete="off">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
-      <!-- Direction toggle: sticky at top -->
+      <!-- Direction toggle: sticky at top (values now ‘in’/‘out’ to satisfy DB CHECK) -->
       <label>Direction</label>
       <div class="radio-toggle">
-        <input type="radio" id="dir-in"  name="direction" value="inbound"
-               {% if session.get('inv_direction','inbound') != 'outbound' %}checked{% endif %}>
+        <input type="radio" id="dir-in"  name="direction" value="in"
+               {% if session.get('inv_direction','in') != 'out' %}checked{% endif %}>
         <label for="dir-in">Inbound</label>
 
-        <input type="radio" id="dir-out" name="direction" value="outbound"
-               {% if session.get('inv_direction','inbound') == 'outbound' %}checked{% endif %}>
+        <input type="radio" id="dir-out" name="direction" value="out"
+               {% if session.get('inv_direction','in') == 'out' %}checked{% endif %}>
         <label for="dir-out">Outbound</label>
       </div>
 
@@ -151,16 +151,25 @@
               `<option value="${c.id}"${c.id===curCat?' selected':''}>${c.display_name}</option>`
             ).join('');
 
+          // inbound‐input is hidden & disabled in Outbound
           nameTxt.style.display     = 'none';
           nameTxt.required          = false;
+          nameTxt.disabled          = true;
+          // outbound‐select is shown & enabled
           nameSel.style.display     = '';
           nameSel.required          = true;
+          nameSel.disabled          = false;
 
           // Weight → dropdown
-          weightTxt.style.display  = 'none';
-          weightTxt.required       = false;
-          weightSel.style.display  = '';
-          weightSel.required       = true;
+          // inbound weight‐input hidden & disabled
+          weightTxt.style.display   = 'none';
+          weightTxt.required        = false;
+          weightTxt.disabled        = true;
+
+          // outbound weight‐select shown & enabled
+          weightSel.style.display   = '';
+          weightSel.required        = true;
+          weightSel.disabled        = false;
           // clear any stale size/options
           weightSel.innerHTML      = '<option value="">Size…</option>';
 
@@ -179,8 +188,10 @@
           weightTxt.required         = false;
           weightSel.style.display    = '';
           weightSel.required         = true;
+          // unit‐toggle only for inbound
           weightUnitEl.style.display = 'none';
           weightUnitEl.required      = false;
+          weightUnitEl.disabled      = true;
 
         } else {
           // inbound: show all categories,
@@ -197,17 +208,27 @@
 
 
 
+          // inbound: show & enable free‐text
           nameTxt.style.display     = '';
           nameTxt.required          = true;
+          nameTxt.disabled          = false;
+          // disable outbound select
           nameSel.style.display     = 'none';
           nameSel.required          = false;
+          nameSel.disabled          = true;
 
+          // inbound weight‐input shown & enabled
           weightTxt.style.display    = '';
           weightTxt.required         = true;
+          weightTxt.disabled         = false;
+          // disable outbound weight‐select
           weightSel.style.display     = 'none';
           weightSel.required          = false;
+          weightSel.disabled          = true;
+          // unit toggle re‐enabled
           weightUnitEl.style.display  = '';
           weightUnitEl.required       = true;
+          weightUnitEl.disabled       = false;
 
           qtyFld.removeAttribute('max');
         }

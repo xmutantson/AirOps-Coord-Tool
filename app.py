@@ -4784,18 +4784,25 @@ def inventory_detail():
         if dirn == 'outbound':
             # re‐compute on‐hand in DB
             row = dict_rows("""
-              SELECT SUM(
-                CASE WHEN direction='in'  THEN  quantity
-                     WHEN direction='out' THEN -quantity
-                END
-              ) AS avail
-                FROM inventory_entries
-               WHERE pending=0
-                 AND category_id=?
-                 AND sanitized_name=?
-                 AND weight_per_unit=?
+              SELECT
+                COALESCE(SUM(
+                  CASE WHEN direction='in'  THEN  quantity
+                       WHEN direction='out' THEN -quantity
+                  END
+                ), 0) AS avail
+              FROM inventory_entries
+             WHERE (pending IS NULL OR pending=0)
+               AND category_id=?
+               AND sanitized_name=?
+               AND weight_per_unit=?
             """, (cat_id, noun, wpu_lbs))[0]
-            on_hand = row.get('avail', 0) or 0
+            on_hand = row['avail']
+
+            # DEBUG: see exactly what we're comparing
+            logger.debug(
+                "Overdraw check → category_id=%s, name=%s, wpu=%s ⇒ on_hand=%s",
+                cat_id, noun, wpu_lbs, on_hand
+            )
 
             # reject if they asked for more than exists
             if qty > on_hand:
