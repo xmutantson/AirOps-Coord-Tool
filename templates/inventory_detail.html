@@ -275,6 +275,28 @@
                    `</option>`;
           }).join('');
       });
+
+      // ── AJAXify the form submit ───────────────────────────────────────
+      const invForm = document.getElementById('inventory-form');
+      invForm.addEventListener('submit', async e => {
+        e.preventDefault();
+        const form = e.target;
+        const resp = await fetch(form.action, {
+          method: 'POST',
+          headers: { 'X-Requested-With': 'XMLHttpRequest' },
+          body: new FormData(form)
+        });
+        if (resp.ok) {
+          showToast('Entry saved', 'success');
+          form.reset();
+          updateMode();               // reset form UI to current direction
+          await loadInventoryDetail(); // refresh the table via AJAX
+        } else {
+          let err = { message: 'Save failed' };
+          try { err = await resp.json(); } catch (_) {}
+          showToast(err.message || 'Error', 'error');
+        }
+      });
     });
   </script>
 {% endblock %}

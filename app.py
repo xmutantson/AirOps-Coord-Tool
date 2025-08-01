@@ -4781,7 +4781,7 @@ def inventory_detail():
         ts         = datetime.utcnow().isoformat()
 
         # ── enforce no‐overdraw on OUTBOUND ─────────────────────────────────
-        if dirn == 'outbound':
+        if dirn == 'out':
             # re‐compute on‐hand in DB
             row = dict_rows("""
               SELECT
