@@ -758,3 +758,45 @@ table.wg-radio-table tr.read { opacity: .8; }
     color: #f8fafc;    /* <-- force light text on dark bg */
   }
 }
+/* ── Print Styles ─────────────────────────────────────────────────────────── */
+@media print {
+  /* ── hide nav and our “Print” button ─────────────────────────── */
+  header, footer, .main-nav, .print-button { display: none !important; }
+
+  /* ── force white background & black text ─────────────────────── */
+  body { background: #fff; color: #000; }
+
+  /* ── expand all <details> AND SHOW the summary labels ───────── */
+  details { display: block !important; }
+  details summary { display: list-item !important; }
+
+  /* ── kill all container gutters so we use the full page width ── */
+  .container,
+  main.container { margin: 0 !important; padding: 0 !important; }
+
+  /* ── undo the “full-bleed” left/right shifts, print at 100% ──── */
+  .full-bleed,
+  body.dashboard .container #dashboard-table > table,
+  body.radio .container #radio-table > table {
+    position: static !important;
+    width: 100% !important;
+    left: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* ── wrap long cell contents instead of cutting them off ─────── */
+  table { table-layout: fixed !important; }
+  th, td { word-wrap: break-word !important; }
+
+  /* ── scale Dashboard down to 75% so it all fits on page ───── */
+  body.dashboard #dashboard-table {
+    zoom: 0.55 !important;
+  }
+
+  /* ── force page-break before each <details> in Inventory-Stock ─ */
+  /* that way each category starts on its own page after the first */
+  body.inventory details + details {
+    page-break-before: always !important;
+  }
+}

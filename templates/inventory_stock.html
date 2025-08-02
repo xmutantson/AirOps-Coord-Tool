@@ -5,6 +5,10 @@
 <a href="{{ url_for('inventory.inventory_overview') }}" class="back-button">← Back</a>
 <h2 style="margin-top:0;">Current Stock On‑Hand</h2>
 
+<button type="button"
+        class="print-button"
+        onclick="window.print()" style="margin-bottom:1rem;">🖨️ Print</button>
+
 {% for cat, items in stock.items() %}
 <details style="margin:1rem 0;">
   <summary style="cursor:pointer; font-weight:bold;">

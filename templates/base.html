@@ -231,7 +231,18 @@ if (typeof window.showToast !== 'function') {
 })();
 </script>
 
-{% block scripts %}{% endblock %}
+<script>
+  // Auto‐expand all <details> for printing, then collapse afterwards.
+  function _togglePrintDetails(open) {
+    document.querySelectorAll('details').forEach(d => d.open = open);
+  }
+  window.matchMedia('print').addEventListener('change', e => {
+    _togglePrintDetails(e.matches);
+  });
+  window.onbeforeprint = () => _togglePrintDetails(true);
+  window.onafterprint  = () => _togglePrintDetails(false);
+</script>
 
+{% block scripts %}{% endblock %}
 </body>
 </html>
