@@ -248,10 +248,34 @@
       if (d.cargo_weight)     form.cargo_weight.value = d.cargo_weight;
     });
 
-    // form submit (AJAX)
+    // form submit (AJAX) with airport‐code warning
     form.addEventListener('submit', async e => {
       e.preventDefault();
+      // basic required‐field check
       if (!validateRampBoss()) return;
+
+      // ── Warn if Destination not in our airport database ──
+      const destVal = destField.value.trim().toUpperCase();
+      if (destVal) {
+        try {
+          const apiResp = await fetch(
+            `/api/airport_exists/${encodeURIComponent(destVal)}`
+          );
+          if (apiResp.ok) {
+            const { exists } = await apiResp.json();
+            if (!exists &&
+                !confirm(`"${destVal}" is not a known airport code. Continue anyway?`)) {
+              destField.focus();
+              return;
+            }
+          }
+        } catch (err) {
+          console.warn('Airport lookup failed', err);
+          // network or server error → still proceed
+        }
+      }
+
+      // now proceed with the existing departure‐time check + POST
 
       const t = depField.value.trim();
       if (t.length < 3 || t.length > 4 || isNaN(t)) {

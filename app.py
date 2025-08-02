@@ -2716,6 +2716,17 @@ def too_large(e):
         413
     )
 
+# ── Airport code existence check ─────────────────────────────────────────
+@app.route('/api/airport_exists/<string:code>')
+def airport_exists(code):
+    code = code.upper()
+    rows = dict_rows("""
+        SELECT 1 FROM airports
+         WHERE icao = ? OR iata = ? OR local = ?
+        LIMIT 1
+    """, (code, code, code))
+    return jsonify({ 'exists': bool(rows) })
+
 @app.route('/embedded/proxy/', defaults={'path': ''})
 @app.route('/embedded/proxy/<path:path>')
 @limiter.exempt
@@ -3425,6 +3436,19 @@ def ramp_boss():
     default_origin = drow[0]['value'] if drow else ''
 
     if request.method == 'POST':
+        # ── Validate destination against airports DB ─────────────────────
+        dest = request.form.get('destination','').upper().strip()
+        if dest:
+            rows = dict_rows(
+                "SELECT 1 FROM airports "
+                " WHERE icao = ? OR iata = ? OR local = ? "
+                " LIMIT 1",
+                (dest, dest, dest)
+            )
+            if not rows:
+                # airport not found → flash a warning but continue
+                flash(f'Destination “{dest}” is not in our airport list.', 'warning')
+
         direction = request.form['direction']
         unit      = request.form['weight_unit']
 
