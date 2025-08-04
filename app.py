@@ -2860,6 +2860,10 @@ def embedded_proxy(path):
 @app.get("/_ping")
 def ping():
     """Return 204 immediately – used by tiny JS heartbeat."""
+    # Touch the session so its expiration is refreshed on each heartbeat
+    session.modified = True
+    # (If using PERMANENT_SESSION_LIFETIME, this will bump the cookie expiry)
+
     resp = make_response(("", 204))
     # Explicit “don’t cache me” headers for any intermediate store
     resp.headers["Cache-Control"] = "no-store, max-age=0"
