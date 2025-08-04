@@ -1299,39 +1299,99 @@ def hide_tbd_filter(value):
 
 def format_airport(raw_code: str, pref: str) -> str:
     """
-    Given any code (ICAO, IATA, or local), look it up in airports
-    and return the user-preferred format. Falls back to raw_code.
+    Given any user input code, look up the airport and return the preferred format.
+    Match priority: ICAO > IATA > GPS > ident > local.
+    Falls back to raw_code if not found.
     """
-    code = (raw_code or '').upper()
+
+    # Normalize preference
+    p = str(pref or '').strip().lower()
+    if p.startswith('icao'):
+        pref = 'icao4'
+    elif p.startswith('iata'):
+        pref = 'iata'
+    elif p.startswith('local'):
+        pref = 'local'
+    else:
+        pref = 'icao4'
+
+    code = (raw_code or '').strip().upper()
     if not code:
         return 'TBD'
 
+    # List fields in match priority order
+    priority_fields = [
+        'icao_code',
+        'iata_code',
+        'gps_code',
+        'ident',
+        'local_code',
+    ]
+
+    # Query all possible matches in one go
     with sqlite3.connect(DB_FILE) as c:
         c.row_factory = sqlite3.Row
-        row = c.execute("""
-          SELECT *
-            FROM airports
-           WHERE ? IN (icao_code, iata_code, gps_code, local_code, ident)
-           /* prefer real ICAO / IATA over stray local_code hits like AYBM=BLI */
-           ORDER BY (icao_code = ? OR iata_code = ?) DESC
-           LIMIT 1
-        """, (code, code, code)).fetchone()
+        matches = c.execute("""
+            SELECT * FROM airports
+             WHERE ? IN (icao_code, iata_code, gps_code, ident, local_code)
+        """, (code,)).fetchall()
 
-    if not row:
+    if not matches:
         return raw_code
 
-    if pref == 'icao4':
-        return row['icao_code'] or raw_code
-    if pref == 'iata':
-        return row['iata_code'] or raw_code
-    if pref == 'local':
-        return row['gps_code'] or row['local_code'] or row['ident'] or raw_code
+    # Now find the *best* row per the priority order
+    best_row = None
+    best_rank = len(priority_fields)  # Higher is worse
+    for row in matches:
+        for rank, field in enumerate(priority_fields):
+            if row[field] and row[field].upper() == code:
+                if rank < best_rank:
+                    best_row = row
+                    best_rank = rank
+                break  # Stop searching this row: matched on this field
 
-    # fallback
+    if not best_row:
+        return raw_code
+
+    # Return the requested format, fallback to sensible alternatives
+    if pref == 'icao4':
+        return best_row['icao_code'] or raw_code
+    if pref == 'iata':
+        return best_row['iata_code'] or raw_code
+    if pref == 'local':
+        return (best_row['gps_code'] or best_row['local_code'] or best_row['ident'] or raw_code)
+
+    # Fallback
     return raw_code
 
 # Cache airport lookups (up to 250 entries)
 _fmt_airport = lru_cache(maxsize=250)(format_airport)
+
+@lru_cache(maxsize=250)
+def airport_aliases(code: str) -> list:
+    """Return every recorded airport code (ident, ICAO, IATA, GPS, local) for the given input."""
+    c = code.strip().upper()
+    # must match all five columns against our single input
+    rows = dict_rows(
+        "SELECT ident, icao_code, iata_code, gps_code, local_code "
+        "FROM airports "
+        "WHERE ident = ? OR icao_code = ? OR iata_code = ? OR gps_code = ? OR local_code = ? "
+        "LIMIT 1",
+        (c, c, c, c, c)
+    )
+    if not rows:
+        return [c]
+    row = rows[0]
+    aliases = {
+        row.get('ident'),
+        row.get('icao_code'),
+        row.get('iata_code'),
+        row.get('gps_code'),
+        row.get('local_code'),
+    }
+    # drop None/empty, uppercase
+    return [a.upper() for a in aliases if a]
+
 
 # ── Winlink parser with conversions ──────────────────────
 # allow either “ETA” or “landed” before the time, so that
@@ -2887,10 +2947,12 @@ def dashboard():
     """
     # pass tail_filter so the input box shows the right value
     tail_filter = request.args.get('tail_filter','').strip().upper()
+    airport_filter = request.args.get('airport_filter','').strip().upper()
     return render_template(
         'dashboard.html',
         active='dashboard',
-        tail_filter=tail_filter
+        tail_filter=tail_filter,
+        airport_filter=airport_filter
     )
 
 # --- Stripped-down dashboard, allows transmission over an AX.25 link or similar ----
@@ -3218,8 +3280,8 @@ def radio():
     hide_tbd = request.cookies.get('hide_tbd', 'yes') == 'yes'
 
     for f in flights:
-        f['origin_view'] = format_airport(f.get('airfield_takeoff',''), code_fmt)
-        f['dest_view']   = format_airport(f.get('airfield_landing',''), code_fmt)
+        f['origin_view'] = _fmt_airport(f.get('airfield_takeoff',''), code_fmt)
+        f['dest_view']   = _fmt_airport(f.get('airfield_landing',''), code_fmt)
 
         if f.get('direction')=='outbound' and f.get('eta') and not f.get('complete',0):
             f['eta_view'] = f['eta'] + '*'
@@ -3252,16 +3314,39 @@ def radio():
 def dashboard_table_partial():
     purge_blank_flights()
     # compute code_pref, mass_pref, hide_tbd, tail_filter, sort_seq, sql, params...
-    cookie_code = request.cookies.get('code_format')
-    code_pref   = cookie_code or (
+
+    # Pull in the user’s airport‐code preference (ICAO vs IATA)
+    cookie_pref = request.cookies.get('code_format')
+    airport_pref = cookie_pref or (
         dict_rows("SELECT value FROM preferences WHERE name='code_format'")
         or [{'value':'icao4'}]
     )[0]['value']
+
     mass_pref = request.cookies.get('mass_unit','lbs')
     hide_tbd  = request.cookies.get('hide_tbd','yes') == 'yes'
 
+    # ── split comma-sep tail filters into exact tail_numbers list
     tail_filter = request.args.get('tail_filter','').strip().upper()
-    sort_seq    = request.cookies.get('dashboard_sort_seq','no') == 'yes'
+    # build exact-match list of comma-separated tails
+    tail_numbers = (
+        [t.strip().upper() for t in tail_filter.split(',') if t.strip()]
+        if tail_filter else []
+    )
+
+    # optional airport-code filters (comma-sep, uppercased)
+    airport_filter = request.args.get('airport_filter','').strip().upper()
+
+    # resolve each comma-sep code into _all_ known aliases
+    airport_idents = []
+    if airport_filter:
+        codes = [c.strip().upper() for c in airport_filter.split(',') if c.strip()]
+        aliases = []
+        for c in codes:
+            aliases.extend(airport_aliases(c))
+        # de-duplicate while preserving order
+        airport_idents = list(dict.fromkeys(aliases))
+
+    sort_seq = request.cookies.get('dashboard_sort_seq','no') == 'yes'
 
     # ── read 1090‑distances enable flag ───────────────────────────────
     rows = dict_rows(
@@ -3273,11 +3358,30 @@ def dashboard_table_partial():
 
     show_dist = bool(rows and rows[0]['value']=='yes')
 
-    sql = "SELECT * FROM flights"
-    params = ()
-    if tail_filter:
-        sql += " WHERE tail_number LIKE ?"
-        params = (f"%{tail_filter}%",)
+    # build WHERE clauses for tail and airport filters
+    sql           = "SELECT * FROM flights"
+    where_clauses = []
+    params         = []
+
+    if tail_numbers:
+        # exact-match tail filter (any of these)
+        ph = ",".join("?" for _ in tail_numbers)
+        where_clauses.append(f"tail_number IN ({ph})")
+        params.extend(tail_numbers)
+
+    if airport_idents:
+        ph = ",".join("?" for _ in airport_idents)
+        where_clauses.append(
+            f"(airfield_takeoff IN ({ph}) OR airfield_landing IN ({ph}))"
+        )
+        # we need two copies: one for takeoff, one for landing
+        params.extend(airport_idents)
+        params.extend(airport_idents)
+
+    if where_clauses:
+        sql += " WHERE " + " AND ".join(where_clauses)
+
+    # append ORDER BY
     if sort_seq:
         sql += " ORDER BY id DESC"
     else:
@@ -3307,8 +3411,8 @@ def dashboard_table_partial():
             d = dict(r)
 
             # — airport formatting & views —
-            d['origin_view'] = _fmt_airport(d.get('airfield_takeoff',''), code_pref)
-            d['dest_view']   = _fmt_airport(d.get('airfield_landing',''), code_pref)
+            d['origin_view'] = _fmt_airport(d.get('airfield_takeoff',''), airport_pref)
+            d['dest_view']   = _fmt_airport(d.get('airfield_landing',''),  airport_pref)
             if d.get('direction')=='outbound' and d.get('eta') and not d.get('complete'):
                 d['eta_view'] = d['eta'] + '*'
             else:
@@ -3409,8 +3513,8 @@ def radio_table_partial():
     hide_tbd = request.cookies.get('hide_tbd', 'yes') == 'yes'
 
     for f in flights:
-        f['origin_view'] = format_airport(f.get('airfield_takeoff',''), code_fmt)
-        f['dest_view']   = format_airport(f.get('airfield_landing',''), code_fmt)
+        f['origin_view'] = _fmt_airport(f.get('airfield_takeoff',''), code_fmt)
+        f['dest_view']   = _fmt_airport(f.get('airfield_landing',''), code_fmt)
 
         if f.get('direction')=='outbound' and f.get('eta') and not f.get('complete',0):
             f['eta_view'] = f['eta'] + '*'

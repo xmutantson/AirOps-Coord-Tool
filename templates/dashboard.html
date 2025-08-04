@@ -1,61 +1,129 @@
 {% extends "base.html" %}
 {% block title %}Dashboard – Aircraft Ops{% endblock %}
-{% block content %}
 
+{% block content %}
 <div class="page-header-bar">
-  <span class="page-title">Aircraft Ops Dashboard (Hosted at: {{ mdns_name or '---' }}:5150 -or- {{ host_ip or '---' }}:5150 )</span>
-  <span id="clock" class="clock">00:00:00</span>
-  <input id="tail-filter"
-         type="text"
-         placeholder="Filter tail…"
-         value="{{ tail_filter or '' }}"
-         style="margin-left:1rem;padding:0.3em;border-radius:4px;border:1px solid #ccc">
+  <span class="page-title">
   <button type="button"
           class="print-button"
           onclick="window.print()" style="margin-right:1rem;">🖨️ Print</button>
+    Aircraft Ops Dashboard
+    (Hosted at: {{ mdns_name or '---' }}:5150 – {{ host_ip or '---' }}:5150)
 
+  </span>
+  <span id="clock" class="clock">00:00:00</span>
+
+  <form id="filter-form"
+        style="display:flex; gap:0.5rem; margin-top:0.5rem; width:100%;">
+    <input
+      id="tail-filter"
+      name="tail_filter"
+      class="force-upper"
+      type="text"
+      placeholder="Filter tail (comma-separated)…"
+      value="{{ tail_filter or '' }}"
+      style="flex:1; padding:0.4em; border-radius:4px; border:1px solid #ccc;"
+      autocomplete="off"
+    >
+    <input
+      id="airport-filter"
+      name="airport_filter"
+      class="force-upper"
+      type="text"
+      placeholder="Filter airport (comma-separated)…"
+      value="{{ airport_filter or '' }}"
+      style="flex:1; padding:0.4em; border-radius:4px; border:1px solid #ccc;"
+      autocomplete="off"
+    >
+    <button
+      type="submit"
+      class="btn-secondary"
+      style="flex:0 0 auto; padding:0.5em 1em; align-self:stretch;"
+    >Apply filters</button>
+    <button
+      type="button"
+      id="clear-filters"
+      class="danger"
+      style="flex:0 0 auto; padding:0.5em 1em; align-self:stretch;"
+    >Clear filters</button>
+  </form>
 </div>
 
-  <div id="dashboard-table"></div>
+{% if tail_filter or airport_filter %}
+  <div class="filter-banner">
+    <strong>⚠️ Filtered view:</strong>
+    {% if tail_filter %}
+      <span class="filter-tag">Tail: {{ tail_filter }}</span>
+    {% endif %}
+    {% if airport_filter %}
+      <span class="filter-tag">Airport: {{ airport_filter }}</span>
+    {% endif %}
+  </div>
+{% endif %}
+
+<div id="dashboard-table"></div>
 
 <script>
   async function refreshDashboard(){
     try {
-      const resp = await fetch('{{ url_for("dashboard_table_partial") }}' + window.location.search);
+      const resp = await fetch(
+        '{{ url_for("dashboard_table_partial") }}'
+        + window.location.search
+      );
       if (!resp.ok) throw new Error(resp.status);
       document.getElementById('dashboard-table').innerHTML = await resp.text();
     } catch(err){
       console.error("Dashboard refresh failed:", err);
     }
   }
-  // Refresh every 30 seconds:
-  setInterval(refreshDashboard, 30_000);
-  //call dashboard update once, to let the intial load (lazily)
-  refreshDashboard()
-</script>
+  // initial + every 30s
+  refreshDashboard();
+  setInterval(refreshDashboard, 30000);
 
-<script>
   function updateClock(){
     const now = new Date();
-    const hh = String(now.getHours()).padStart(2,'0');
-    const mm = String(now.getMinutes()).padStart(2,'0');
-    const ss = String(now.getSeconds()).padStart(2,'0');
-    document.getElementById('clock').textContent = `${hh}:${mm}:${ss}`;
+    document.getElementById('clock').textContent =
+      `${String(now.getHours()).padStart(2,'0')}:` +
+      `${String(now.getMinutes()).padStart(2,'0')}:` +
+      `${String(now.getSeconds()).padStart(2,'0')}`;
   }
-  setInterval(updateClock, 1000);
   updateClock();
-</script>
+  setInterval(updateClock, 1000);
 
-<script>
-// tail filter box behavior
-document.getElementById('tail-filter').addEventListener('keyup', e => {
-  if (e.key !== 'Enter') return;                   // only on Enter
-  const v  = e.target.value.trim().toUpperCase();
-  const qs = new URLSearchParams(window.location.search);
-  if (v) qs.set('tail_filter', v);
-  else  qs.delete('tail_filter');
-  window.location.search = qs.toString();
-});
-</script>
+  // Apply / Clear filters
+  document.getElementById('filter-form').addEventListener('submit', e => {
+    e.preventDefault();
+    const form = e.target;
+    const qs   = new URLSearchParams(window.location.search);
 
+    // normalize comma-separated, uppercase, no empties
+    function norm(name) {
+      return Array.from(
+        form[name].value.split(',')
+          .map(s => s.trim().toUpperCase())
+          .filter(Boolean)
+      ).join(',');
+    }
+
+    const tails = norm('tail_filter');
+    if (tails) qs.set('tail_filter', tails);
+    else      qs.delete('tail_filter');
+
+    const aps = norm('airport_filter');
+    if (aps) qs.set('airport_filter', aps);
+    else     qs.delete('airport_filter');
+
+    window.location.search = qs.toString();
+  });
+
+  document.getElementById('clear-filters').addEventListener('click', () => {
+    document.getElementById('tail-filter').value    = '';
+    document.getElementById('airport-filter').value = '';
+    const qs = new URLSearchParams(window.location.search);
+    qs.delete('tail_filter');
+    qs.delete('airport_filter');
+    window.location.search = qs.toString();
+  });
+</script>
 {% endblock %}
+

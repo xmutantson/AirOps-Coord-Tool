@@ -15,9 +15,15 @@
     </td>
   {%- endif %}
   {%- for field in [
-       'pilot_name','pax_count',
-       'origin_view','takeoff_time','dest_view',
-       'eta_view','cargo_type','cargo_view','remarks'
+       'pilot_name',
+       'pax_count',
+       'origin_view',
+       'takeoff_time',
+       'dest_view',
+       'eta_view',
+       'cargo_type',
+       'cargo_view',
+       'remarks'
      ] %}
     <td>
       {%- if hide_tbd %}
@@ -36,9 +42,16 @@
   <td>{{ f.id }}</td>
   <td class="status">{% if f.complete %}🛬{% else %}✈️{% endif %}</td>
   {%- for field in [
-       'tail_number','pilot_name','pax_count',
-       'origin_view','takeoff_time','dest_view',
-       'eta_view','cargo_type','cargo_view','remarks'
+       'tail_number',
+       'pilot_name',
+       'pax_count',
+       'origin_view',
+       'takeoff_time',
+       'dest_view',
+       'eta_view',
+       'cargo_type',
+       'cargo_view',
+       'remarks'
      ] %}
     <td>
       {%- if hide_tbd %}

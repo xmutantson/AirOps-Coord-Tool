@@ -611,9 +611,18 @@
       /* ── QUEUE branch: simple toast + hard reset ─────────────────── */
       if (e.submitter?.value === 'queue' && !isEditDraft){
           showToast('Flight added to queue','success');
-          form.reset(); applyDirUI();
+          form.reset();
+          applyDirUI();
           travelHInp.value = travelMInp.value = '';
-          return;                     /* skip the outbound “success row” build */
+          // Clear running total
+          totalCargo = 0;
+          cwHistory.innerHTML    = '';
+          cwTotalEl.textContent  = 'Total: 0 lbs';
+          cwMinus.disabled       = true;
+          // Clear advanced cargo chips
+          advLines.innerHTML     = '';
+          manifestId.value       = '';
+          return; /* skip the outbound “success row” build */
       }
 
       const allBlank = ['tail_number','airfield_takeoff','airfield_landing',
