@@ -1099,7 +1099,11 @@
     window._rbCategories.add(catName);
     document.getElementById('cargo_type').value =
       window._rbCategories.size === 1 ? catName : 'Mixed';
-
+    // ─── **NEW** clear inbound free-text on add ─────────────────────────
+    if (dirNow === 'inbound') {
+      document.getElementById('adv-name').value   = '';
+      document.getElementById('adv-weight').value = '';
+    }
     advQty.value = '';
   });
 
