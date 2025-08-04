@@ -800,3 +800,61 @@ table.wg-radio-table tr.read { opacity: .8; }
     page-break-before: always !important;
   }
 }
+/* ───────────────────────────────────────────────────────────────
+   New: generic primary / secondary buttons
+   (used by Ramp-Boss “SEND NOW” / “Add To Queue”)
+   ───────────────────────────────────────────────────────────── */
+/* Primary → reuse existing amber accent */
+.btn-primary {
+  background: var(--accent);
+  border: 1px solid #d68504;
+  color: #333;
+}
+.btn-primary:hover { filter: brightness(1.05); }
+
+/* Secondary → light royal-blue, readable with black text */
+.btn-secondary {
+  background: #5c9eff;          /* adjust tint as desired */
+  border: 1px solid #4a88e2;
+  color: #000;
+}
+.btn-secondary:hover { filter: brightness(1.07); }
+/* ── Ramp-Boss quick tweaks ───────────────────────────────────────*/
+.ramp-form-container .form-buttons {               /* span both grid columns */
+  grid-column: 1 / -1;
+}
+.cargo-tools-toggle { flex-wrap: nowrap; }         /* keep on one line */
+
+/* keep secondary button blue on hover */
+.btn-secondary:hover{
+  background: #6ea9ff;    /* a touch lighter */
+  border-color: #5a95e0;
+  filter: none;           /* cancel the generic yellow hover */
+}
+/* ── Ramp-Boss “Send / Queue” layout tweaks ───────────────────────*/
+.ramp-form-container .form-buttons{
+  grid-column: 1 / -1;      /* span both grid columns */
+  display: flex; gap: .5rem;
+}
+.ramp-form-container .form-buttons button{
+  flex: 1 1 50%;            /* split row evenly */
+  width: 0;                 /* prevent intrinsic width fights */
+}
+
+/* keep blue button blue on hover (override generic yellow filter) */
+.btn-secondary:hover{
+  background:#6ea9ff;       /* slightly lighter tint */
+  border-color:#5a95e0;
+  filter:none;
+}
+/* travel-time mini-row */
+.travel-time-row input{min-width:3ch;text-align:center}
+.travel-time-row span{font-weight:bold}
+/* ––––– nicer icons in queue table ––––– */
+.icon-btn{
+  font-size:2.0em;           /* BIGGER = easier tap */
+  line-height:1;
+  text-decoration:none;      /* kill blue underline */
+  color:inherit;             /* inherit current fg */
+  cursor:pointer;
+}

@@ -9,71 +9,134 @@
       <input type="hidden" id="advanced-mode" name="advanced" value="0">
       <input type="hidden" id="manifest-id"  name="manifest_id" value="">
 
+      {# ---------------- Prefill helper ---------------- #}
+      {% set d = draft if draft else {} %}
+      {% set dir_prefill = d.get('direction','outbound') %}
+
       <!-- direction -->
       <label for="dir-out">Aircraft Direction*</label>
       <div class="radio-toggle">
-        <input type="radio" id="dir-out" name="direction" value="outbound" required checked>
+        <input type="radio" id="dir-out" name="direction" value="outbound" required
+               {% if dir_prefill == 'outbound' %}checked{% endif %}>
         <label for="dir-out">Outbound</label>
-        <input type="radio" id="dir-in"  name="direction" value="inbound">
+        <input type="radio" id="dir-in"  name="direction" value="inbound"
+               {% if dir_prefill == 'inbound' %}checked{% endif %}>
         <label for="dir-in">Inbound</label>
       </div>
 
       <!-- tail number + lookup -->
       <label for="tail">Tail Number*</label>
       <div class="lookup-row">
-        <input id="tail" name="tail_number" required style="min-width:10ch">
+      <input id="tail" name="tail_number" required style="min-width:10ch" class="force-upper"
+             value="{{ d.get('tail_number','') }}">
         <button type="button" id="lookup">Lookup Tail</button>
       </div>
 
       <label for="pilot">Pilot Name</label>
-      <input id="pilot" name="pilot_name" style="min-width:10ch">
+      <input id="pilot" name="pilot_name" style="min-width:10ch"
+             value="{{ d.get('pilot_name','') }}">
 
       <label for="pax">PAX #</label>
-      <input id="pax" name="pax_count" placeholder="e.g. 3" style="min-width:10ch">
+      <input id="pax" name="pax_count" placeholder="e.g. 3" style="min-width:10ch"
+             value="{{ d.get('pax_count','') }}">
 
-      <label for="origin">Origin* (ALW or KALW)</label>
-      <input id="origin" name="origin" required style="min-width:10ch">
+      <!-- Origin – hidden when OUTBOUND -->
+      <label id="label-origin" for="origin">Origin* (ALW or KALW)</label>
+      <input id="origin" name="origin" required style="min-width:10ch" class="force-upper"
+             value="{{ d.get('airfield_takeoff','') }}">
 
-      <label id="time-label" for="dep_time">Departure Time (HHMM)*</label>
-      <input id="dep_time" name="dep_time" required style="min-width:10ch">
+      <!-- hidden departure time – server sets this when the record is posted -->
+      <input type="hidden" id="dep_time" name="dep_time">
 
-      <label for="destination">Destination* (BFI or KBFI)</label>
-      <input id="destination" name="destination" required style="min-width:10ch">
-
-      <div id="eta_block">
-        <label for="eta_input">ETA (HHMM)</label>
-        <input id="eta_input" name="eta" style="min-width:10ch">
+      <!-- Travel-time (outbound only) – single instance -->
+      <label id="travel_label" for="travel_h">Travel Time&nbsp;(HH&nbsp;:&nbsp;MM)*</label>
+      <div id="travel_row" class="travel-time-row">
+      {% set t_h = d.get('travel_time','')[:2] %}
+      {% set t_m = d.get('travel_time','')[2:] %}
+      <input id="travel_h" name="travel_h" maxlength="2"
+             value="{{ t_h }}"
+             placeholder="hh" pattern="[0-9]{1,2}" inputmode="numeric">
+        <span>:</span>
+      <input id="travel_m" name="travel_m" maxlength="2"
+             value="{{ t_m }}"
+             placeholder="mm" pattern="[0-9]{1,2}" inputmode="numeric">
       </div>
 
+      <!-- Destination – hidden when INBOUND -->
+      <label id="label-destination" for="destination">Destination* (BFI or KBFI)</label>
+      <input id="destination" name="destination" required style="min-width:10ch" class="force-upper"
+             value="{{ d.get('airfield_landing','') }}">
+
       <label for="cargo_type">Cargo Type</label>
-      <input id="cargo_type" name="cargo_type" style="min-width:10ch">
+      <input id="cargo_type" name="cargo_type" style="min-width:10ch"
+             value="{{ d.get('cargo_type','') }}">
 
       <label for="cargo_weight">Cargo Weight</label>
       <div class="lookup-row">
-        <input id="cargo_weight"
-               name="cargo_weight"
-               placeholder="e.g. 300"
-               style="flex:1; min-width:10ch">
+      <input id="cargo_weight"
+             name="cargo_weight"
+             placeholder="e.g. 300"
+             style="flex:1; min-width:10ch"
+             value="{{ d.get('cargo_weight','') }}">
         <select name="weight_unit" style="min-width:10ch">
           <option value="lbs" selected>lbs</option>
           <option value="kg">kg</option>
         </select>
       </div>
 
-      <!-- Cargo Weight Tools Toggle Buttons -->
-      <div class="cargo-tools-toggle">
-        <button type="button" id="open-cw-tools" title="Cargo Weight Tools">
-          Running Total
-        </button>
-        <button type="button" id="open-adv" title="Advanced Cargo Entry">
-          Adv. Cargo Entry
-        </button>
-      </div>
+      <!-- Cargo / Manifest buttons -->
+      {% if draft %}
+        <div class="cargo-tools-toggle">
+          <button type="button" id="edit-manifest" style="width:100%">
+            ✏️ Edit Cargo Manifest
+          </button>
+        </div>
+      {% else %}
+        <div class="cargo-tools-toggle">
+          <button type="button" id="open-cw-tools" title="Cargo Weight Tools">
+            Running Total
+          </button>
+          <button type="button" id="open-adv" title="Advanced Cargo Entry">
+            Adv. Cargo Entry
+          </button>
+        </div>
+      {% endif %}
 
       <label for="remarks">Remarks</label>
-      <input id="remarks" name="remarks" style="min-width:10ch">
+      <input id="remarks" name="remarks" style="min-width:10ch"
+             value="{{ d.get('remarks','') }}">
 
-      <button type="submit">Save Flight</button>
+      <div class="form-buttons" style="margin-top:1rem; display:flex; gap:0.5rem;">
+        {% if draft %}
+          {# ── edit-draft mode (OUTBOUND-only) ── #}
+          <button id="sendBtn" type="submit"
+                  class="btn-primary"
+                  name="action" value="send"
+                  formaction="{{ url_for('send_queued_flight', qid=d.id) }}">
+            SEND NOW
+          </button>
+          <button id="queueBtn" type="submit"
+                  class="btn-secondary"
+                  name="action" value="queue"
+                  formaction="{{ url_for('edit_queued_flight', qid=d.id) }}">
+            SAVE TO QUEUE
+          </button>
+        {% else %}
+          {# ── brand-new Ramp-Boss entry ── #}
+          <button id="sendBtn" type="submit"
+                  class="btn-primary"
+                  name="action" value="send"
+                  formaction="{{ url_for('ramp_boss') }}">
+            SEND NOW
+          </button>
+          <button id="queueBtn" type="submit"
+                  class="btn-secondary"
+                  name="action" value="queue"
+                  formaction="{{ url_for('queue_flight') }}">
+            Add To Queue
+          </button>
+        {% endif %}
+      </div>
     </form>
 
     <!-- Cargo Weight Tools Panel -->
@@ -171,7 +234,52 @@
 
   <!-- ───────────────── Ramp‑Boss main JS (validation, lookup, CW‑tools) ───────────────── -->
   <script>
-    // Ramp‑Boss form validation
+    /* ───────────────── Prefill when editing a queued-flight draft ───────────────── */
+    {% if draft %}
+    /* server pushed a queued-flight draft ⇒ convert form into edit-mode */
+    const draft = {{ draft|tojson }};
+    document.addEventListener('DOMContentLoaded',()=> {
+
+      /* populate fields */
+      const setVal = (id,val)=>{ if(val) document.getElementById(id).value = val; };
+      setVal('tail',       draft.tail_number);
+      setVal('pilot',      draft.pilot_name);
+      setVal('pax',        draft.pax_count);
+      setVal('origin',     draft.airfield_takeoff);
+      setVal('destination',draft.airfield_landing);
+      setVal('cargo_type', draft.cargo_type);
+      setVal('cargo_weight',draft.cargo_weight);
+      setVal('remarks',    draft.remarks);
+      if(draft.travel_time){
+        setVal('travel_h', draft.travel_time.slice(0,2));
+        setVal('travel_m', draft.travel_time.slice(2,4));
+      }
+      /* fix direction-toggle & resulting UI */
+      document.querySelector(
+        `input[name="direction"][value="${draft.direction}"]`
+      ).checked = true;
+      applyDirUI();
+    });
+    {% endif %}
+
+
+    // Ramp-Boss form validation
+    /* ───────── Local-time helpers (client-side; always browser TZ) ───────── */
+    function nowHHMM () {
+      const d = new Date();
+      return d.getHours().toString().padStart(2,'0') +
+             d.getMinutes().toString().padStart(2,'0');
+    }
+    /* addHHMM("1425","0135") → "1600"  (wraps at 24 h) */
+    function addHHMM (startHHMM, deltaHHMM) {
+      const sh = parseInt(startHHMM.slice(0,2),10);
+      const sm = parseInt(startHHMM.slice(2),10);
+      const dh = parseInt(deltaHHMM.slice(0,2),10);
+      const dm = parseInt(deltaHHMM.slice(2),10);
+      const total = (sh*60 + sm + dh*60 + dm) % 1440;
+      return (Math.floor(total/60)).toString().padStart(2,'0') +
+             (total % 60).toString().padStart(2,'0');
+    }
     function validateRampBoss () {
       document.querySelectorAll('#rb-form .form-error').forEach(el => el.remove());
       const invalid = Array.from(document.querySelectorAll('#rb-form [required]'))
@@ -193,42 +301,151 @@
 
     // shortcuts to DOM nodes
     const form          = document.getElementById('rb-form');
+    /* Is this page editing an existing draft? (server injects null or ID) */
+    const draftId       = {{ draft.id if draft else 'null' }};
     const feedbackBox   = document.getElementById('rb-feedback-container');
+    const isEditDraft   = !!draftId;
     const defaultOrigin = "{{ default_origin }}";
-    const depField      = document.getElementById('dep_time');
-    const originField   = document.getElementById('origin');
-    const destField     = document.getElementById('destination');
-    const dirRadios     = [...document.querySelectorAll('input[name="direction"]')];
-    const labelTime     = document.getElementById('time-label');
-    const etaBlock      = document.getElementById('eta_block');
-    const etaInput      = document.getElementById('eta_input');
+    const depField    = document.getElementById('dep_time');   // hidden
+    const isDraft     = {{ 'true' if draft else 'false' }};
+    const travelHInp  = document.getElementById('travel_h');
+    const travelMInp  = document.getElementById('travel_m');
+    const travelRow   = document.getElementById('travel_row');
+    const travelLabel = document.getElementById('travel_label');
+    const originField = document.getElementById('origin');
+    const destField   = document.getElementById('destination');
+    const dirRadios   = [...document.querySelectorAll('input[name="direction"]')];
+    const queueBtn    = document.getElementById('queueBtn');
+    const sendBtn     = document.getElementById('sendBtn');
 
     function applyDirUI () {
       const dir = dirRadios.find(r => r.checked).value;
-      const now = new Date(),
-            hh  = now.getHours().toString().padStart(2,'0'),
-            mm  = now.getMinutes().toString().padStart(2,'0');
+      /* make travel-time inputs required only when outbound */
+      travelHInp.required = travelMInp.required = (dir === 'outbound');
+      const hhmm = nowHHMM();
 
-      if (dir === 'outbound') {
-        labelTime.textContent  = 'Departure Time (HHMM)*';
-        depField.value         = hh + mm;
-        etaBlock.style.display = '';
-        etaInput.value         = '';
+      /* ── show / hide Origin & Destination depending on dir ───────── */
+      const labOrigin = document.getElementById('label-origin');
+      const labDest   = document.getElementById('label-destination');
+
+      if (dir === 'outbound') {          // Origin never changes for Outbound – hide it
+        originField.style.display = labOrigin.style.display = 'none';
+        destField.style.display   = labDest.style.display   = '';
+        depField.value       = hhmm;
+        travelRow.style.display   = '';
+        travelLabel.style.display = '';
+        if (!isDraft) travelHInp.value = travelMInp.value = '';
         if (!originField.value && defaultOrigin) originField.value = defaultOrigin;
-        destField.value = '';
+        if (!isDraft) destField.value = '';
       } else {
-        labelTime.textContent  = 'Arrival Time (HHMM)*';
-        depField.value         = hh + mm;
-        etaBlock.style.display = 'none';
-        etaInput.value         = '';
+        originField.style.display = labOrigin.style.display = '';
+        destField.style.display   = labDest.style.display   = 'none';
+        depField.value       = hhmm;
+        travelRow.style.display   = 'none';
+        travelLabel.style.display = 'none';
+        if (!isDraft) travelHInp.value = travelMInp.value = '';
         if (!destField.value && defaultOrigin) destField.value = defaultOrigin;
-        originField.value = '';
+        if (!isDraft) originField.value = '';
       }
+
+      /* queue button only for outbound */
+      const outbound = (dir === 'outbound');
+      /* drafts are *always* outbound, but keep logic symmetrical */
+      queueBtn.style.display = outbound ? '' : 'none';
+      sendBtn.textContent    = outbound ? 'SEND NOW' : 'LOG ARRIVAL';
+
     }
     dirRadios.forEach(r => r.addEventListener('change', applyDirUI));
     applyDirUI();
 
-    // Tail‑lookup
+    /* ───────────────── Manifest editing helpers ────────────────────────── */
+    async function loadExistingManifest () {
+      // pass the current session so we can merge in any newly-committed lines
+      const mid = manifestId.value;
+      const url = `/api/queued_manifest/${draftId}` + 
+                  (mid ? `?manifest_id=${encodeURIComponent(mid)}` : '');
+      const resp  = await fetch(url);
+      if (!resp.ok) return;
+      const rows  = await resp.json();
+      rows.forEach(r => {
+        // build a committed chip (NOT pending)
+        const chip = document.createElement('div');
+        chip.className = 'adv-chip';
+        chip.dataset.pending = "0";          // ← committed snapshot row
+        chip.dataset.total     = r.total;
+        chip.dataset.wpu       = r.wpu;
+        chip.dataset.qty       = r.qty;
+        chip.dataset.sanitized = r.sanitized;
+        chip.dataset.cat       = r.category_name;
+        chip.innerHTML = `
+          <span class="chip-content">${r.sanitized}</span>
+          <button class="chip-remove" title="Remove">❌</button><br>
+          <span class="chip-wpu">${r.wpu} lb</span> <span class="chip-qty">×${r.qty}</span><br>
+          <span class="chip-total">= ${r.total} lb</span>
+        `;
+        chip.querySelector('.chip-remove').addEventListener('click', async () => {
+          /* call helper that
+           *  1) compensates inventory
+           *  2) drops the snapshot row
+           */
+          let delResp;
+          try {
+            delResp = await fetch(`/delete_flight_cargo/${r.entry_id}`, {
+              method:'POST',
+              body:  new URLSearchParams({
+                        csrf_token : csrfToken,
+                        manifest_id: manifestId.value      // ↼ tell server the session
+                     })
+            });
+          } catch(_) {}
+
+          /* remember compensator so “Back” can remove it */
+          try {
+            const dj = await delResp.json();
+            if (dj && dj.comp_id) removedIds.push(dj.comp_id);
+          } catch(_){}
+
+          /* ► mark manifest dirty & enable Done */
+          chip.remove();               /* already gone visually */
+          advDirty        = true;
+          advDone.disabled = false;
+
+
+          /* outbound stock may have changed – refresh dropdowns */
+          if (document.body.dataset.advDir === 'outbound') {
+            await fetchInventory();
+            updateSizeOptions(advCat.value, advItem.value);
+          }
+        });
+        advLines.appendChild(chip);
+      });
+      refreshFromDOM();
+      // snapshot chips are real → user should be able to press “Done”
+      if (advLines.childElementCount) advDone.disabled = false;
+    }
+
+    if (isEditDraft){
+      const editManifestBtn = document.getElementById('edit-manifest');
+      if (editManifestBtn) editManifestBtn.addEventListener('click', async () => {
+        // 1️⃣ show the Advanced panel
+        startAdvanced();
+
+        // 2️⃣ remove only the _previously loaded_ (snapshot) chips—
+        //    leave your pending adds/deletes intact
+        advLines
+          .querySelectorAll('.adv-chip[data-pending="0"]')
+          .forEach(chip => chip.remove());
+
+        // 3️⃣ now load exactly one chip per row in flight_cargo
+        await loadExistingManifest();
+      });
+    }
+    else {
+      // no-op if not editing
+
+    }
+
+    // Tail-lookup
     document.getElementById('lookup').addEventListener('click', async () => {
       const tail = form.tail_number.value.trim().toUpperCase();
       if (!tail) return showToast('Enter tail number first!', 'error');
@@ -248,11 +465,18 @@
       if (d.cargo_weight)     form.cargo_weight.value = d.cargo_weight;
     });
 
-    // form submit (AJAX) with airport‐code warning
+   // ────────────────────────────────────────────────────────────────
+   //  FORM SUBMIT (SEND NOW  *or*  ADD TO QUEUE)
+   // ────────────────────────────────────────────────────────────────
+
     form.addEventListener('submit', async e => {
       e.preventDefault();
       // basic required‐field check
       if (!validateRampBoss()) return;
+
+      /* compute where this form will POST _before_ we touch it anywhere else */
+      const targetURL =
+            e.submitter?.getAttribute('formaction') || form.action;
 
       // ── Warn if Destination not in our airport database ──
       const destVal = destField.value.trim().toUpperCase();
@@ -284,13 +508,113 @@
       }
       depField.classList.remove('error');
 
-      const resp = await fetch(window.location.href, {
+      /* ── Time-field / ETA handling ─────────────────────────────────────── */
+      const dir     = document.querySelector('input[name="direction"]:checked').value;
+      const isQueue = (e.submitter?.value === 'queue');
+
+      if (dir === 'outbound') {
+        /* stamp *current* browser time for take-off, *right now* */
+        depField.value = nowHHMM();
+
+        /* ── when we’re inside EDIT-DRAFT mode and targeting
+         *    /send_queued_flight/<id>, also send it as `takeoff_time`
+         *    so the backend sees local-time immediately              ── */
+        if (targetURL.includes('/send_queued_flight')) {
+          let tf = form.querySelector('input[name="takeoff_time"]');
+          if (!tf) {
+            tf = document.createElement('input');
+            tf.type  = 'hidden';
+            tf.name  = 'takeoff_time';
+            form.appendChild(tf);
+          }
+          tf.value = depField.value;
+        }
+
+        /* normalise HH/MM for maths & validation */
+        travelHInp.value = travelHInp.value.padStart(2,'0');
+        travelMInp.value = travelMInp.value.padStart(2,'0');
+
+        if (isQueue) {                      /* Add to Queue → send travel_time */
+        /* ensure hidden <input name="travel_time"> exists *and* is current */
+        const tt = `${travelHInp.value}${travelMInp.value}`;
+        let hid = form.querySelector('input[name="travel_time"]');
+        if (!hid){
+          hid = Object.assign(document.createElement('input'),{
+            type:'hidden', name:'travel_time'
+          });
+          form.appendChild(hid);
+        }
+        hid.value = tt;
+        } else {                                  /* Send Now → compute ETA   */
+          const etaVal = addHHMM(depField.value,
+                                 `${travelHInp.value}${travelMInp.value}`);
+          let etaField = form.querySelector('input[name="eta"]');
+          if (!etaField) {
+            etaField = document.createElement('input');
+            etaField.type = 'hidden';
+            etaField.name = 'eta';
+            form.appendChild(etaField);
+          }
+          etaField.value = etaVal;
+          /* strip any travel_time hidden field so backend never sees it */
+          form.querySelectorAll('input[name="travel_time"]').forEach(el => el.remove());
+        }
+
+        /* hide visible HH/MM boxes from WTForms */
+        travelHInp.disabled = true;
+        travelMInp.disabled = true;
+
+      } else {                                          /* inbound – Log Arrival */
+        let etaField = form.querySelector('input[name="eta"]');
+        if (!etaField) {
+          etaField = document.createElement('input');
+          etaField.type = 'hidden';
+          etaField.name = 'eta';
+          form.appendChild(etaField);
+        }
+        etaField.value = nowHHMM();
+
+        travelHInp.disabled = true;
+        travelMInp.disabled = true;
+      }
+
+      // 2)  finish the manifest (pending → 0)
+      await commitManifest();
+
+
+      // 3)  post the flight (destination URL depends on which button)
+
+      const resp = await fetch(targetURL, {
         method:  'POST',
         headers: { 'X-Requested-With':'XMLHttpRequest' },
         body:    new FormData(form)
       });
+      // ── always re-enable, even if server replied 400/500 ─────────────
+      travelHInp.disabled = false;
+      travelMInp.disabled = false;
       if (!resp.ok) return showToast('Save failed', 'error');
-      const f = await resp.json();
+      /* endpoints now return JSON for XHR; fall back gracefully */
+      let j=null;
+      if (resp.headers.get('content-type')?.includes('json')){
+          j = await resp.json();
+      }
+
+      /* ── If back-end told us where to go, honour it and bail ───────────── */
+      if (j?.redirect){
+          window.location = j.redirect;
+          return;
+      }
+
+      /* legacy / non-JSON branch below */
+      let f = j;   /* keep old var-name for existing table logic */
+
+      /* ── QUEUE branch: simple toast + hard reset ─────────────────── */
+      if (e.submitter?.value === 'queue' && !isEditDraft){
+          showToast('Flight added to queue','success');
+          form.reset(); applyDirUI();
+          travelHInp.value = travelMInp.value = '';
+          return;                     /* skip the outbound “success row” build */
+      }
 
       const allBlank = ['tail_number','airfield_takeoff','airfield_landing',
                         'takeoff_time','eta','cargo_type','cargo_weight','remarks']
@@ -327,6 +651,8 @@
         </table>
       `;
 
+      showToast('Flight sent','success');
+
       // auto‑clear success after 5s so it doesn’t stick around
       setTimeout(() => { feedbackBox.innerHTML = ''; }, 5000);
 
@@ -338,7 +664,13 @@
       cwHistory.innerHTML = '';
       cwTotalEl.textContent = 'Total: 0 lbs';
       cwMinus.disabled = true;
+
+      // chips/manifest cleared – ready for a fresh flight
+      advLines.innerHTML = '';
+      manifestId.value   = '';
     });
+
+
 
     /* ───────────────── Cargo‑Weight mini‑panel ───────────────── */
     const cwPanel   = document.getElementById('cargo-tools-panel');
@@ -359,16 +691,16 @@
       cwHistory.scrollTop = cwHistory.scrollHeight;
     }
 
-    openCwBtn.addEventListener('click', () => {
+    if (openCwBtn) openCwBtn.addEventListener('click', () => {
       document.body.classList.toggle('cw-active');
       cwMinus.disabled = (totalCargo === 0);
     });
-    cwBack.addEventListener('click',   () => document.body.classList.remove('cw-active'));
-    cwApply.addEventListener('click',  () => {
+    if (cwBack)   cwBack.addEventListener('click',   () => document.body.classList.remove('cw-active'));
+    if (cwApply)  cwApply.addEventListener('click',  () => {
       document.getElementById('cargo_weight').value = totalCargo;
       document.body.classList.remove('cw-active');
     });
-    cwPlus.addEventListener('click', () => {
+    if (cwPlus)   cwPlus.addEventListener('click', () => {
       const val = parseFloat(cwChange.value);
       if (isNaN(val)) return showToast('Enter a valid number', 'error');
       const change = Math.ceil(val);
@@ -384,7 +716,7 @@
       cwMinus.disabled = false;
       cwChange.value = '';
     });
-    cwMinus.addEventListener('click', () => {
+    if (cwMinus)  cwMinus.addEventListener('click', () => {
       const val = parseFloat(cwChange.value);
       if (isNaN(val)) return showToast('Enter a valid number', 'error');
       const change = Math.ceil(val);
@@ -404,7 +736,12 @@
 
 <!-- ───────────────── Advanced‑panel JS (poll only while open) ───────────────── -->
 <script>
-  const advBtn     = document.getElementById('open-adv');
+  /* Wire the launcher only after the DOM is ready, so the node is
+     definitely present even when this script executes very early. */
+  document.addEventListener('DOMContentLoaded', () => {
+    const advBtn = document.getElementById('open-adv');
+    if (advBtn) advBtn.addEventListener('click', startAdvanced);
+  });
   const advPanel   = document.getElementById('adv-panel');
   const advBack    = document.getElementById('adv-back');
   const advCat     = document.getElementById('adv-category');
@@ -423,6 +760,9 @@
   const advMode    = document.getElementById('advanced-mode');
   const rbForm     = document.getElementById('rb-form');
   let   pendingIds = [];
+  let   removedIds = [];      /* ids of compensating rows created by deletes */
+  let   snapshot   = null;    /* chip HTML + header fields on panel-open    */
+  let   advDirty   = false;   /* ⇢ NEW: true as soon as user changes chips  */
 
   const csrfToken = document.querySelector('input[name="csrf_token"]').value;
   const showError = msg => showToast(msg, 'error');
@@ -446,7 +786,9 @@
   async function fetchInventory() {
     try {
       const fresh = await fetch(inventoryUrl + "?_=" + Date.now()).then(r => r.json());
-      inventoryAdvancedData.stock_categories = fresh.categories;
+      // Keep BOTH names so whichever the UI asks for is present
+      inventoryAdvancedData.categories       = fresh.categories;   // new
+      inventoryAdvancedData.stock_categories = fresh.categories;   // unchanged
       inventoryAdvancedData.items            = fresh.items;
       inventoryAdvancedData.sizes            = fresh.sizes;
       inventoryAdvancedData.avail            = fresh.avail;
@@ -486,25 +828,52 @@
     }
   }
 
-  function startAdvanced() {
+  /* Main entry-point – now async so we can fetch inventory once if needed */
+  async function startAdvanced() {
     const dir = document.querySelector('input[name="direction"]:checked').value;
-    const mid = ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g,
-      c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c/4).toString(16));
-    manifestId.value = mid;
-    // ── hide any existing “success” row when entering advanced mode
-    document.getElementById('rb-feedback-container').style.display = 'none';
-    advMode.value    = '1';
-    pendingIds       = [];
-    advLines.innerHTML = '';
+    // ── 1) Re-use the session id if we already generated one earlier ──
+    if (!manifestId.value) {
+      manifestId.value = ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g,
+                       c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c/4)
+                         .toString(16));
+      /* first open ⇒ brand-new session ⇒ clear local trackers */
+      pendingIds.length  = 0;
+      removedIds.length  = 0;
+    }
+
+    advDirty = false;                 // always reset the dirty flag
+
+    /* Take a snapshot so “Back” can restore */
+    snapshot = {
+      cargo_type   : document.getElementById('cargo_type').value,
+      cargo_weight : document.getElementById('cargo_weight').value,
+      remarks      : document.getElementById('remarks').value,
+      chipsHTML    : advLines.innerHTML
+    };
+    /* panel just opened → nothing changed yet, so keep “Done” off         */
     advDone.disabled = true;
-    if (!inventoryAdvancedData.all_categories) {
-      return showError('Inventory data not yet loaded.');
+    // use the categories payload from advanced_data; stock_categories may be undefined
+    /* Accept either .categories (old) or .all_categories (new) */
+    let catList = inventoryAdvancedData.categories ||
+                  inventoryAdvancedData.all_categories ||
+                  inventoryAdvancedData.stock_categories;   // new fallback
+
+    /* First visit after a cold page-load?  Grab a fresh snapshot once. */
+    if (!catList) {
+      await fetchInventory();   // populates inventoryAdvancedData in-place
+      catList =
+        inventoryAdvancedData.categories || inventoryAdvancedData.all_categories;
+      if (!catList) {
+        return showError('Inventory data not yet loaded.');
+      }
     }
     const useList = (dir === 'inbound')
-      ? inventoryAdvancedData.all_categories
-      : inventoryAdvancedData.stock_categories;
+      ? catList
+      : (inventoryAdvancedData.stock_categories || catList);
     advCat.innerHTML = '<option value="">Category…</option>' +
       useList.map(c => `<option value="${c.id}">${c.display_name}</option>`).join('');
+    /* clear “last category” helper at the start of every new manifest */
+    window._lastCatName = '';
     advDirOut.checked = (dir === 'outbound');
     advDirIn.checked  = (dir === 'inbound');
     applyAdvDirUI(dir);
@@ -512,11 +881,11 @@
     advPanel.style.display = 'block';
     startPolling();
   }
-  document.getElementById('open-adv').addEventListener('click', startAdvanced);
 
   advBack.addEventListener('click', async () => {
-    // attempt to clean up any pending lines
-    for (const eid of pendingIds) {
+    /* ── undo *all* provisional DB rows (adds & deletes) ── */
+    /* Back = silent rollback (no compensators) */
+    for (const eid of [...pendingIds, ...removedIds]) {
       try {
         await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
           method: 'POST',
@@ -524,13 +893,32 @@
             csrf_token:  csrfToken,
             action:      'delete',
             manifest_id: manifestId.value,
-            entry_id:    eid
+            entry_id:    eid,
+            purge:       '1'      /* ← also a hard delete */
           })
         });
       } catch {}
     }
-    pendingIds = [];
+    pendingIds.length = 0;
+    removedIds.length = 0;
+
+    /* all chips are now committed, so clear the pending flag */
+    advLines.querySelectorAll('.adv-chip[data-pending="1"]')
+            .forEach(c => c.dataset.pending = "0");
+
+    /* restore snapshot of header fields + chips */
+    if (snapshot){
+      document.getElementById('cargo_type').value   = snapshot.cargo_type;
+      document.getElementById('cargo_weight').value = snapshot.cargo_weight;
+      document.getElementById('remarks').value      = snapshot.remarks;
+      advLines.innerHTML = snapshot.chipsHTML;
+      refreshFromDOM();
+      window.updateAdvTotal(0);
+      snapshot = null;
+    }
     advMode.value = '0';
+    advDirty      = false;
+    advDone.disabled = true;          /* clean slate again                  */
     advPanel.style.display = '';
     rbForm.style.display   = '';
     stopPolling();
@@ -543,10 +931,16 @@
     applyDirUI();
     applyAdvDirUI(dir);
     const useList = (dir === 'inbound')
-      ? inventoryAdvancedData.all_categories
-      : inventoryAdvancedData.stock_categories;
+      ? (inventoryAdvancedData.categories ||
+         inventoryAdvancedData.all_categories ||
+         inventoryAdvancedData.stock_categories)                     // fallback added
+      : (inventoryAdvancedData.stock_categories ||
+         inventoryAdvancedData.categories       ||
+         inventoryAdvancedData.all_categories);
     advCat.innerHTML = '<option value="">Category…</option>' +
       useList.map(c => `<option value="${c.id}">${c.display_name}</option>`).join('');
+    /* clear “last category” helper at the start of every new manifest */
+    window._lastCatName = '';
   }
   advDirOut.addEventListener('change', syncFromAdvToggle);
   advDirIn .addEventListener('change', syncFromAdvToggle);
@@ -557,6 +951,9 @@
   );
 
   advCat.addEventListener('change', () => {
+    /* remember the pretty label so the next chip can store it */
+    window._lastCatName =
+      advCat.options[advCat.selectedIndex]?.textContent || '';
     const cid = advCat.value;
     if (document.body.dataset.advDir === 'outbound') {
       advItem.disabled = false;
@@ -617,32 +1014,45 @@
     pendingIds.push(j.entry_id);
     const chip = document.createElement('div');
     chip.className = 'adv-chip';
+    chip.dataset.pending = "1";              // ← provisional (pending) row
+    chip.setAttribute('data-total',     j.total);
+    chip.setAttribute('data-wpu',       j.wpu);
+    chip.setAttribute('data-qty',       j.qty);
+    chip.setAttribute('data-sanitized', j.sanitized);
+    chip.setAttribute('data-cat',       (window._lastCatName||''));
     chip.innerHTML = `
       <span class="chip-content">${j.sanitized}</span>
       <button class="chip-remove" title="Remove">❌</button><br>
-      <span class="chip-wpu">${j.wpu} lb</span> <span class="chip-qty">×${j.qty}</span><br>
-      <span class="chip-total">= ${j.total} lb</span>
+      <span class="chip-wpu">${j.wpu} lb</span> <span class="chip-qty">×${j.qty}</span><br>
+      <span class="chip-total">= ${j.total} lb</span>
     `;
 
-
-    // added so sumFromDOM() can pick it up in O(N) time:
-    chip.setAttribute('data-total', j.total);
-
     chip.querySelector('.chip-remove').addEventListener('click', async () => {
+      const isPending = chip.dataset.pending === '1';
+      let respDel, dj=null;
       try {
-        await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
-          method: 'POST',
-          body: new URLSearchParams({
-            csrf_token:  csrfToken,
-            action:      'delete',
-            manifest_id: manifestId.value,
-            entry_id:    j.entry_id
-          })
+        const params = new URLSearchParams({
+          csrf_token : csrfToken,
+          action     : 'delete',
+          manifest_id: manifestId.value,
+          entry_id   : j.entry_id
         });
-      } catch {}
+        if (isPending) params.set('purge', '1');   // hard-delete only for provisional rows
+        respDel = await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
+          method: 'POST',
+          body  : params
+        });
+      } catch (_) {}
+
+      /* if this was a soft-delete the backend returns {comp_id:…} */
+      try {
+        dj = await respDel.json();
+        if (dj && dj.comp_id) removedIds.push(dj.comp_id);
+      } catch(_) {}
+
       chip.remove();
       pendingIds = pendingIds.filter(id => id !== j.entry_id);
-      advDone.disabled = !pendingIds.length;
+      advDone.disabled = !(pendingIds.length || removedIds.length || advDirty);
 
       // refresh outbound stock & sizes
       if (document.body.dataset.advDir === 'outbound') {
@@ -658,6 +1068,11 @@
     });
 
     advLines.append(chip);
+
+    /* ► any add = dirty, so allow Done */
+    advDirty        = true;
+    advDone.disabled = false;
+
 
     // ─── IMMEDIATELY refresh stock & rebuild size dropdown ─────────────────
     if (dirNow === 'outbound') {
@@ -675,8 +1090,10 @@
     rmf.value += `${j.sanitized} ${j.wpu} lb×${j.qty}; `;
 
     // auto‑fill Cargo Type
-    const catName = inventoryAdvancedData
-      .all_categories.find(c => String(c.id) === advCat.value)
+    const catName = (inventoryAdvancedData.all_categories
+                     || inventoryAdvancedData.categories
+                     || [])
+      .find(c => String(c.id) === advCat.value)
       ?.display_name || advCat.value;
     window._rbCategories = window._rbCategories || new Set();
     window._rbCategories.add(catName);
@@ -686,8 +1103,76 @@
     advQty.value = '';
   });
 
-  // commit logic
+  // “Done” simply hides the panel – leave rows pending until Send/Queue
   advDone.addEventListener('click', async () => {
+    /* 1️⃣ promote any newly-added rows from pending→committed */
+    if (pendingIds.length){
+      await fetch("{{ url_for('inventory.inventory_advance_line') }}",{
+        method:'POST',
+        body: new URLSearchParams({
+          csrf_token : csrfToken,
+          action     : 'commit',
+          manifest_id: manifestId.value
+        })
+      });
+      pendingIds.length = 0;
+
+      /* after we promote rows, every chip in the DOM is now committed */
+      advLines.querySelectorAll('.adv-chip[data-pending="1"]')
+              .forEach(chip => chip.dataset.pending = "0");
+    }
+
+    /* 1 b️⃣  commit all *compensating* delete rows we generated */
+    if (removedIds.length){
+      await fetch("{{ url_for('inventory.inventory_advance_line') }}",{
+        method:'POST',
+        body: new URLSearchParams({
+          csrf_token : csrfToken,
+          action     : 'commit',
+          manifest_id: manifestId.value
+        })
+      });
+    }
+    removedIds.length = 0;
+
+    /* 2️⃣ rebuild header fields (remarks / cargo_type / weight) */
+    const chips = [...advLines.querySelectorAll('.adv-chip')];
+    const total = chips.reduce((s,c)=> s + (+c.dataset.total||0), 0);
+
+    document.getElementById('cargo_weight').value = total;
+
+    const cats  = new Set(chips.map(c=> c.dataset.cat || ''));
+    const cargoTypeField = document.getElementById('cargo_type');
+    const remarksField   = document.getElementById('remarks');
+
+    if (chips.length) {
+      /* ── at least one chip remains ── */
+      cargoTypeField.value =
+        (cats.size === 1 ? [...cats][0] : 'Mixed');
+
+      remarksField.value =
+        chips.map(c =>
+          `${c.dataset.sanitized} ${c.dataset.wpu} lb×${c.dataset.qty}`)
+             .join('; ') + ';';
+    } else {
+      /* ── manifest now empty ── */
+      cargoTypeField.value = '';
+      remarksField.value   = '';
+    }
+
+    /* 3️⃣ hide panel */
+    snapshot   = null;
+    advDirty   = false;
+    /* Done has actually saved changes, so disable only if NOTHING left */
+    advDone.disabled = !(pendingIds.length || removedIds.length);
+    advPanel.style.display = '';
+    rbForm.style.display   = '';
+    stopPolling();
+  });
+
+  /* helper: commit all pending rows for this manifest */
+  async function commitManifest() {
+    if (!pendingIds.length && !removedIds.length) return; /* nothing to do */
     try {
       await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
         method:'POST',
@@ -697,14 +1182,21 @@
           manifest_id: manifestId.value
         })
       });
+      pendingIds.length = 0;
+      removedIds.length = 0;
+      advDirty          = false;
     } catch {
-      return showError('Network error committing manifest.');
+      showToast('Network error committing manifest.', 'error');
+      throw new Error('commit-failed');
     }
-    advPanel.style.display = '';
-    rbForm.style.display   = '';
-    stopPolling();
-  });
+  }
 </script>
+
+<style>
+  .travel-time-row{display:flex;gap:4px;align-items:center}
+  .travel-time-row input{flex:1 1 0;min-width:3ch;text-align:center}
+  .travel-time-row span{font-weight:bold}
+</style>
 
   {{ super() }}
   <style>
@@ -819,6 +1311,8 @@
 
     // Optional global in case other scripts want to push an update explicitly.
     window.updateAdvTotal = setTotal;
+    // expose for use in loadExistingManifest()
+    window.refreshFromDOM = refreshFromDOM;
   })();
   </script>
 

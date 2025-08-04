@@ -13,6 +13,7 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       {% for field,label in [
             ('direction','Direction'),
+            ('tail_number','Tail Number'),
             ('pilot_name','Pilot Name'),
             ('pax_count','PAX #'),
             ('airfield_takeoff','Origin'),
@@ -38,6 +39,7 @@
           <label for="{{ field }}">{{ label }}</label>
           <input id="{{ field }}" name="{{ field }}"
                  {% if field=='cargo_weight' %}style="min-width:12ch"{% endif %}
+                 class="{% if field in ['tail_number','airfield_takeoff','airfield_landing'] %}force-upper{% endif %}"
                  value="{{ flight.get(field,'') }}">
         {% endif %}
       {% endfor %}

@@ -55,6 +55,8 @@
          class="{% if active=='radio' %}active{% endif %}">Radio</a>
       <a href="{{ url_for('ramp_boss') }}"
          class="{% if active=='ramp_boss' %}active{% endif %}">Ramp Boss</a>
+      <a href="{{ url_for('queued_flights') }}"
+         class="{% if active=='queued_flights' %}active{% endif %}">Ramp Ops</a>
       <a href="{{ url_for('inventory.inventory_overview') }}"
          class="{% if active=='inventory' %}active{% endif %}">Inventory</a>
       <a href="{{ url_for('preferences') }}"
@@ -241,6 +243,19 @@ if (typeof window.showToast !== 'function') {
   });
   window.onbeforeprint = () => _togglePrintDetails(true);
   window.onafterprint  = () => _togglePrintDetails(false);
+</script>
+
+<script>
+
+// Apply to any <input class="force-upper">  (Ramp-Boss, Edit-Flight, Queue-edit)
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('input.force-upper').forEach(inp => {
+    const up = () => { inp.value = inp.value.toUpperCase(); };
+    inp.addEventListener('input', up);
+    inp.addEventListener('blur',  up);
+  });
+});
+
 </script>
 
 {% block scripts %}{% endblock %}

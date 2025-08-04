@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Queued Flights – Aircraft Ops{% endblock %}
+
+{% block content %}
+  <h2>Queued Flights</h2>
+  {% if queued %}
+    <table class="full-bleed">
+      <thead>
+        <tr>
+          <th>ID / ✏️ / 🗑</th><th>Dir</th><th>Tail</th><th>To</th>
+          <th>Travel Time</th><th>Type</th><th>Remarks</th><th>Queued At</th><th>Send</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for q in queued %}
+        <tr>
+          <td>
+            {{ q.id }}
+            <a href="{{ url_for('edit_queued_flight', qid=q.id) }}"
+               class="icon-btn" title="Edit">✏️</a>
+            <a href="{{ url_for('delete_queued_flight', qid=q.id) }}"
+               class="icon-btn"
+               onclick="return confirm('Delete draft {{q.id}} ?')"
+               title="Delete">🗑</a>
+          </td>
+          <td>{{ q.direction }}</td>
+          <td>{{ q.tail_number }}</td>
+          <td>{{ q['airfield_landing'] or '—' }}</td>
+          <td>
+            {% if q.travel_time %}
+              {{ q.travel_time[:2] }}:{{ q.travel_time[2:] }}
+            {% endif %}
+          </td>
+          <td>{{ q.cargo_type }}</td>
+          <td>{{ q.remarks }}</td>
+          <td>{{ q.created_at }}</td>
+          <td>
+            {# Send-Now form gets travel-time so JS can compute ETA locally #}
+            <form method="post"
+                  class="q-send-form"
+                  data-tt="{{ q.travel_time or '' }}"
+                  action="{{ url_for('send_queued_flight', qid=q.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit">Send</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p>No flights are currently queued.</p>
+  {% endif %}
+
+  <script>
+    // helper utilities (same math used in Ramp-Boss)
+    function nowHHMM () {
+      const d = new Date();
+      return d.getHours().toString().padStart(2,'0') +
+             d.getMinutes().toString().padStart(2,'0');
+    }
+    function addHHMM (start, delta){          // “1425” + “0135” => “1600”
+      const sh = +start.slice(0,2), sm=+start.slice(2);
+      const dh = +delta.slice(0,2), dm=+delta.slice(2);
+      const tot = (sh*60+sm + dh*60+dm) % 1440;
+      return String(Math.floor(tot/60)).padStart(2,'0') +
+             String(tot%60).padStart(2,'0');
+    }
+
+    // attach once DOM is ready
+    document.addEventListener('DOMContentLoaded',()=>{
+      document.querySelectorAll('form.q-send-form').forEach(f=>{
+        f.addEventListener('submit', e=>{
+          // browser-local take-off
+          const dep   = nowHHMM();
+          const tt    = f.dataset.tt || '';
+          const eta   = tt.length===4 ? addHHMM(dep, tt) : '';
+          // inject hidden fields
+          ['takeoff_time', 'eta'].forEach((n,i)=>{
+            const v = i===0?dep:eta;
+            if(!v) return;
+            const inp = document.createElement('input');
+            inp.type='hidden'; inp.name=n; inp.value=v;
+            f.appendChild(inp);
+          });
+        }, {once:true});   // run only on first click
+      });
+    });
+  </script>
+{% endblock %}
