@@ -4,12 +4,12 @@
 {% block content %}
 <div class="page-header-bar">
   <span class="page-title">
-  <button type="button"
-          class="print-button"
-          onclick="window.print()" style="margin-right:1rem;">🖨️ Print</button>
+    <button type="button"
+            class="print-button"
+            onclick="window.print()"
+            style="margin-right:1rem;">🖨️ Print</button>
     Aircraft Ops Dashboard
     (Hosted at: {{ mdns_name or '---' }}:5150 – {{ host_ip or '---' }}:5150)
-
   </span>
   <span id="clock" class="clock">00:00:00</span>
 
@@ -49,19 +49,21 @@
   </form>
 </div>
 
-{% if tail_filter or airport_filter %}
-  <div class="filter-banner">
-    <strong>⚠️ Filtered view:</strong>
-    {% if tail_filter %}
-      <span class="filter-tag">Tail: {{ tail_filter }}</span>
-    {% endif %}
-    {% if airport_filter %}
-      <span class="filter-tag">Airport: {{ airport_filter }}</span>
-    {% endif %}
-  </div>
-{% endif %}
+<div id="dashboard-container" class="{% if tail_filter or airport_filter %}filtered{% endif %}">
+  {% if tail_filter or airport_filter %}
+    <div id="filter-banner" class="filter-banner">
+      <strong>⚠️ Filtered view:</strong>
+      {% if tail_filter %}
+        <span class="filter-tag">Tail: {{ tail_filter }}</span>
+      {% endif %}
+      {% if airport_filter %}
+        <span class="filter-tag">Airport: {{ airport_filter }}</span>
+      {% endif %}
+    </div>
+  {% endif %}
 
-<div id="dashboard-table"></div>
+  <div id="dashboard-table"></div>
+</div>
 
 <script>
   async function refreshDashboard(){
@@ -79,6 +81,17 @@
   // initial + every 30s
   refreshDashboard();
   setInterval(refreshDashboard, 30000);
+
+  // only run if the banner is present
+  const banner = document.getElementById('filter-banner');
+  if (banner) {
+    // every 10 seconds, give it a quick wiggle
+    setInterval(() => {
+      banner.classList.add('wiggle');
+      // remove class after animation ends so it can retrigger next time
+      setTimeout(() => banner.classList.remove('wiggle'), 500);
+    }, 10000);
+  }
 
   function updateClock(){
     const now = new Date();
@@ -126,4 +139,3 @@
   });
 </script>
 {% endblock %}
-

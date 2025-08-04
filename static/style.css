@@ -858,26 +858,36 @@ table.wg-radio-table tr.read { opacity: .8; }
   color:inherit;             /* inherit current fg */
   cursor:pointer;
 }
-/* Banner container */
+/* 1️⃣ Banner styling */
 .filter-banner {
-  background-color: #fff3cd;    /* light yellow */
-  border:       1px solid #ffeeba;
-  border-radius: 4px;
-  color:         #856404;       /* dark amber text */
-  padding:       0.5rem;
-  margin-bottom: 0.5rem;
-  font-weight:   bold;
-  display:       flex;
-  align-items:   center;
-  gap:           0.5rem;
+  background: #00B8D8;            /* bright teal */
+  color: white;
+  text-transform: uppercase;
+  font-size: 1.2rem;             /* larger text */
+  font-weight: bold;
+  padding: 1rem 0;               /* taller banner */
+  text-align: center;
+  border-radius: 4px 4px 0 0;    /* round top corners if you like */
+  position: relative;            /* for the wiggle */
+  z-index: 10;
 }
 
-/* Individual filter labels */
-.filter-tag {
-  background-color: #e2e3e5;    /* light gray */
-  color:             #383d41;   /* dark gray */
-  padding:           0.2rem 0.5rem;
-  border-radius:     3px;
-  font-weight:       normal;
-  font-size:         0.9em;
+/* 2️⃣ Table border */
+#dashboard-container.filtered table {
+  border: 4px solid #00B8D8;     /* same teal */
+  border-collapse: collapse;     /* or your existing style */
+}
+
+/* 3️⃣ Wiggle keyframes */
+@keyframes wiggle {
+  0%   { transform: rotate(0deg);    }
+  25%  { transform: rotate(5deg);    }
+  50%  { transform: rotate(0deg);    }
+  75%  { transform: rotate(-5deg);   }
+  100% { transform: rotate(0deg);    }
+}
+
+/* 4️⃣ Wiggle trigger class */
+.filter-banner.wiggle {
+  animation: wiggle 0.13s ease-in-out;
 }
