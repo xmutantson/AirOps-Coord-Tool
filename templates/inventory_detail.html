@@ -74,7 +74,7 @@
         </select>
 
         <!-- unit toggle (inbound only), capped width -->
-        <select id="weight_unit" name="weight_unit" style="max-width:10ch;">
+        <select id="weight_unit" name="weight_unit" tabindex="-1" style="max-width:10ch;">
           <option value="lbs"
                   {% if request.form.get('weight_unit')=='lbs' or inv_weight_unit=='lbs' %}
                     selected{% endif %}>
@@ -280,6 +280,9 @@
           updateMode();
           fixFieldEnabling();
           await loadInventoryDetail();
+          // after saving, return focus to the first input
+          if (prevDir === 'in') nameTxt.focus(); else qtyFld.focus();
+
         } else {
           let err = { message: 'Save failed' };
           try { err = await resp.json(); } catch (_) {}

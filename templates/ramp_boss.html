@@ -78,7 +78,7 @@
              placeholder="e.g. 300"
              style="flex:1; min-width:10ch"
              value="{{ d.get('cargo_weight','') }}">
-        <select name="weight_unit" style="min-width:10ch">
+        <select name="weight_unit" <select name="weight_unit" tabindex="-1" style="min-width:10ch">  style="min-width:10ch">
           <option value="lbs" selected>lbs</option>
           <option value="kg">kg</option>
         </select>
