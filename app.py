@@ -1385,21 +1385,20 @@ def airport_aliases(code: str) -> list:
     rows = dict_rows(
         "SELECT ident, icao_code, iata_code, gps_code, local_code "
         "FROM airports "
-        "WHERE ident = ? OR icao_code = ? OR iata_code = ? OR gps_code = ? OR local_code = ? "
-        "LIMIT 1",
+        "WHERE ident = ? OR icao_code = ? OR iata_code = ? OR gps_code = ? OR local_code = ? ",
         (c, c, c, c, c)
     )
     if not rows:
         return [c]
-    row = rows[0]
-    aliases = {
-        row.get('ident'),
-        row.get('icao_code'),
-        row.get('iata_code'),
-        row.get('gps_code'),
-        row.get('local_code'),
-    }
-    # drop None/empty, uppercase
+    aliases = set()
+    for row in rows:
+        aliases |= {
+            row.get('ident'),
+            row.get('icao_code'),
+            row.get('iata_code'),
+            row.get('gps_code'),
+            row.get('local_code'),
+        }
     return [a.upper() for a in aliases if a]
 
 
