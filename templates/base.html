@@ -49,15 +49,23 @@
 {% if active not in ['login','setup'] %}
   <header>
     <nav class="main-nav">
+      <a href="{{ url_for('supervisor') }}"
+         data-tab="supervisor"
+         class="{% if active=='supervisor' %}active{% endif %}">Airport Ops</a>
       <a href="{{ url_for('dashboard') }}"
+         data-tab="dashboard"
          class="{% if active=='dashboard' %}active{% endif %}">Dashboard</a>
       <a href="{{ url_for('radio') }}"
+         data-tab="radio"
          class="{% if active=='radio' %}active{% endif %}">Radio</a>
       <a href="{{ url_for('ramp_boss') }}"
+         data-tab="ramp_boss"
          class="{% if active=='ramp_boss' %}active{% endif %}">Ramp Boss</a>
       <a href="{{ url_for('queued_flights') }}"
+         data-tab="queued_flights"
          class="{% if active=='queued_flights' %}active{% endif %}">Ramp Ops</a>
       <a href="{{ url_for('inventory.inventory_overview') }}"
+         data-tab="inventory"
          class="{% if active=='inventory' %}active{% endif %}">Inventory</a>
       <a href="{{ url_for('preferences') }}"
          class="{% if active=='preferences' %}active{% endif %}">Preferences</a>
@@ -75,6 +83,18 @@
            class="{% if active=='admin' %}active{% endif %}">Admin</a>
       {% endif %}
     </nav>
+    <div class="hamburger-container">
+      <!-- Hamburger menu for navbar preferences -->
+      <button id="nav-hamburger" aria-label="Customize Navbar">☰</button>
+      <div id="nav-dropdown">
+        <div>Navbar Tabs</div>
+        <label><input type="checkbox" data-toggle-tab="supervisor" checked> Airport Ops</label><br>
+        <label><input type="checkbox" data-toggle-tab="radio" checked> Radio</label><br>
+        <label><input type="checkbox" data-toggle-tab="ramp_boss" checked> Ramp Boss</label><br>
+        <label><input type="checkbox" data-toggle-tab="queued_flights" checked> Ramp Ops</label><br>
+        <label><input type="checkbox" data-toggle-tab="inventory" checked> Inventory</label><br>
+      </div>
+    </div>
   </header>
 {% endif %}
 
@@ -256,6 +276,54 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
+</script>
+
+<script>
+// --- Hamburger navbar menu logic ---
+const hamburger = document.getElementById('nav-hamburger');
+const dropdown = document.getElementById('nav-dropdown');
+const tabNames = ['supervisor','radio','ramp_boss','queued_flights','inventory'];
+const storageKey = 'navTabPrefs_v1';
+
+// Show/hide dropdown
+hamburger.addEventListener('click', e => {
+  dropdown.style.display = dropdown.style.display === 'block' ? 'none' : 'block';
+  e.stopPropagation();
+});
+document.addEventListener('click', e => {
+  if (!dropdown.contains(e.target) && e.target !== hamburger)
+    dropdown.style.display = 'none';
+});
+
+// Load tab prefs from localStorage
+function loadTabPrefs(){
+  let prefs = {};
+  try { prefs = JSON.parse(localStorage.getItem(storageKey) || '{}'); } catch {}
+  tabNames.forEach(tab => {
+    const checked = prefs[tab] !== false; // default ON
+    document.querySelectorAll(`[data-toggle-tab="${tab}"]`).forEach(box => box.checked = checked);
+    document.querySelectorAll(`[data-tab="${tab}"]`).forEach(a => a.style.display = checked ? '' : 'none');
+  });
+}
+
+// Save tab prefs to localStorage
+function saveTabPrefs(){
+  let prefs = {};
+  tabNames.forEach(tab => {
+    const checked = document.querySelector(`[data-toggle-tab="${tab}"]`).checked;
+    prefs[tab] = checked;
+    document.querySelectorAll(`[data-tab="${tab}"]`).forEach(a => a.style.display = checked ? '' : 'none');
+  });
+  localStorage.setItem(storageKey, JSON.stringify(prefs));
+}
+
+// Update on checkbox click
+tabNames.forEach(tab => {
+  document.querySelector(`[data-toggle-tab="${tab}"]`).addEventListener('change', saveTabPrefs);
+});
+
+// Initialize at page load
+document.addEventListener('DOMContentLoaded', loadTabPrefs);
 </script>
 
 {% block scripts %}{% endblock %}

@@ -119,14 +119,15 @@
   <!-- ── Data Management ────────────────────────────────── -->
   <hr>
   <h3>Data Management</h3>
-  <form style="display:inline" action="{{ url_for('export_csv') }}" method="GET">
-    <button>Export CSV</button>
+  <form style="display:inline" action="{{ url_for('export_all_csv') }}" method="GET">
+    <button>Export All CSVs</button>
   </form>
-  <form style="display:inline" action="{{ url_for('import_csv') }}" method="POST" enctype="multipart/form-data">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input type="file" name="csv_file" accept=".csv" required>
-    <button>Import CSV</button>
-  </form>
+  {# importer disabled: use local DB functions instead #}
+  {# <form style="display:inline" action="{{ url_for('import_csv') }}" method="POST" enctype="multipart/form-data">
+       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+       <input type="file" name="csv_file" accept=".csv" required>
+       <button>Import CSV</button>
+     </form> #}
   <br><br>
   <form method="POST"
         action="{{ url_for('reset_db') }}"

@@ -1,0 +1,47 @@
+<h3 style="text-align:center; margin-top:0; margin-bottom:1rem;">Priority Flights</h3>
+<table>
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Tail #</th>
+      <th>Status</th>
+      {% if enable_1090_distances %}
+      <th>Dist ({{ distance_unit }})</th>
+      {% endif %}
+      <th>Route</th>
+      <th>Dep</th>
+      <th>Arr</th>
+      <th>Cargo</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for f in flights %}
+    <tr{% if f.is_ramp_entry and f.sent == 0 %} class="yellow-border"{% endif %}>
+      <td>{{ f.id }}</td>
+      <td>{{ f.tail_number }}</td>
+      <td>
+        {% if f.complete %}
+          🛬 Landed
+        {% else %}
+          ✈️ In-Flight
+        {% endif %}
+      </td>
+      {% if enable_1090_distances %}
+        <td{% if f.distance_stale %} style="opacity:0.5"{% endif %}>
+          {{ f.distance or '' }}
+        </td>
+      {% endif %}
+      <td>
+        {{ f.airfield_takeoff or '???' }}
+        <span style="font-weight:bold;">→</span>
+        {{ f.airfield_landing or '???' }}
+      </td>
+      <td>{{ f.departure or 'TBD' }}</td>
+      <td>{{ f.arrival   or 'TBD' }}</td>
+      <td>{{ f.cargo_weight or 'TBD' }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="{{ 8 + (1 if enable_1090_distances else 0) }}" class="muted">No recent flights.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>

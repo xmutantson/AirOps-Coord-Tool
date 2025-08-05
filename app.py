@@ -38,7 +38,7 @@ from flask_wtf import CSRFProtect
 from flask_wtf.csrf import generate_csrf, CSRFError
 from markupsafe import escape
 
-import sqlite3, csv, io, re, os, json
+import sqlite3, csv, io, re, os, json, zipfile
 from datetime import datetime, timedelta
 import threading, time, socket, math
 from urllib.request import urlopen
@@ -653,6 +653,16 @@ def init_db():
             timestamp        TEXT    NOT NULL,
             source           TEXT    NOT NULL DEFAULT 'inventory',
             FOREIGN KEY(category_id) REFERENCES inventory_categories(id)
+          )
+        """)
+        c.execute("""
+          CREATE TABLE IF NOT EXISTS outgoing_messages (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            flight_id      INTEGER NOT NULL,
+            operator_call  TEXT    NOT NULL,
+            timestamp      TEXT    NOT NULL,
+            subject        TEXT    NOT NULL,
+            body           TEXT    NOT NULL
           )
         """)
         # ───────────────────── Wargame Mode schema ─────────────────────
@@ -3608,14 +3618,55 @@ def mark_sent(fid=None, flight_id=None):
     now_ts   = datetime.utcnow().isoformat()
 
     with sqlite3.connect(DB_FILE) as c:
-        before = dict_rows("SELECT * FROM flights WHERE id=?", (fid,))[0]
+        # fetch flight + previous sent flag
+        before   = dict_rows("SELECT * FROM flights WHERE id=?", (fid,))[0]
         prev_sent = int(before.get('sent') or 0)
         before['operator_call'] = callsign
+        # count prior messages by this operator → message number
+        cnt = c.execute(
+            "SELECT COUNT(*) FROM flight_history WHERE json_extract(data,'$.operator_call') = ?",
+            (callsign,)
+        ).fetchone()[0]
 
         c.execute("""
             INSERT INTO flight_history(flight_id, timestamp, data)
             VALUES (?,?,?)
         """, (fid, now_ts, json.dumps(before)))
+        # now snapshot the outgoing Winlink message
+        include_test = request.cookies.get('include_test','yes') == 'yes'
+        # build body exactly as radio_detail()
+        lines = []
+        if include_test:
+            lines.append("**** TEST MESSAGE ONLY  (if reporting on an actual flight, delete this line). ****")
+        lines.append(f"{callsign} message number {cnt+1:03}.")
+        lines.append("")
+        lines.append(f"Aircraft {before['tail_number']}:")
+        lines.append(f"  Cargo Type(s) ................. {before.get('cargo_type','none')}")
+        lines.append(f"  Total Weight of the Cargo ..... {before.get('cargo_weight','none')}")
+        lines.append("")
+        lines.append("Additional notes/comments:")
+        lines.append(f"  {before.get('remarks','')}")
+        lines.append("")
+        lines.append("{DART Aircraft Takeoff Report, rev. 2024-05-14}")
+        body = "\n".join(lines)
+        # build subject exactly as radio_detail()
+        if before.get('direction') == 'inbound':
+            subject = (
+                f"Air Ops: {before['tail_number']} | "
+                f"{before['airfield_takeoff']} to {before['airfield_landing']} | "
+                f"Landed {before['eta'] or '----'}"
+            )
+        else:
+            subject = (
+                f"Air Ops: {before['tail_number']} | "
+                f"{before['airfield_takeoff']} to {before['airfield_landing']} | "
+                f"took off {before['takeoff_time'] or '----'} | "
+                f"ETA {before['eta'] or '----'}"
+            )
+        c.execute("""
+            INSERT INTO outgoing_messages(flight_id, operator_call, timestamp, subject, body)
+            VALUES (?,?,?,?,?)
+        """, (fid, callsign, now_ts, subject, body))
 
         # also stamp the time so background acks can key off it
         c.execute("UPDATE flights SET sent = 1, sent_time = ? WHERE id = ?", (now_ts, fid))
@@ -4773,6 +4824,85 @@ def export_csv():
         download_name='incoming_messages.csv'
     )
 
+@app.route('/export_all_csv')
+def export_all_csv():
+    """Download incoming, outgoing, and inventory logs as a ZIP."""
+    mem_zip = io.BytesIO()
+    with zipfile.ZipFile(mem_zip, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
+        conn = sqlite3.connect(DB_FILE)
+
+        # --- communications.csv (mixed inbound + outbound) ---
+        buf = io.StringIO(); cw = csv.writer(buf)
+        cw.writerow([
+            'Timestamp','Direction','Contact','Tail#',
+            'From','To','T/O','ETA','Cargo','Weight',
+            'Subject','Body'
+        ])
+        query = """
+          SELECT timestamp,
+                 'Inbound'    AS direction,
+                 sender       AS contact,
+                 tail_number,
+                 airfield_takeoff  AS origin,
+                 airfield_landing  AS destination,
+                 takeoff_time      AS takeoff,
+                 eta,
+                 cargo_type        AS cargo,
+                 cargo_weight      AS weight,
+                 subject,
+                 body
+            FROM incoming_messages
+          UNION ALL
+          SELECT om.timestamp,
+                 'Outbound'   AS direction,
+                 om.operator_call   AS contact,
+                 f.tail_number,
+                 f.airfield_takeoff AS origin,
+                 f.airfield_landing AS destination,
+                 f.takeoff_time     AS takeoff,
+                 f.eta,
+                 f.cargo_type       AS cargo,
+                 f.cargo_weight     AS weight,
+                 om.subject,
+                 om.body
+            FROM outgoing_messages om
+            JOIN flights f ON f.id = om.flight_id
+          ORDER BY timestamp
+        """
+        for row in conn.execute(query):
+            cw.writerow([
+                (s.replace('\r',' ').replace('\n',' ')
+                  if isinstance(s, str) else s)
+                for s in row
+            ])
+        zf.writestr('communications.csv', buf.getvalue())
+
+        # --- inventory_entries.csv ---
+        buf = io.StringIO(); cw = csv.writer(buf)
+        cw.writerow([
+            'ID','CategoryID','RawName','SanitizedName',
+            'WeightPerUnit','Quantity','TotalWeight',
+            'Direction','Timestamp','Source'
+        ])
+        for row in conn.execute("""
+            SELECT id, category_id, raw_name, sanitized_name,
+                   weight_per_unit, quantity, total_weight,
+                   direction, timestamp, source
+              FROM inventory_entries
+        """):
+            cw.writerow(row)
+        zf.writestr('inventory_entries.csv', buf.getvalue())
+
+        conn.close()
+
+    mem_zip.seek(0)
+    return send_file(
+        mem_zip,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name='export_all.zip'
+    )
+
 @app.route('/import_csv', methods=['POST'])
 def import_csv():
     f = request.files.get('csv_file')
@@ -5162,27 +5292,27 @@ def admin():
             flash("Embedded‑tab removed.", "info")
             return redirect(url_for('admin'))
 
-        # ── Toggle Embedded Mode ─────────────────────────────
-        if 'embedded_mode' in request.form:
+        # ── Toggle Embedded Mode (mode changes only) ───────────────
+        # only run this when it’s *not* part of a full “save_embedded” submission
+        if 'embedded_mode' in request.form and 'save_embedded' not in request.form:
             mode = request.form.get('embedded_mode')
             set_preference('embedded_mode', mode)
             flash(f"Embedded mode set to {mode}.", "info")
             return redirect(url_for('admin'))
 
-        # ── Save Embedded‑Tab URL / Name / Distances Flag ──
-        if any(k in request.form for k in ('embedded_url','embedded_name','embedded_mode','enable_1090_distances')):
-            url  = request.form.get('embedded_url','').strip()
-            name = request.form.get('embedded_name','').strip()
+        # ── Save Embedded-Tab URL / Name / Mode / Distances Flag ──
+        if 'save_embedded' in request.form:
+            url   = request.form.get('embedded_url', '').strip()
+            name  = request.form.get('embedded_name', '').strip()
+            mode  = request.form.get('embedded_mode', 'iframe')
+            dist  = 'yes' if request.form.get('enable_1090_distances')=='on' else 'no'
+
             if url and name:
-                # persist mode
-                set_preference('embedded_mode', request.form.get('embedded_mode','iframe'))
                 set_preference('embedded_url', url)
                 set_preference('embedded_name', name)
-                set_preference(
-                  'enable_1090_distances',
-                   'yes' if request.form.get('enable_1090_distances')=='on' else 'no'
-                )
-                flash("Embedded‑tab settings saved.", "info")
+                set_preference('embedded_mode', mode)
+                set_preference('enable_1090_distances', dist)
+                flash("Embedded-tab settings saved.", "info")
             else:
                 flash("Both URL and label are required.", "error")
             return redirect(url_for('admin'))
@@ -5989,6 +6119,117 @@ def publish_inventory_event(data=None):
     """
     global last_inventory_update
     last_inventory_update = datetime.utcnow().isoformat()
+
+# ───────────── Supervisor / Airport Ops ─────────────
+@app.route('/supervisor')
+def supervisor():
+    """Supervisor dashboard showing counts, recent flights, and inventory."""
+    return render_template('supervisor.html', active='supervisor')
+
+@app.route('/_supervisor_counts')
+def supervisor_counts_partial():
+    """AJAX partial: counts of inbound, outbound, and queued flights."""
+    with sqlite3.connect(DB_FILE) as c:
+        inbound_cnt  = c.execute(
+            "SELECT COUNT(*) FROM flights WHERE direction='inbound' AND complete=0"
+        ).fetchone()[0]
+        outbound_cnt = c.execute(
+            "SELECT COUNT(*) FROM flights WHERE direction='outbound' AND complete=0"
+        ).fetchone()[0]
+        queued_cnt   = c.execute(
+            "SELECT COUNT(*) FROM queued_flights"
+        ).fetchone()[0]
+    return render_template(
+        'partials/_supervisor_counts.html',
+        inbound=inbound_cnt, outbound=outbound_cnt, queued=queued_cnt
+    )
+
+@app.route('/_supervisor_recent_flights')
+def supervisor_recent_flights_partial():
+    """AJAX partial: table of recent active flights."""
+    show_dist = bool(app.extensions.get('distances')) and app.extensions.get('recv_loc') is not None
+    unit = request.cookies.get('distance_unit','nm')
+    rows = []
+    raw_rows = dict_rows("""
+        SELECT
+          id,
+          tail_number,
+          airfield_takeoff,
+          airfield_landing,
+          COALESCE(takeoff_time,'----') AS departure,
+          COALESCE(eta,'----') AS arrival,
+          cargo_weight,
+          is_ramp_entry,
+          sent,
+          complete
+        FROM flights
+        WHERE complete = 0
+        ORDER BY id DESC
+        LIMIT 6
+    """)
+    for r in raw_rows:
+        # Add NM distance if enabled and available, using same logic as dashboard
+        if show_dist:
+            entry = app.extensions['distances'].get(r['tail_number'])
+            if entry is not None:
+                km_val, ts = entry
+                if unit=='mi':
+                    val = round(km_val * 0.621371, 1)
+                elif unit=='nm':
+                    val = round(km_val * 0.539957, 1)
+                else:
+                    val = round(km_val, 1)
+                r['distance'] = val
+                r['distance_stale'] = (time.time() - ts) > 300
+            else:
+                r['distance'] = ''
+                r['distance_stale'] = False
+        else:
+            r['distance'] = ''
+            r['distance_stale'] = False
+        rows.append(r)
+    return render_template(
+        'partials/_supervisor_recent_flights.html',
+        flights=rows,
+        enable_1090_distances=show_dist,
+        distance_unit=unit
+    )
+
+@app.route('/_supervisor_inventory')
+def supervisor_inventory_partial():
+    """AJAX partial: slim inventory overview for supervisor."""
+    # replicate inventory overview logic (2h window, mass unit)
+    cutoff = (datetime.utcnow() - timedelta(hours=2)).isoformat()
+    inv = []
+    with sqlite3.connect(DB_FILE) as c:
+        cats = c.execute("SELECT id, display_name FROM inventory_categories").fetchall()
+        for cid, disp in cats:
+            ents = c.execute(
+                "SELECT direction, total_weight, timestamp FROM inventory_entries WHERE category_id=?",
+                (cid,)
+            ).fetchall()
+            tot_in  = sum(e[1] for e in ents if e[0]=='in')
+            tot_out = sum(e[1] for e in ents if e[0]=='out')
+            recent  = [e for e in ents if e[2] >= cutoff]
+            in2h    = sum(e[1] for e in recent if e[0]=='in')
+            out2h   = sum(e[1] for e in recent if e[0]=='out')
+            inv.append({
+                'category': disp,
+                'net':       tot_in - tot_out,
+                'rate_in':   round(in2h / 2, 1),
+                'rate_out':  round(out2h / 2, 1)
+            })
+    mass_pref = request.cookies.get('mass_unit','lbs')
+    if mass_pref == 'kg':
+        for row in inv:
+            row['net']      = round(row['net']    / 2.20462, 1)
+            row['rate_in']  = round(row['rate_in']/ 2.20462, 1)
+            row['rate_out'] = round(row['rate_out']/2.20462, 1)
+    return render_template(
+        'partials/_supervisor_inventory.html',
+        inventory=inv,
+        mass_pref=mass_pref
+    )
 
 # ───────────────────────────────────────────────────────────
 if __name__=="__main__":

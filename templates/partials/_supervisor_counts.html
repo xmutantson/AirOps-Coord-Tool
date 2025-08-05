@@ -1,0 +1,13 @@
+<div class="supervisor-panel">
+  <h3>Flight Counts</h3>
+  <ul>
+    <li><strong>Inbound:</strong> {{ inbound }}</li>
+    <li><strong>Outbound:</strong> {{ outbound }}</li>
+    <li><strong>Queued Ramp:</strong> {{ queued }}</li>
+  <div style="margin-bottom:0.5rem;">
+    <button onclick="location.href='{{ url_for('export_all_csv') }}'">
+      📥 Export All Data
+    </button>
+  </div>
+  </ul>
+</div>

@@ -42,11 +42,15 @@ body.wargame .main-nav a.active { background: #FFF9C4; }
    Sticky Header, Footer, and Main Container
    =============================================================== */
 header {
-  background: var(--table-head-bg);
-  padding: 0.5rem 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;    /* nav is centered */
   position: fixed;
   top: 0; left: 0; right: 0;
   z-index: 1000;
+  background: var(--table-head-bg);
+  min-height: 2.8em;
+  padding: 0;
 }
 
 footer {
@@ -75,11 +79,35 @@ main.container {
 /* ===============================================================
    Navigation
    =============================================================== */
+.hamburger-container {
+  display: flex;
+  align-items: center;
+  margin-left: auto; /* pushes it to the right */
+  position: relative;
+  height: 100%;
+}
+
+#nav-hamburger {
+  background: none;
+  border: none;
+  font-size: 1.7em;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.1em 0.7em;
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+
 .main-nav {
   display: flex;
   justify-content: center;
+  align-items: center;
+  flex: 0 1 auto;
   gap: 0.75rem;
   font-size: 0.9rem;
+  position: relative;
+  width: 100%;
 }
 .main-nav a {
   color: var(--table-head-fg);
@@ -87,11 +115,44 @@ main.container {
   padding: 0.4em 0.8em;
   border-radius: var(--radius);
   transition: background 0.15s, color 0.15s;
+  display: inline-block;
 }
 .main-nav a:hover,
 .main-nav a.active {
   background: rgba(255,255,255,0.1);
   color: #fff;
+}
+#nav-dropdown {
+  position: absolute;
+  top: 120%;
+  right: 0;
+  background: #fff;
+  border: 1px solid #ccc;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.15);
+  border-radius: 0.5em;
+  min-width: 210px;
+  padding: 0.75em 1.1em 0.75em 1.1em;
+  z-index: 9000;
+  display: none; /* Shown when .open */
+}
+
+.hamburger-container #nav-dropdown.open
+
+#nav-dropdown div {
+  font-weight: bold;
+  margin-bottom: 0.7em;
+}
+#nav-dropdown label {
+  display: flex;
+  align-items: center;
+  font-size: 1em;
+  padding: 0.2em 0;
+  gap: 0.5em;
+}
+#nav-dropdown input[type="checkbox"] {
+  margin: 0 0.5em 0 0;
+  width: 1em;
+  height: 1em;
 }
 
 /* ===============================================================
@@ -890,4 +951,44 @@ table.wg-radio-table tr.read { opacity: .8; }
 /* 4️⃣ Wiggle trigger class */
 .filter-banner.wiggle {
   animation: wiggle 0.13s ease-in-out;
+}
+/* ── Supervisor 2×2 grid layout ───────────────────────────────── */
+.supervisor-dashboard {
+  display: grid;
+  grid-template-columns: 1fr 1fr;    /* two columns of equal width */
+  grid-auto-rows: auto;              /* rows height will fit content */
+  gap: 1rem;                         /* space between panels */
+  margin: 1rem 0;                    /* some breathing room above/below */
+}
+
+/* make it single-column on narrow viewports */
+@media (max-width: 800px) {
+  .supervisor-dashboard {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* panel “cards” styling */
+.supervisor-panel {
+  background: #fff;
+  border: 1px solid #ccc;
+  padding: 1rem;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+/* Ensure supervisor dashboard tables don't overflow their panels */
+.supervisor-panel table {
+  width: 100%;
+  table-layout: auto;
+  overflow-x: auto;
+}
+/* In supervisor dashboard, forcibly remove full-bleed from tables */
+.supervisor-panel .full-bleed {
+  position: static !important;
+  left: auto !important;
+  width: 100% !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  box-sizing: border-box;
+  padding: 0 !important;
 }
