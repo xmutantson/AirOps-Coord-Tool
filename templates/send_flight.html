@@ -26,6 +26,15 @@
 </button>
 <span id="feedback-body" class="copy-feedback"></span>
 
+{# — Send via WinLink — #}
+<form method="POST" action="{{ url_for('winlink_send', flight_id=flight['id']) }}"
+      style="display:inline;margin-left:1em;">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <button type="submit" {% if not cms_reachable %}disabled{% endif %}>
+    📨 Send via WinLink
+  </button>
+</form>
+
 <form method="POST" action="{{ url_for('mark_sent', fid=flight['id']) }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <button type="submit" onclick="return confirm('Mark this message as SENT?')">

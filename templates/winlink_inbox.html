@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}WinLink Inbox – Aircraft Ops{% endblock %}
+{% block content %}
+  <h2>WinLink Inbox</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th><th>Callsign</th><th>Subject</th><th>Received</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for m in messages %}
+      <tr>
+        <td>{{ m.id }}</td>
+        <td>{{ m.callsign }}</td>
+        <td>
+          <a href="#" onclick="toggleBody({{ m.id }});return false;">
+            {{ m.subject or '—' }}
+          </a>
+        </td>
+        <td>{{ m.timestamp }}</td>
+      </tr>
+      <tr id="body-{{ m.id }}" style="display:none;">
+        <td colspan="4"><pre>{{ m.body }}</pre></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <script>
+    function toggleBody(id) {
+      let r = document.getElementById('body-'+id);
+      r.style.display = r.style.display==='none'?'table-row':'none';
+    }
+  </script>
+{% endblock %}

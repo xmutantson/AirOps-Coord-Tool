@@ -44,6 +44,7 @@ import threading, time, socket, math
 from urllib.request import urlopen
 import queue
 import requests
+import telnetlib
 
 from functools import lru_cache
 
@@ -53,8 +54,11 @@ import struct
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.schedulers.base import STATE_RUNNING
+from apscheduler.jobstores.base import JobLookupError
 
 import logging, sys
+
+from winlink import WinLinkClient
 
 # convenience logger
 logger = logging.getLogger(__name__)
@@ -802,6 +806,19 @@ def init_db():
             satisfied_at     TEXT,
             assigned_tail    TEXT
           )
+        """)
+        # ── winlink messages table ───────────────────────────
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS winlink_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                direction TEXT   NOT NULL,
+                callsign  TEXT   NOT NULL,
+                subject   TEXT,
+                body      TEXT,
+                flight_id INTEGER,
+                timestamp TEXT   NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(direction, callsign, subject, timestamp)
+            )
         """)
 
 # ───────────────────────────────────────────────────────────
@@ -2809,6 +2826,20 @@ def configure_wargame_jobs():
     if scheduler.state != STATE_RUNNING:
         scheduler.start()
 
+def configure_winlink_jobs():
+    # clear out any existing jobs
+    scheduler.remove_all_jobs()
+
+    scheduler.add_job(
+        'winlink_poll', 
+        poll_winlink_job, 
+        trigger='interval', 
+        minutes=5
+    )
+
+    if scheduler.state != STATE_RUNNING:
+        scheduler.start()
+
 def apply_supervisor_settings():
     # clear out any existing rate‐based jobs
     for job_id in ('job_radio','job_inventory_out','job_inventory_in','job_ramp_requests'):
@@ -3308,11 +3339,15 @@ def radio():
             cw = f'{v} lbs'
         f['cargo_view'] = cw or 'TBD'
 
+    # detect whether our 5-minute job exists
+    job = scheduler.get_job('winlink_poll')
+
     return render_template(
         'radio.html',
         flights=flights,
         active='radio',
-        hide_tbd=hide_tbd
+        hide_tbd=hide_tbd,
+        winlink_job_active=bool(job))
     )
 
 # ───────────────────────────────────────────────────────────
@@ -3600,12 +3635,39 @@ def radio_detail(fid):
             f"ETA {flight['eta'] or '----'}"
         )
 
+    # ── WinLink integration flags ───────────────────────────────────
+    # read CMS connection & creds out of your preferences table
+    wl_host     = get_preference('winlink_cms_host')     or ''
+    wl_port     = get_preference('winlink_cms_port')     or ''
+    wl_callsign = get_preference('winlink_callsign')     or ''
+    wl_pass     = get_preference('winlink_password')     or ''
+
+    # fully configured?
+    winlink_configured = all([wl_host, wl_port, wl_callsign, wl_pass])
+
+    # is our 5-min poll job running?
+    winlink_job_active = (scheduler.get_job('winlink_poll') is not None)
+
+    # if configured, test basic connectivity
+    internet_ok = False
+    if winlink_configured:
+        try:
+            sock = socket.create_connection((wl_host, int(wl_port)), timeout=5)
+            sock.close()
+            internet_ok = True
+        except Exception:
+            internet_ok = False
+
     return render_template(
         'send_flight.html',
         flight=flight,
         subject_text=subject,
         body_text=body,
-        active='radio'
+        active='radio',
+        # flags for your template to show/hide WinLink UI
+        winlink_configured=winlink_configured,
+        winlink_job_active=winlink_job_active,
+        internet_ok=internet_ok
     )
 
 @app.route('/mark_sent/<int:fid>', methods=['POST'])
@@ -6229,6 +6291,113 @@ def supervisor_inventory_partial():
         inventory=inv,
         mass_pref=mass_pref
     )
+
+# ─────────── Winlink routes ────────────────────────────────
+
+@app.route('/winlink/send/<int:flight_id>', methods=['POST'])
+def winlink_send(flight_id):
+    """Send the given flight via WinLink and record the outbound message."""
+    # 1) Fetch the flight record
+    flight = dict_rows("SELECT * FROM flights WHERE id = ?", (flight_id,))[0]
+
+    # 2) Build subject & body using your existing helpers
+    subject = generate_subject(flight)
+    body    = generate_body(flight)
+
+    # 3) Load CMS config & primary callsign creds
+    host = get_preference('winlink_cms_host') or ""
+    port = get_preference('winlink_cms_port') or ""
+    cs   = get_preference('winlink_callsign_1') or ""
+    pw   = get_preference('winlink_password_1') or ""
+
+    if not all([host, port, cs, pw]):
+        flash("WinLink CMS not configured.", "error")
+        return redirect(url_for('radio_detail', fid=flight_id))
+
+    # 4) Attempt send
+    try:
+        client = WinLinkClient(host, int(port), cs, pw)
+        client.send_message(subject, body)
+
+        # 5) Record outbound in our table
+        with sqlite3.connect(DB_FILE) as conn:
+            conn.execute("""
+                INSERT INTO winlink_messages
+                  (direction, callsign, subject, body, flight_id)
+                VALUES (?, ?, ?, ?, ?)
+            """, ('out', cs, subject, body, flight_id))
+
+        flash("Sent via WinLink.", "success")
+    except Exception:
+        flash("Failed to send via WinLink.", "error")
+
+    return redirect(url_for('radio_detail', fid=flight_id))
+
+
+def poll_winlink_job():
+    """APScheduler job: every 5min, pull inbound for each configured callsign."""
+    host = get_preference('winlink_cms_host') or ""
+    try:
+        port = int(get_preference('winlink_cms_port') or 0)
+    except ValueError:
+        return
+
+    for idx in (1, 2, 3):
+        cs = get_preference(f'winlink_callsign_{idx}') or ""
+        pw = get_preference(f'winlink_password_{idx}') or ""
+        if not all([host, port, cs, pw]):
+            continue
+
+        try:
+            client = WinLinkClient(host, port, cs, pw)
+            messages = client.fetch_messages()
+            with sqlite3.connect(DB_FILE) as conn:
+                for m in messages:
+                    conn.execute("""
+                        INSERT OR IGNORE INTO winlink_messages
+                          (direction, callsign, subject, body, timestamp)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, ('in', cs, m['subject'], m['body'], m.get('timestamp')))
+        except Exception:
+            # on any failure, skip to next callsign
+            continue
+
+@app.route('/winlink/inbox')
+def winlink_inbox():
+    """Display all raw inbound WinLink messages in reverse-chronological order."""
+    msgs = dict_rows("""
+        SELECT id, callsign, subject, body, timestamp
+          FROM winlink_messages
+         WHERE direction = 'in'
+      ORDER BY timestamp DESC
+    """)
+    return render_template(
+        'winlink_inbox.html',
+        messages=msgs,
+        active='winlink'
+    )
+
+# ── WinLink Polling Control ───────────────────────────────────────────
+@app.route('/winlink/start', methods=['POST'])
+def winlink_start():
+    """Clear existing jobs, install our 5-min WinLink poll, and start the scheduler."""
+    # yank *all* jobs (Wargame will reconfigure itself separately)
+    scheduler.remove_all_jobs()
+    # now add back only WinLink
+    configure_winlink_jobs()
+    flash("WinLink polling started.", "success")
+    return redirect(request.referrer or url_for('radio'))
+
+
+@app.route('/winlink/stop', methods=['POST'])
+def winlink_stop():
+    """Remove only the WinLink poll job."""
+    try:
+        scheduler.remove_job('winlink_poll')
+        flash("WinLink polling stopped.", "info")
+    except JobLookupError:
+        flash("WinLink polling was not running.", "warning")
+    return redirect(request.referrer or url_for('radio'))
 
 # ───────────────────────────────────────────────────────────
 if __name__=="__main__":

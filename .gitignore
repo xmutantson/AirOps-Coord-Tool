@@ -2,3 +2,18 @@ venv/
 data/
 flask_secret.txt
 graph.json
+# stop tracking our Winlink helper
+winlink.py
+
+# ignore all the currently untracked junk
+__pycache__/
+*.b2f
+*.hex
+deps/
+session.log
+raw_socket_diag.py
+decode_all.py
+decompress-test.py
+test-winlink.py
+ultraraw.py
+winlink-*.py
