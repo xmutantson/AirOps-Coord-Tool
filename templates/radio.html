@@ -11,18 +11,33 @@
   <span id="clock" class="clock">00:00:00</span>
 </div>
 
-{# ---- WinLink polling toggle ---- #}
-<div style="margin:12px 0;">
+{# ── WinLink controls ─────────────────────────────────────────── #}
+<div class="winlink-controls" style="display:flex; gap:0.5rem; align-items:center; margin:1rem 0;">
   <form method="POST"
+        id="winlink-poll-form"
         action="{{ url_for('winlink_start') if not winlink_job_active else url_for('winlink_stop') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button type="submit" class="btn btn-{{ 'success' if not winlink_job_active else 'danger' }}">
+    <button type="submit"
+            class="btn btn-{{ 'success' if not winlink_job_active else 'danger' }}">
       {{ 'Start WinLink Polling' if not winlink_job_active else 'Stop WinLink Polling' }}
     </button>
   </form>
-  <a href="{{ url_for('winlink_inbox') }}" class="btn btn-secondary" style="margin-left:1em;">
-    📥 WinLink Inbox
-  </a>
+
+  <form method="POST"
+        action="{{ url_for('winlink_auto_start') if not winlink_auto_active else url_for('winlink_auto_stop') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit"
+            class="btn btn-{{ 'success' if not winlink_auto_active else 'danger' }}">
+      {{ 'Start Auto-WinLink-Send' if not winlink_auto_active else 'Stop Auto-WinLink-Send' }}
+    </button>
+  </form>
+
+   <a href="{{ url_for('winlink_inbox') }}" class="btn btn-secondary">
+     📥 WinLink Inbox
+     <span id="wl-unread-badge" class="wl-unread-badge" style="display:none;">
+       UNREAD EMAILS: 0
+     </span>
+   </a>
 </div>
 
 <div id="radio-table">
@@ -260,6 +275,100 @@ function normalizeHHMM(t){
     ta.addEventListener('input', autoResize);
     autoResize({ target: ta });
   })();
+</script>
+
+<script>
+// Intercept WinLink polling form for one-time poll/parse on start
+const pollForm = document.getElementById('winlink-poll-form');
+if (pollForm) {
+  pollForm.addEventListener('submit', async function(e){
+    // Only intercept on "Start" (not "Stop")
+    if (pollForm.action.endsWith('{{ url_for("winlink_start") }}')) {
+      e.preventDefault();
+      // Fire one-time poll_now route with CSRF
+      const CSRF_TOKEN = '{{ csrf_token() }}';
+      await fetch('/winlink/poll_now', {
+        method: 'POST',
+        headers: {'Content-Type':'application/x-www-form-urlencoded'},
+        body: new URLSearchParams({'csrf_token': CSRF_TOKEN})
+      });
+      // Actually submit form to start normal polling
+      pollForm.submit();
+    }
+    // otherwise (stopping), let normal form submit happen
+  });
+}
+</script>
+
+<script>
+// --- Unread badge updater (every 30s) — read cookie directly ---
+// Cookie name shared with WinLink Inbox page
+const WL_COOKIE = 'winlink_emails_read';
+
+function getCookie(name){
+  const m = document.cookie.match(new RegExp('(?:^|;\\s*)' + name.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\$&') + '=([^;]*)'));
+  return m ? decodeURIComponent(m[1]) : '';
+}
+function mergeRanges(ranges){
+  if (!ranges.length) return [];
+  ranges.sort((a,b)=> (a[0]-b[0]) || (a[1]-b[1]));
+  const out=[ranges[0].slice()];
+  for (let i=1;i<ranges.length;i++){
+    const [s,e]=ranges[i], last=out[out.length-1];
+    if (s<=last[1]+1) last[1]=Math.max(last[1],e);
+    else out.push([s,e]);
+  }
+  return out;
+}
+function parseRanges(str){
+  if (!str) return [];
+  const parts=str.split(',').map(s=>s.trim()).filter(Boolean);
+  const ranges=[];
+  for(const p of parts){
+    if (/^\d+$/.test(p)){ const v=+p; ranges.push([v,v]); }
+    else{
+      const m=p.match(/^(\d+)-(\d+)$/);
+      if (m){ const a=+m[1], b=+m[2]; ranges.push([Math.min(a,b), Math.max(a,b)]); }
+    }
+  }
+  return mergeRanges(ranges);
+}
+function contains(ranges, id){
+  id = +id; return ranges.some(([s,e]) => id>=s && id<=e);
+}
+
+async function refreshUnreadBadge(){
+  try{
+    // 1) fetch current inbox (IDs only are all we need; using existing endpoint)
+    const resp = await fetch('{{ url_for("winlink_inbox_json") }}', { cache:'no-store' });
+    if (!resp.ok) return;
+    const msgs = await resp.json();
+    const ids  = Array.isArray(msgs) ? msgs.map(m => +m.id).filter(Number.isFinite) : [];
+
+    // 2) read and parse the read-ranges cookie
+    const ranges = parseRanges(getCookie(WL_COOKIE) || '');
+
+    // 3) compute unread = ids not contained in ranges
+    let unread = 0;
+    for (const id of ids){
+      if (!contains(ranges, id)) unread++;
+    }
+
+    // 4) update badge
+    const badge = document.getElementById('wl-unread-badge');
+    if (!badge) return;
+    if (unread > 0){
+      badge.textContent = 'Unread messages: ' + unread;
+      badge.style.display = 'inline-block';
+    } else {
+      badge.style.display = 'none';
+    }
+  } catch (_) {
+    /* ignore */
+  }
+}
+refreshUnreadBadge();
+setInterval(refreshUnreadBadge, 30000);
 </script>
 
 {% endblock %}

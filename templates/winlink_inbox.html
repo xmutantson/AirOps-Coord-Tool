@@ -1,35 +1,203 @@
 {% extends "base.html" %}
-{% block title %}WinLink Inbox – Aircraft Ops{% endblock %}
+{% block title %}WinLink Inbox{% endblock %}
 {% block content %}
-  <h2>WinLink Inbox</h2>
-  <table>
+<h2>WinLink Inbox</h2>
+<p><a href="{{ url_for('radio') }}">← Back to Out-box</a></p>
+<div class="container">
+  <table id="wl-inbox-table" class="wg-inbox">
     <thead>
       <tr>
-        <th>#</th><th>Callsign</th><th>Subject</th><th>Received</th>
+        <th>#</th>
+        <th>To</th>
+        <th>From</th>
+        <th>Subject</th>
+        <th>Received</th>
       </tr>
     </thead>
-    <tbody>
-    {% for m in messages %}
-      <tr>
-        <td>{{ m.id }}</td>
-        <td>{{ m.callsign }}</td>
-        <td>
-          <a href="#" onclick="toggleBody({{ m.id }});return false;">
-            {{ m.subject or '—' }}
-          </a>
-        </td>
-        <td>{{ m.timestamp }}</td>
-      </tr>
-      <tr id="body-{{ m.id }}" style="display:none;">
-        <td colspan="4"><pre>{{ m.body }}</pre></td>
-      </tr>
-    {% endfor %}
-    </tbody>
+    <tbody></tbody>
   </table>
-  <script>
-    function toggleBody(id) {
-      let r = document.getElementById('body-'+id);
-      r.style.display = r.style.display==='none'?'table-row':'none';
+</div>
+
+<!-- Modal for Winlink Message -->
+<dialog id="winlinkMsgDialog" class="wg-modal" aria-modal="true">
+  <form method="dialog" class="email-modal">
+    <div id="winlinkModalDrag" class="wg-modal-header">
+      <button type="button" id="winlinkModalClose" class="wg-modal-close" aria-label="Close">✕</button>
+    </div>
+    <div class="wg-modal-body email-content">
+      <h3 id="winlinkModalSubject" class="wg-modal-subject"></h3>
+      <div style="color:#666; font-size:0.98em; margin-bottom:0.7em;">
+        <span id="winlinkModalSender"></span>
+        &nbsp;·&nbsp;<span id="winlinkModalTimestamp"></span>
+      </div>
+      <pre id="winlinkModalBody" class="wg-modal-pre"></pre>
+    </div>
+  </form>
+</dialog>
+
+<script>
+/* ───── Read-state cookie helpers (range-encoded) ───────────────── */
+const WL_COOKIE = 'winlink_emails_read';
+function getCookie(name){
+  const m = document.cookie.match(new RegExp('(?:^|;\\s*)' + name.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\$&') + '=([^;]*)'));
+  return m ? decodeURIComponent(m[1]) : '';
+}
+function setCookie(name, value){
+  document.cookie = name + '=' + encodeURIComponent(value) + '; Max-Age=31536000; Path=/; SameSite=Lax';
+}
+function mergeRanges(ranges){
+  if (!ranges.length) return [];
+  ranges.sort((a,b)=> (a[0]-b[0]) || (a[1]-b[1]));
+  const out=[ranges[0].slice()];
+  for (let i=1;i<ranges.length;i++){
+    const [s,e]=ranges[i], last=out[out.length-1];
+    if (s<=last[1]+1) last[1]=Math.max(last[1],e);
+    else out.push([s,e]);
+  }
+  return out;
+}
+function parseRanges(str){
+  if (!str) return [];
+  const parts=str.split(',').map(s=>s.trim()).filter(Boolean);
+  const ranges=[];
+  for(const p of parts){
+    if (/^\d+$/.test(p)){ const v=+p; ranges.push([v,v]); }
+    else{
+      const m=p.match(/^(\d+)-(\d+)$/);
+      if (m){ const a=+m[1], b=+m[2]; ranges.push([Math.min(a,b), Math.max(a,b)]); }
     }
-  </script>
+  }
+  return mergeRanges(ranges);
+}
+function encodeRanges(ranges){
+  return ranges.map(([s,e])=> s===e ? String(s) : `${s}-${e}`).join(',');
+}
+function contains(ranges, id){
+  id = +id; return ranges.some(([s,e]) => id>=s && id<=e);
+}
+function addId(ranges, id){
+  id = +id; return mergeRanges([...ranges, [id,id]]);
+}
+function markRead(id, row){
+  const ranges = parseRanges(getCookie(WL_COOKIE));
+  const next   = encodeRanges(addId(ranges, id));
+  setCookie(WL_COOKIE, next);
+  if (row) row.classList.add('read');
+}
+function applyReadState(){
+  const ranges = parseRanges(getCookie(WL_COOKIE) || '');
+  document.querySelectorAll('#wl-inbox-table tbody tr[data-id]').forEach(tr=>{
+    const id = +tr.getAttribute('data-id');
+    if (contains(ranges, id)) tr.classList.add('read');
+    else tr.classList.remove('read');
+  });
+}
+
+
+let wlMsgs = [];
+async function loadInbox() {
+  const resp = await fetch('/winlink/inbox.json');
+  wlMsgs = await resp.json();
+  const tb = document.querySelector('#wl-inbox-table tbody');
+  tb.innerHTML = wlMsgs.map(m=>`
+    <tr data-id="${m.id}">
+      <td>${m.id}</td>
+      <td>${m.callsign}</td>
+      <td>${m.sender || '—'}</td>
+      <td>
+        <span class="unread-dot" title="Unread"></span>
+        <a href="#" class="winlink-open-msg" data-msg-id="${m.id}">
+          ${m.subject ? m.subject.replace(/</g,"&lt;").replace(/>/g,"&gt;") : '—'}
+        </a>
+      </td>
+      <td>${m.timestamp}</td>
+    </tr>
+  `).join('');
+  applyReadState();
+}
+loadInbox();
+setInterval(loadInbox, 30000);
+
+document.addEventListener('DOMContentLoaded', function () {
+  // Modal controls
+  const dlg      = document.getElementById('winlinkMsgDialog');
+  const subj     = document.getElementById('winlinkModalSubject');
+  const body     = document.getElementById('winlinkModalBody');
+  const closeBtn = document.getElementById('winlinkModalClose');
+  const dragBar  = document.getElementById('winlinkModalDrag');
+  const sender   = document.getElementById('winlinkModalSender');
+  const ts       = document.getElementById('winlinkModalTimestamp');
+
+  // Open modal and fill content
+  function openMsgModal(msg) {
+    subj.textContent   = msg.subject || '(no subject)';
+    body.textContent   = msg.body || '(No message body)';
+    sender.textContent = msg.sender || '';
+    ts.textContent     = msg.timestamp || '';
+    dlg.style.left = '50%';
+    dlg.style.top  = '50%';
+    dlg.style.transform = 'translate(-50%, -50%)';
+    if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', 'open');
+    window.__wlModalOpen = true;
+  }
+
+  function closeModal() {
+    if (dlg.close) dlg.close(); else dlg.removeAttribute('open');
+    window.__wlModalOpen = false;
+  }
+
+  closeBtn.addEventListener('click', closeModal);
+  dlg.addEventListener('cancel', function(e){ e.preventDefault(); closeModal(); });
+
+  // Open on subject click
+  document.getElementById('wl-inbox-table').addEventListener('click', function(ev){
+    const link = ev.target.closest('a.winlink-open-msg');
+    if (!link) return;
+    ev.preventDefault();
+    const msg = wlMsgs.find(m => String(m.id) === String(link.dataset.msgId));
+    if (msg) {
+      openMsgModal(msg);
+      const row = link.closest('tr[data-id]');
+      markRead(msg.id, row);
+    }
+  });
+
+  // Optional: Click outside to close
+  dlg.addEventListener('click', function(ev) {
+    if (ev.target === this) closeModal();
+  });
+
+  // Esc key closes (if dialog unsupported)
+  document.addEventListener('keydown', function(ev){
+    if ((ev.key === 'Escape' || ev.keyCode === 27) && (dlg.open || dlg.hasAttribute('open'))) {
+      closeModal();
+    }
+  });
+
+  // Draggable logic
+  (function enableDrag() {
+    let dragging = false, startX = 0, startY = 0, startLeft = 0, startTop = 0;
+    dragBar.addEventListener('mousedown', (ev) => {
+      const box = dlg.getBoundingClientRect();
+      dlg.style.left = box.left + 'px';
+      dlg.style.top  = box.top  + 'px';
+      dlg.style.transform = '';
+      dragging = true;
+      startLeft = box.left; startTop = box.top;
+      startX = ev.clientX; startY = ev.clientY;
+      ev.preventDefault();
+    });
+    window.addEventListener('mousemove', (ev) => {
+      if (!dragging) return;
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      dlg.style.left = (startLeft + dx) + 'px';
+      dlg.style.top  = (startTop  + dy) + 'px';
+    });
+    window.addEventListener('mouseup', () => { dragging = false; });
+  })();
+
+  applyReadState();
+});
+</script>
 {% endblock %}

@@ -88,15 +88,21 @@ main.container {
 }
 
 #nav-hamburger {
-  background: none;
+  /* give it a light translucent backdrop so it always stands out */
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: var(--radius);
+  /* half the vertical padding, double the horizontal */
+  padding: 0.2em 1.4em;
   border: none;
   font-size: 1.7em;
   line-height: 1;
   cursor: pointer;
-  padding: 0.1em 0.7em;
   display: flex;
   align-items: center;
-  height: 100%;
+  /* let height auto-adjust rather than fill the entire header */
+  height: auto;
+  /* keep above any background treatments */
+  z-index: 1001;
 }
 
 .main-nav {
@@ -135,8 +141,6 @@ main.container {
   z-index: 9000;
   display: none; /* Shown when .open */
 }
-
-.hamburger-container #nav-dropdown.open
 
 #nav-dropdown div {
   font-weight: bold;
@@ -991,4 +995,79 @@ table.wg-radio-table tr.read { opacity: .8; }
   margin-right: 0 !important;
   box-sizing: border-box;
   padding: 0 !important;
+}
+#mappings-form {
+  max-width: 568px;
+  margin: 0 auto 2em auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.mapping-row {
+  display: flex;
+  gap: 0.7em;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.map-airport,
+.map-callsign {
+  flex: 1 1 45%;
+  min-width: 0;
+}
+
+.remove-mapping {
+  background: #eee;
+  border: none;
+  border-radius: 3px;
+  font-size: 1.2em;
+  padding: 0.2em 0.7em;
+  cursor: pointer;
+}
+
+.block-btn {
+  display: block;
+  width: 100%;
+  margin: 10px 0 0 0;
+  padding: 0.4em;
+  font-size: 1em;
+  background: #ede9c5;
+  border: none;
+  border-radius: 0.5em;
+}
+
+.cc-row {
+  display: flex;
+  gap: 0.7em;
+  margin: 14px 0 18px 0;
+}
+
+.map-cc {
+  flex: 1 1 33%;
+}
+
+.save-mappings-btn {
+  display: block;
+  width: 100%;
+  margin: 0 0 0 0;
+  font-size: 1.1em;
+  padding: 0.5em;
+  background: #ede9c5;
+  border: none;
+  border-radius: 0.5em;
+}
+/* WinLink unread badge (Radio page) */
+.wl-unread-badge{
+  margin-left:.5rem;
+  padding:.1rem .4rem;
+  border-radius:.4rem;
+  background:#c62828;
+  color:#fff;
+  font-weight:600;
+  font-size:.85em;
+}
+/* generic “hidden” utility for JS toggles */
+.hidden{
+  display:none;
 }

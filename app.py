@@ -39,8 +39,11 @@ from flask_wtf.csrf import generate_csrf, CSRFError
 from markupsafe import escape
 
 import sqlite3, csv, io, re, os, json, zipfile
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import threading, time, socket, math
+import subprocess
+import glob
+
 from urllib.request import urlopen
 import queue
 import requests
@@ -54,6 +57,8 @@ import struct
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.schedulers.base import STATE_RUNNING
 from apscheduler.jobstores.base import JobLookupError
+
+import itertools
 
 import logging, sys
 
@@ -809,13 +814,15 @@ def init_db():
             CREATE TABLE IF NOT EXISTS winlink_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 direction TEXT   NOT NULL,
+                sender    TEXT,
+                parsed    INTEGER NOT NULL DEFAULT 0,
                 callsign  TEXT   NOT NULL,
                 subject   TEXT,
                 body      TEXT,
                 flight_id INTEGER,
                 timestamp TEXT   NOT NULL DEFAULT (datetime('now')),
                 UNIQUE(direction, callsign, subject, timestamp)
-            )
+          )
         """)
 
 # ───────────────────────────────────────────────────────────
@@ -933,8 +940,8 @@ def run_migrations():
     # queued_flights gained dest + travel_time (if DB predates them)
     ensure_column("queued_flights", "airfield_landing", "TEXT")
     ensure_column("queued_flights", "travel_time",      "TEXT")
-    print("  → ensuring queued_flights.cargo_weight")
     ensure_column("queued_flights", "cargo_weight",     "REAL DEFAULT 0")
+    ensure_column("winlink_messages", "sender",         "TEXT")
 
 def cleanup_pending():
     """Purge any pending inventory‐entries older than 15 minutes."""
@@ -949,7 +956,6 @@ def _cleanup_before_view():
     # fire only on inventory blueprint routes
     if request.blueprint == 'inventory':
         cleanup_pending()
-
 
 
 @inventory_bp.route('/_advance_data')
@@ -1036,6 +1042,26 @@ def load_airports_from_csv():
                 r['gps_code']  or None,
                 r['local_code'] or None
             ))
+
+# ───────────────────────────────────────────────────────────
+# Timestamp normalization helpers (ISO-8601 Z, ceil to seconds)
+# ───────────────────────────────────────────────────────────
+def iso8601_ceil_utc(dt: datetime | None = None) -> str:
+    """
+    Return an ISO-8601 string with 'Z' timezone, rounded UP to the nearest second.
+    If dt is None, use current UTC time.
+    """
+    if dt is None:
+        dt = datetime.now(timezone.utc)
+    else:
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+    if dt.microsecond > 0:
+        dt = dt + timedelta(seconds=1)
+    dt = dt.replace(microsecond=0)
+    return dt.isoformat().replace("+00:00", "Z")
 
 # ───────────────────────────────────────────────────────────────────────────
 # Inventory Name‑Sanitization (strip punctuation, lowercase, drop adjectives)
@@ -1320,6 +1346,30 @@ def hide_tbd_filter(value):
       In templates: {{ some_field|hide_tbd }}
     """
     return '' if value in (None, '', 'TBD', '—') else value
+
+# Canonicalize airport code for mapping lookups
+def canonical_airport_code(code: str) -> str:
+    """
+    Given any airport code, return the best canonical code for mapping.
+    Prefers ICAO4, then IATA, then local_code. Falls back to uppercase input.
+    """
+    code = (code or '').strip().upper()
+    if not code:
+        return ''
+    with sqlite3.connect(DB_FILE) as c:
+        c.row_factory = sqlite3.Row
+        row = c.execute(
+            "SELECT icao_code, iata_code, local_code "
+            "FROM airports WHERE ? IN (icao_code, iata_code, gps_code, ident, local_code) LIMIT 1",
+            (code,)
+        ).fetchone()
+    if not row:
+        return code
+    for k in ['icao_code', 'iata_code', 'local_code']:
+        val = row[k]
+        if val and val.strip():
+            return val.strip().upper()
+    return code
 
 def format_airport(raw_code: str, pref: str) -> str:
     """
@@ -1753,7 +1803,7 @@ def purge_blank_flights() -> None:
         )
         _create_tables_wargame_ramp_requests(c)
 
-# ── CORE WARGAME SCHEDULER & JOBS ──────────────────────────
+# ── CORE SCHEDULER ──────────────────────────
 scheduler = BackgroundScheduler()
 _CONFIGURE_WG_LOCK = threading.Lock()
 
@@ -2824,21 +2874,311 @@ def configure_wargame_jobs():
         scheduler.start()
 
 def configure_winlink_jobs():
-    # remove any existing WinLink poll job
-    try:
-        scheduler.remove_job('winlink_poll')
-    except JobLookupError:
-        pass
+    # ── clear any existing jobs ───────────────────
+    for job_id in ('winlink_poll', 'winlink_parse'):
+        try:
+            scheduler.remove_job(job_id)
+        except JobLookupError:
+            pass
 
+    # ── polling job: fetch new .b2f files every 5min ──
     scheduler.add_job(
-        'winlink_poll',
-        poll_winlink_job,
+        id='winlink_poll',
+        func=poll_winlink_job,
         trigger='interval',
         minutes=5
     )
 
+    # ── parsing job: process any unparsed messages ───
+    scheduler.add_job(
+        id='winlink_parse',
+        func=process_unparsed_winlink_messages,
+        trigger='interval',
+        minutes=5
+    )
+
+
     if scheduler.state != STATE_RUNNING:
         scheduler.start()
+
+def configure_winlink_auto_jobs():
+    """Schedule the auto-send job (every 1m)."""
+    try:
+        scheduler.remove_job('winlink_auto_send')
+    except JobLookupError:
+        pass
+    scheduler.add_job(
+        id='winlink_auto_send',
+        func=auto_winlink_send_job,
+        trigger='interval',
+        minutes=1
+    )
+    if scheduler.state != STATE_RUNNING:
+        scheduler.start()
+
+@app.route('/winlink/poll_now', methods=['POST'])
+def winlink_poll_now():
+    poll_winlink_job()
+    process_unparsed_winlink_messages()
+    return jsonify({'ok': True})
+
+# ---------- WinLink Inbox helpers ----------
+
+@app.route('/winlink/inbox.json')
+def winlink_inbox_json():
+    """Return inbound messages as JSON for AJAX refresh (cookie handles read state)."""
+    msgs = dict_rows("""
+      SELECT id, callsign, sender, subject, body, timestamp
+        FROM winlink_messages
+       WHERE direction = 'in'
+    ORDER BY timestamp DESC
+    """)
+    return jsonify(msgs)
+
+@app.route('/winlink/email/<int:mid>')
+def winlink_email(mid):
+    """Fetch a single inbound message for the modal; does not toggle read."""
+    rows = dict_rows("""
+        SELECT id, callsign, sender, subject, body, timestamp, COALESCE(read,0) AS read
+          FROM winlink_messages
+         WHERE id=? AND direction='in'
+    """, (mid,))
+    if not rows:
+        return jsonify({'ok': False}), 404
+    return jsonify(rows[0])
+
+@app.route('/winlink/mark_read/<int:mid>', methods=['POST'])
+def winlink_mark_read(mid):
+    """Mark a message as read."""
+    try:
+        with sqlite3.connect(DB_FILE) as c:
+            c.execute("UPDATE winlink_messages SET read=1 WHERE id=? AND direction='in'", (mid,))
+        return jsonify({'ok': True})
+    except Exception:
+        return jsonify({'ok': False}), 500
+
+@app.route('/winlink/auto_start', methods=['POST'])
+def winlink_auto_start():
+    """Start AutoSend; if poll/parse aren’t running, start them too."""
+    try:
+        poll_job  = scheduler.get_job('winlink_poll')
+        parse_job = scheduler.get_job('winlink_parse')
+        if poll_job is None or parse_job is None:
+            configure_winlink_jobs()  # installs both poll and parse
+    except Exception:
+        configure_winlink_jobs()
+    configure_winlink_auto_jobs()
+    flash("Auto-WinLink sending started (poll + parse running).", "success")
+    return redirect(request.referrer or url_for('radio'))
+
+@app.route('/winlink/auto_stop', methods=['POST'])
+def winlink_auto_stop():
+    """Stop the Auto-WinLink-Send background job."""
+    try:
+        scheduler.remove_job('winlink_auto_send')
+        flash("Auto-WinLink sending stopped.", "info")
+    except JobLookupError:
+        flash("Auto-WinLink was not running.", "warning")
+    return redirect(request.referrer or url_for('radio'))
+
+def pat_config_exists():
+    """Return True if the PAT config file exists and is readable."""
+    cfg_file = os.path.expanduser('~/.config/pat/config.json')
+    return os.path.exists(cfg_file) and os.path.isfile(cfg_file)
+
+def _parse_read_ranges_cookie(cookie_value: str):
+    """
+    Parse range-encoded cookie like: '1-10,12,15-18' → list of (start,end) ints.
+    Strict: ignore any malformed segments.
+    """
+    if not cookie_value:
+        return []
+    ranges = []
+    for part in (p.strip() for p in cookie_value.split(',') if p.strip()):
+        if part.isdigit():
+            v = int(part)
+            ranges.append((v, v))
+            continue
+        m = re.match(r'^(\d+)-(\d+)$', part)
+        if m:
+            a, b = int(m.group(1)), int(m.group(2))
+            s, e = (a, b) if a <= b else (b, a)
+            ranges.append((s, e))
+    # merge overlapping/adjacent
+    if not ranges:
+        return []
+    ranges.sort()
+    merged = [list(ranges[0])]
+    for s, e in ranges[1:]:
+        last = merged[-1]
+        if s <= last[1] + 1:
+            last[1] = max(last[1], e)
+        else:
+            merged.append([s, e])
+    return [(s, e) for s, e in merged]
+
+@app.get('/winlink/unread_count')
+def winlink_unread_count():
+    """
+    Return unread inbound WinLink count as JSON.
+    Uses client cookie 'winlink_emails_read' (range-encoded ID list).
+    Unread = inbound messages whose IDs are NOT in those ranges.
+    """
+    cookie_val = request.cookies.get('winlink_emails_read', '')
+    ranges = _parse_read_ranges_cookie(cookie_val)
+
+    where = "direction='in'"
+    params = []
+    if ranges:
+        # build: NOT ( (id BETWEEN ? AND ?) OR (id BETWEEN ? AND ?) OR (id=? ) )
+        ors = []
+        for s, e in ranges:
+            if s == e:
+                ors.append("id=?")
+                params.append(s)
+            else:
+                ors.append("(id BETWEEN ? AND ?)")
+                params.extend([s, e])
+        where = f"{where} AND NOT (" + " OR ".join(ors) + ")"
+
+    with sqlite3.connect(DB_FILE) as c:
+        count = c.execute(
+            f"SELECT COUNT(*) FROM winlink_messages WHERE {where}",
+            params
+        ).fetchone()[0]
+    return jsonify({"count": int(count)})
+
+# ─────────────────────────────────────────────────────────────
+# Boot tasks: ensure PAT creds are written and winlink jobs run
+# ─────────────────────────────────────────────────────────────
+def _configure_pat_from_prefs_silent():
+    """
+    Core writer for ~/.config/pat/config.json using DB prefs.
+    Identical to /configure_pat but without flash/redirect so it can run at boot.
+    Returns (ok: bool, err_str: str|None).
+    """
+    try:
+        # primary WinLink credentials
+        cs = get_preference('winlink_callsign_1') or ''
+        pw = get_preference('winlink_password_1') or ''
+
+        # determine PAT config path
+        home     = os.path.expanduser('~')
+        cfg_dir  = os.path.join(home, '.config', 'pat')
+        cfg_file = os.path.join(cfg_dir, 'config.json')
+
+        os.makedirs(cfg_dir, exist_ok=True)
+        # load existing or start fresh
+        cfg = {}
+        if os.path.exists(cfg_file):
+            with open(cfg_file, 'r') as f:
+                cfg = json.load(f)
+
+        # update primary credentials
+        cfg['mycall']                = cs
+        cfg['secure_login_password'] = pw
+
+        # build auxiliary addresses
+        aux_list = []
+        for idx in (2, 3):
+            call = get_preference(f'winlink_callsign_{idx}') or ''
+            pwd  = get_preference(f'winlink_password_{idx}') or ''
+            if call and pwd:
+                aux_list.append({"address": call, "password": pwd})
+        cfg['auxiliary_addresses'] = aux_list
+
+        with open(cfg_file, 'w') as f:
+            json.dump(cfg, f, indent=2)
+        return True, None
+    except Exception as e:
+        try:
+            app.logger.exception("Failed to configure PAT at boot")
+        except Exception:
+            pass
+        return False, str(e)
+
+@app.before_request
+def _boot_pat_and_winlink():
+    # Make this handler run only once on the very first request.
+    # (Flask 3.x removed before_first_request; replicate behavior by self-removal.)
+    try:
+        app.before_request_funcs[None].remove(_boot_pat_and_winlink)
+    except Exception:
+        pass
+    # Try to ensure PAT creds are present on disk (idempotent).
+    _configure_pat_from_prefs_silent()
+    # Auto-start polling/parsing so the UI has data without manual clicks.
+    try:
+        configure_winlink_jobs()
+    except Exception:
+        # Don't crash startup if scheduler init fails.
+        pass
+
+def auto_winlink_send_job():
+    """Scan unsent outbound flights and dispatch them via PAT automatically."""
+    if not pat_config_exists():
+        app.logger.error("PAT config not found. Cannot auto-send WinLink messages.")
+        return
+    # load CC addresses
+    cc_list = [
+        get_preference(f'winlink_cc_{i}') or ''
+        for i in (1,2,3)
+    ]
+    # pull all unsent outbound flights
+    flights = dict_rows("""
+        SELECT * FROM flights
+         WHERE direction='outbound' AND sent=0
+    """)
+    for f in flights:
+        dest = f['airfield_landing'].upper()
+        # load mappings
+        raw = get_preference('airport_call_mappings') or ''
+        mapping = {}
+        seen_canon = {}
+        for line in raw.splitlines():
+            if ':' not in line: continue
+            airport, addr = (x.strip().upper() for x in line.split(':', 1))
+            canon = canonical_airport_code(airport)
+            if canon in seen_canon and seen_canon[canon] != addr:
+                continue
+            mapping[canon] = addr
+            seen_canon[canon] = addr
+
+        to_addr = mapping.get(dest)
+        if not to_addr:
+            continue
+
+        subject = generate_subject(f)
+        body    = generate_body(f, callsign="A-O-C-T", include_test=False)
+        cs      = get_preference('winlink_callsign_1') or ''
+
+        # build PAT compose cmd: flags (including CC) must come before the recipient
+        cmd = ["pat", "compose", "--from", cs, "-s", subject]
+        for cc in cc_list:
+            if cc:
+                cmd += ["--cc", cc]
+        cmd.append(to_addr)
+
+        try:
+            subprocess.run(cmd, input=body, text=True, check=True)
+            # mark flight sent & record
+            with sqlite3.connect(DB_FILE) as conn:
+                ts_iso = iso8601_ceil_utc()
+                conn.execute("UPDATE flights SET sent=1, sent_time=? WHERE id=?", (ts_iso, f['id']))
+                conn.execute("""
+                    INSERT INTO winlink_messages
+                      (direction,callsign,sender,subject,body,flight_id)
+                    VALUES(?,?,?,?,?,?)
+                """, ('out', cs, cs, subject, body, f['id']))
+                # also mirror into outgoing_messages for communications.csv
+                conn.execute("""
+                    INSERT INTO outgoing_messages (flight_id, operator_call, timestamp, subject, body)
+                    VALUES (?,?,?,?,?)
+                """, (f['id'], 'A-O-C-T', ts, subject, body))
+
+        except subprocess.CalledProcessError as e:
+            app.logger.error("Auto-send failed for flight %s: %s", f['id'], e)
+            continue
 
 def apply_supervisor_settings():
     # clear out any existing rate‐based jobs
@@ -2985,6 +3325,32 @@ def dashboard():
     Render *only* the page skeleton.  The <div id="dashboard-table">
     will be populated via AJAX from /_dashboard_table (streaming).
     """
+    # --- Query all flights and map destination status for blue-border ---
+    flights_raw = dict_rows("SELECT * FROM flights")
+    # convert to dict
+    flights = [dict(f) for f in flights_raw]
+
+    # fetch your airport→callsign mapping once
+    raw = get_preference('airport_call_mappings') or ''
+    mapping = {}
+    seen_canon = {}
+    for line in raw.splitlines():
+        if ':' not in line: continue
+        airport, addr = (x.strip().upper() for x in line.split(':', 1))
+        canon = canonical_airport_code(airport)
+        # conflict check
+        if canon in seen_canon and seen_canon[canon] != addr:
+            # Show error or refuse to load/save; handle as needed
+            continue
+        mapping[canon] = addr
+        seen_canon[canon] = addr
+
+    # normalize each flight’s destination via your lookup helper
+    for f in flights:
+        raw_dest = f['airfield_landing']
+        canon = canonical_airport_code(raw_dest)
+        f['dest_mapped'] = canon in mapping
+
     # pass tail_filter so the input box shows the right value
     tail_filter = request.args.get('tail_filter','').strip().upper()
     airport_filter = request.args.get('airport_filter','').strip().upper()
@@ -2992,7 +3358,8 @@ def dashboard():
         'dashboard.html',
         active='dashboard',
         tail_filter=tail_filter,
-        airport_filter=airport_filter
+        airport_filter=airport_filter,
+        mapping=mapping
     )
 
 # --- Stripped-down dashboard, allows transmission over an AX.25 link or similar ----
@@ -3339,15 +3706,34 @@ def radio():
             cw = f'{v} lbs'
         f['cargo_view'] = cw or 'TBD'
 
-    # detect whether our 5-minute job exists
-    job = scheduler.get_job('winlink_poll')
+    # --- Mapping for dest_mapped, just like dashboard ---
+    raw = get_preference('airport_call_mappings') or ''
+    mapping = {}
+    seen_canon = {}
+    for line in raw.splitlines():
+        if ':' not in line: continue
+        airport, addr = (x.strip().upper() for x in line.split(':', 1))
+        canon = canonical_airport_code(airport)
+        if canon in seen_canon and seen_canon[canon] != addr:
+            continue
+        mapping[canon] = addr
+        seen_canon[canon] = addr
+    for f in flights:
+        raw_dest = f.get('airfield_landing','')
+        canon = canonical_airport_code(raw_dest)
+        f['dest_mapped'] = canon in mapping
+
+    # detect whether WinLink jobs are active
+    winlink_job_active      = bool(scheduler.get_job('winlink_poll'))
+    winlink_auto_active     = bool(scheduler.get_job('winlink_auto_send'))
 
     return render_template(
         'radio.html',
         flights=flights,
         active='radio',
         hide_tbd=hide_tbd,
-        winlink_job_active=bool(job))
+        winlink_job_active=winlink_job_active,
+        winlink_auto_active=winlink_auto_active
     )
 
 # ───────────────────────────────────────────────────────────
@@ -3439,6 +3825,19 @@ def dashboard_table_partial():
             id DESC
         """
 
+    # --- Mapping for dest_mapped, just like dashboard ---
+    raw = get_preference('airport_call_mappings') or ''
+    mapping = {}
+    seen_canon = {}
+    for line in raw.splitlines():
+        if ':' not in line: continue
+        airport, addr = (x.strip().upper() for x in line.split(':', 1))
+        canon = canonical_airport_code(airport)
+        if canon in seen_canon and seen_canon[canon] != addr:
+            continue
+        mapping[canon] = addr
+        seen_canon[canon] = addr
+
     # Open a DB cursor for streaming (explicitly configure and close later)
     conn = sqlite3.connect(DB_FILE, timeout=30)
     conn.row_factory = sqlite3.Row
@@ -3453,6 +3852,11 @@ def dashboard_table_partial():
     def gen_rows():
         for r in raw_cursor:
             d = dict(r)
+
+            # --- Add dest_mapped via canonical mapping here, with debug ---
+            raw_dest = d.get('airfield_landing','')
+            canon = canonical_airport_code(raw_dest)
+            d['dest_mapped'] = canon in mapping
 
             # — airport formatting & views —
             d['origin_view'] = _fmt_airport(d.get('airfield_takeoff',''), airport_pref)
@@ -3470,7 +3874,6 @@ def dashboard_table_partial():
                 d['cargo_view'] = f"{round(float(m_kg.group(1)) * 2.20462, 1)} lbs"
             else:
                 d['cargo_view'] = cw or 'TBD'
-
             # — distance (only if enabled) + stale‑flag for >5 min old —
             if show_dist:
                 unit = request.cookies.get('distance_unit','nm')
@@ -3480,7 +3883,6 @@ def dashboard_table_partial():
                     d['distance_stale'] = False
                 else:
                     km_val, ts = entry
-                    # convert
                     if unit=='mi':
                         val = round(km_val * 0.621371, 1)
                     elif unit=='nm':
@@ -3488,7 +3890,6 @@ def dashboard_table_partial():
                     else:
                         val = round(km_val, 1)
                     d['distance'] = val
-                    # stale if more than 5 minutes old
                     d['distance_stale'] = (time.time() - ts) > 300
             else:
                 d['distance'] = ''
@@ -3550,6 +3951,25 @@ def radio_table_partial():
 
     flights = dict_rows(sql)
 
+    # --- Mapping for dest_mapped, just like dashboard ---
+    raw = get_preference('airport_call_mappings') or ''
+    mapping = {}
+    seen_canon = {}
+    for line in raw.splitlines():
+        if ':' not in line: continue
+        airport, addr = (x.strip().upper() for x in line.split(':', 1))
+        canon = canonical_airport_code(airport)
+        if canon in seen_canon and seen_canon[canon] != addr:
+            continue
+        mapping[canon] = addr
+        seen_canon[canon] = addr
+
+    # Add dest_mapped for each flight row
+    for f in flights:
+        raw_dest = f.get('airfield_landing','')
+        canon = canonical_airport_code(raw_dest)
+        f['dest_mapped'] = canon in mapping
+
     # same prefs + view‐field logic as in radio()
     pref     = dict_rows("SELECT value FROM preferences WHERE name='code_format'")
     code_fmt = request.cookies.get('code_format') or (pref[0]['value'] if pref else 'icao4')
@@ -3583,11 +4003,24 @@ def radio_table_partial():
     )
 
 # ───── Shared helpers for subject/body ─────────────────────────────
-def generate_body(flight):
-    """Build the WinLink message body for a flight."""
-    callsign     = request.cookies.get('operator_call', 'YOURCALL').upper()
-    include_test = request.cookies.get('include_test','yes') == 'yes'
-    # count previous messages
+def generate_body(flight, callsign=None, include_test=None):
+    """Build the WinLink message body for a flight.
+    If callsign/include_test are not provided, use cookie (if request context); else fallback.
+    """
+    from flask import has_request_context, request
+    # Fallback logic for callsign/include_test
+    if callsign is None or include_test is None:
+        if has_request_context():
+            if callsign is None:
+                callsign = request.cookies.get('operator_call', 'YOURCALL').upper()
+            if include_test is None:
+                include_test = request.cookies.get('include_test', 'yes') == 'yes'
+        else:
+            if callsign is None:
+                callsign = "A-O-C-T"
+            if include_test is None:
+                include_test = False
+    # Count previous messages for this callsign
     with sqlite3.connect(DB_FILE) as c:
         cnt = c.execute(
             "SELECT COUNT(*) FROM flight_history "
@@ -3611,6 +4044,7 @@ def generate_body(flight):
     lines.append("{DART Aircraft Takeoff Report, rev. 2024-05-14}")
 
     return "\n".join(lines)
+
 
 def generate_subject(flight):
     """Build the WinLink message subject line for a flight."""
@@ -3636,31 +4070,17 @@ def radio_detail(fid):
         return ("Not found", 404)
     flight = rows[0]
 
-    # build subject & body via shared helpers
-    subject = generate_subject(flight)
-    body    = generate_body(flight)
+    subject, body = generate_subject(flight), generate_body(flight)
 
-    # read CMS connection & creds out of your preferences
-    wl_host     = get_preference('winlink_cms_host')       or ''
-    wl_port     = get_preference('winlink_cms_port')       or ''
+    # read CMS creds out of your preferences
     wl_callsign = get_preference('winlink_callsign_1')     or ''
     wl_pass     = get_preference('winlink_password_1')     or ''
 
     # fully configured?
-    winlink_configured = all([wl_host, wl_port, wl_callsign, wl_pass])
+    winlink_configured = bool(wl_callsign and wl_pass)
 
     # is our 5-min poll job running?
-    winlink_job_active = (scheduler.get_job('winlink_poll') is not None)
-
-    # if configured, test basic connectivity
-    internet_ok = False
-    if winlink_configured:
-        try:
-            sock = socket.create_connection((wl_host, int(wl_port)), timeout=5)
-            sock.close()
-            internet_ok = True
-        except Exception:
-            internet_ok = False
+    winlink_job_active = bool(scheduler.get_job('winlink_poll'))
 
     return render_template(
         'send_flight.html',
@@ -3670,7 +4090,6 @@ def radio_detail(fid):
         active='radio',
         winlink_configured=winlink_configured,
         winlink_job_active=winlink_job_active,
-        internet_ok=internet_ok
     )
 
 @app.route('/mark_sent/<int:fid>', methods=['POST'])
@@ -5106,6 +5525,58 @@ def preferences():
     # ── update prefs ──────────────────────────────────────────────────────
     if request.method == 'POST':
 
+        # ── WinLink Airport→Callsign mappings & CC addrs ─────────
+        if 'airport_codes[]' in request.form or 'winlink_cc_1' in request.form:
+            # save airport→WinLink mappings
+            if 'airport_codes[]' in request.form:
+                codes   = request.form.getlist('airport_codes[]')
+                callers = request.form.getlist('winlink_callsigns[]')
+                canon_map = {}
+                conflicts = []
+                for c, w in zip(codes, callers):
+                    if not c.strip() or not w.strip():
+                        continue
+                    canon = canonical_airport_code(c)
+                    w = w.strip().upper()
+                    if canon in canon_map and canon_map[canon] != w:
+                        conflicts.append((c, canon, canon_map[canon], w))
+                    canon_map[canon] = w
+                if conflicts:
+                    msgs = "; ".join(
+                        f"‘{c}’ ({canon}) mapped to both {old} and {new}"
+                        for c, canon, old, new in conflicts
+                    )
+                    flash(f"Conflicting mappings detected: {msgs}", "error")
+                    return redirect(url_for('preferences'))
+                raw = "\n".join(
+                    f"{c.strip().upper()}:{canon_map[canonical_airport_code(c)]}"
+                    for c in codes
+                    if c.strip() and canonical_airport_code(c) in canon_map
+                )
+                with sqlite3.connect(DB_FILE) as c:
+                    c.execute("""
+                        INSERT INTO preferences(name,value)
+                        VALUES('airport_call_mappings', ?)
+                        ON CONFLICT(name) DO UPDATE
+                          SET value=excluded.value
+                    """, (raw,))
+
+            # save up to three CC addresses
+            if 'winlink_cc_1' in request.form:
+                for idx in (1,2,3):
+                    key = f"winlink_cc_{idx}"
+                    val = request.form.get(key, "").strip()
+                    with sqlite3.connect(DB_FILE) as c:
+                        c.execute("""
+                            INSERT INTO preferences(name,value)
+                            VALUES(?, ?)
+                            ON CONFLICT(name) DO UPDATE
+                              SET value=excluded.value
+                        """, (key, val))
+
+            flash("WinLink mappings and CC addresses saved.", "success")
+            return redirect(url_for('preferences'))
+
         # ── Unlock / lock admin mode ────────────────────
         if 'admin_passphrase' in request.form:
             entered = request.form['admin_passphrase'].strip()
@@ -5212,6 +5683,20 @@ def preferences():
     row = dict_rows("SELECT value FROM preferences WHERE name='default_origin'")
     default_origin = row[0]['value'] if row else ''
 
+    # Airport→WinLink mappings (raw + parsed)
+    row2 = dict_rows(
+        "SELECT value FROM preferences WHERE name='airport_call_mappings'"
+    )
+    raw_mappings = row2[0]['value'] if row2 else ''
+    airport_mappings = []
+    for line in raw_mappings.splitlines():
+        if ':' in line:
+            code, wl = line.split(':',1)
+            airport_mappings.append((
+                code.strip().upper(),
+                wl.strip().upper()
+            ))
+
     # cookie-backed settings
     current_code    = request.cookies.get('code_format',   'icao4')
     current_mass    = request.cookies.get('mass_unit',     'lbs')
@@ -5220,6 +5705,10 @@ def preferences():
     current_debug   = request.cookies.get('show_debug_logs','no')
     current_radio_unsent = request.cookies.get('radio_show_unsent_only','yes')
     hide_tbd        = request.cookies.get('hide_tbd','yes') == 'yes'
+
+    winlink_cc_1 = get_preference('winlink_cc_1') or ''
+    winlink_cc_2 = get_preference('winlink_cc_2') or ''
+    winlink_cc_3 = get_preference('winlink_cc_3') or ''
 
     return render_template(
         'preferences.html',
@@ -5231,7 +5720,11 @@ def preferences():
         current_debug=current_debug,
         current_radio_unsent=current_radio_unsent,
         sort_seq=request.cookies.get('dashboard_sort_seq','no')=='yes',
-        hide_tbd=hide_tbd
+        hide_tbd=hide_tbd,
+        airport_mappings=airport_mappings,
+        winlink_cc_1=winlink_cc_1,
+        winlink_cc_2=winlink_cc_2,
+        winlink_cc_3=winlink_cc_3
     )
 
 # ───────────────────────────────────────────────────────────
@@ -5269,7 +5762,8 @@ def admin():
               'wargame_inbound_schedule',
               'wargame_radio_schedule',
               'wargame_tasks',
-              'inventory_entries'
+              'inventory_entries',
+              'queued_flights'
             ]
 
             if on:
@@ -5381,17 +5875,15 @@ def admin():
                 flash("Both URL and label are required.", "error")
             return redirect(url_for('admin'))
 
-        # ── Save WinLink Settings ──────────────────────────
-        if 'winlink_cms_host' in request.form:
-            for key in (
-                'winlink_cms_host','winlink_cms_port',
-                'winlink_callsign_1','winlink_password_1',
-                'winlink_callsign_2','winlink_password_2',
-                'winlink_callsign_3','winlink_password_3'
-            ):
+        # ── Save WinLink Settings (callsigns/passwords only) ───────────
+        if 'winlink_callsign_1' in request.form:
+            for key in ('winlink_callsign_1','winlink_password_1',
+                        'winlink_callsign_2','winlink_password_2',
+                        'winlink_callsign_3','winlink_password_3'):
                 set_preference(key, request.form.get(key,'').strip())
             flash("WinLink settings saved.", "success")
             return redirect(url_for('admin'))
+
 
         # ── Update Default Origin (still in both Admin & Preferences) ──
         if 'default_origin' in request.form:
@@ -5419,8 +5911,6 @@ def admin():
     embedded_mode         = get_preference('embedded_mode') or 'iframe'
     enable_1090_distances = get_preference('enable_1090_distances') == 'yes'
     # pull WinLink prefs for template
-    winlink_cms_host       = get_preference('winlink_cms_host')    or ''
-    winlink_cms_port       = get_preference('winlink_cms_port')    or ''
     winlink_callsign_1     = get_preference('winlink_callsign_1')  or ''
     winlink_password_1     = get_preference('winlink_password_1')  or ''
     winlink_callsign_2     = get_preference('winlink_callsign_2')  or ''
@@ -5438,8 +5928,6 @@ def admin():
       embedded_name=embedded_name,
       embedded_mode=embedded_mode,
       enable_1090_distances=enable_1090_distances,
-      winlink_cms_host=winlink_cms_host,
-      winlink_cms_port=winlink_cms_port,
       winlink_callsign_1=winlink_callsign_1,
       winlink_password_1=winlink_password_1,
       winlink_callsign_2=winlink_callsign_2,
@@ -5462,29 +5950,11 @@ def configure_pat():
     cfg_file= os.path.join(cfg_dir, 'config.json')
 
     try:
-        os.makedirs(cfg_dir, exist_ok=True)
-        # load existing or start fresh
-        cfg = {}
-        if os.path.exists(cfg_file):
-            with open(cfg_file, 'r') as f:
-                cfg = json.load(f)
-        # update primary credentials
-        cfg['mycall']                = cs
-        cfg['secure_login_password'] = pw
-        # build auxiliary addresses
-        aux_list = []
-        for idx in (2, 3):
-            call = get_preference(f'winlink_callsign_{idx}') or ''
-            pwd  = get_preference(f'winlink_password_{idx}') or ''
-            if call and pwd:
-                aux_list.append({"address": call, "password": pwd})
-        cfg['auxiliary_addresses'] = aux_list
-
-        # write back
-        with open(cfg_file, 'w') as f:
-            json.dump(cfg, f, indent=2)
-
-        flash("PAT configured successfully.", "success")
+        ok, err = _configure_pat_from_prefs_silent()
+        if ok:
+            flash("PAT configured successfully.", "success")
+        else:
+            raise RuntimeError(err or "unknown error")
     except Exception as e:
         app.logger.exception("Failed to configure PAT")
         flash(f"Error configuring PAT: {e}", "error")
@@ -6372,42 +6842,77 @@ def supervisor_inventory_partial():
 @app.route('/winlink/send/<int:flight_id>', methods=['POST'])
 def winlink_send(flight_id):
     """Send the given flight via WinLink and record the outbound message."""
+    # 0) ensure polling is running
+    if scheduler.get_job('winlink_poll') is None:
+        flash("Cannot send: WinLink polling is not active.", "error")
+        return redirect(url_for('radio'))
+
+    # Ensure PAT is configured on disk
+    if not pat_config_exists():
+        flash("PAT not configured — please run Configure PAT in Admin.", "error")
+        return redirect(url_for('radio_detail', fid=flight_id))
+
     # 1) Fetch the flight record
     flight = dict_rows("SELECT * FROM flights WHERE id = ?", (flight_id,))[0]
-
-    # 2) Build subject & body using your existing helpers
     subject = generate_subject(flight)
     body    = generate_body(flight)
 
-    # 3) Load CMS config & primary callsign creds
-    host = get_preference('winlink_cms_host') or ""
-    port = get_preference('winlink_cms_port') or ""
-    cs   = get_preference('winlink_callsign_1') or ""
-    pw   = get_preference('winlink_password_1') or ""
+    # Resolve destination via Airport→WinLink mappings
+    raw      = get_preference('airport_call_mappings') or ''
+    mapping  = {}
+    for ln in raw.splitlines():
+        if ':' in ln:
+            code, wl = ln.split(':', 1)
+            mapping[code.strip().upper()] = wl.strip().upper()
 
-    if not all([host, port, cs, pw]):
-        flash("WinLink CMS not configured.", "error")
+    dest     = flight['airfield_landing']
+    canon    = canonical_airport_code(dest)
+    to_addr  = mapping.get(canon)
+    if not to_addr:
+        flash(f"No WinLink mapping defined for airport “{dest}”.", "error")
         return redirect(url_for('radio_detail', fid=flight_id))
 
-    # 4) Attempt send
-    try:
-        client = WinLinkClient(host, int(port), cs, pw)
-        client.send_message(subject, body)
+    cs = get_preference('winlink_callsign_1') or ""
+    # build PAT compose cmd: flags (including CC) must come before the recipient
+    cmd = ["pat", "compose", "--from", cs, "-s", subject]
+    for idx in (1,2,3):
+        cc = get_preference(f"winlink_cc_{idx}") or ""
+        if cc:
+            cmd += ["--cc", cc]
+    cmd.append(to_addr)
 
-        # 5) Record outbound in our table
+    try:
+        subprocess.run(
+            cmd,
+            input=body,
+            text=True,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        # Record outbound and mark flight sent
         with sqlite3.connect(DB_FILE) as conn:
+            ts_iso = iso8601_ceil_utc()
+            conn.execute("UPDATE flights SET sent=1, sent_time=? WHERE id=?", (ts_iso, flight_id))
             conn.execute("""
                 INSERT INTO winlink_messages
-                  (direction, callsign, subject, body, flight_id)
-                VALUES (?, ?, ?, ?, ?)
-            """, ('out', cs, subject, body, flight_id))
+                  (direction, callsign, sender, subject, body, flight_id)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, ('out', cs, to_addr, subject, body, flight_id))
+            # also mirror into outgoing_messages for communications.csv
+            op_call = (request.cookies.get('operator_call','YOURCALL') or 'YOURCALL').upper()
+            conn.execute("""
+                INSERT INTO outgoing_messages (flight_id, operator_call, timestamp, subject, body)
+                VALUES (?,?,?,?,?)
+            """, (flight_id, to_addr, ts_iso, subject, body))
 
-        flash("Sent via WinLink.", "success")
-    except Exception:
-        flash("Failed to send via WinLink.", "error")
-
-    return redirect(url_for('radio_detail', fid=flight_id))
-
+        flash("Sent via PAT and flight marked sent.", "success")
+        return redirect(url_for('radio'))
+    except subprocess.CalledProcessError as err:
+        app.logger.error("PAT send failed: %s\n%s", err, err.stderr or err.stdout)
+        flash("Failed to send via PAT.", "error")
+        return redirect(url_for('radio_detail', fid=flight_id))
+    return redirect(url_for('radio'))
 
 def poll_winlink_job():
     """APScheduler job: every 5min, pull inbound for each configured callsign."""
@@ -6450,12 +6955,15 @@ def poll_winlink_job():
             # 3) parse Subject and body
             raw = p.stdout.splitlines()
             subject = ""
+            sender  = ""
             body_lines = []
             in_body = False
 
             for line in raw:
                 if line.startswith("Subject:"):
                     subject = line.split(":", 1)[1].strip()
+                elif line.startswith("From:"):
+                    sender = line.split(":", 1)[1].strip()
                 if in_body:
                     if line.startswith("==="):
                         break
@@ -6466,26 +6974,28 @@ def poll_winlink_job():
 
             body = "\n".join(body_lines).strip()
 
+            # Use RECEIVE time (now), not the b2f Date header
+            ts_iso = iso8601_ceil_utc()
+
             # 4) insert into SQLite
             with sqlite3.connect(DB_FILE) as conn:
                 conn.execute(
                     "INSERT OR IGNORE INTO winlink_messages "
-                    "(direction, callsign, subject, body) VALUES (?, ?, ?, ?)",
-                    ("in", cs, subject, body)
+                    "(direction, callsign, sender, subject, body, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+                    ("in", cs, sender, subject, body, ts_iso)
                 )
+                # remove the .b2f so we don’t re-read it next time
+                try:
+                    os.remove(b2f)
+                except OSError:
+                    # if deletion fails, ignore and move on
+                    pass
 
 @app.route('/winlink/inbox')
 def winlink_inbox():
-    """Display all raw inbound WinLink messages in reverse-chronological order."""
-    msgs = dict_rows("""
-        SELECT id, callsign, subject, body, timestamp
-          FROM winlink_messages
-         WHERE direction = 'in'
-      ORDER BY timestamp DESC
-    """)
+    """Show the WinLink inbox page (with dynamic AJAX refresh)."""
     return render_template(
         'winlink_inbox.html',
-        messages=msgs,
         active='winlink'
     )
 
@@ -6505,13 +7015,153 @@ def winlink_start():
 
 @app.route('/winlink/stop', methods=['POST'])
 def winlink_stop():
-    """Remove only the WinLink poll job."""
-    try:
-        scheduler.remove_job('winlink_poll')
-        flash("WinLink polling stopped.", "info")
-    except JobLookupError:
+    """Remove poll & parse jobs; also stop AutoSend to enforce capability levels."""
+    stopped_any = False
+    for job_id in ('winlink_poll', 'winlink_parse', 'winlink_auto_send'):
+        try:
+            scheduler.remove_job(job_id)
+            stopped_any = True
+        except JobLookupError:
+            pass
+    if stopped_any:
+        flash("WinLink polling stopped (parse & AutoSend halted).", "info")
+    else:
         flash("WinLink polling was not running.", "warning")
     return redirect(request.referrer or url_for('radio'))
+
+def process_unparsed_winlink_messages():
+    """APScheduler job: parse any new inbound WinLink messages."""
+    # fetch all un‐parsed inbound messages
+    msgs = dict_rows("""
+      SELECT id, callsign, subject, body, timestamp
+        FROM winlink_messages
+       WHERE direction='in' AND parsed=0
+    """)
+
+    for m in msgs:
+        # run your existing parser
+        parsed_data = parse_winlink(m['subject'], m['body'])
+
+        # ── upsert flight record and record history ─────────────────────
+        with sqlite3.connect(DB_FILE) as conn:
+            cur = conn.cursor()
+
+            # Mirror into incoming_messages so exports see it
+            # We stored receive-time into winlink_messages.timestamp; normalize to ceil-Z.
+            raw_ts = m.get('timestamp')
+            try:
+                if raw_ts:
+                    # fromisoformat needs offset; accept 'Z' too
+                    dt = datetime.fromisoformat(raw_ts.replace('Z', '+00:00'))
+                else:
+                    dt = None
+            except Exception:
+                dt = None
+            ts_iso = iso8601_ceil_utc(dt)
+            sender_for_log = (m.get('sender') or '')
+            cur.execute("""
+                INSERT INTO incoming_messages(
+                    sender, subject, body, timestamp,
+                    tail_number, airfield_takeoff, airfield_landing,
+                    takeoff_time, eta, cargo_type, cargo_weight, remarks
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                sender_for_log,
+                (m.get('subject')  or ''),
+                (m.get('body')     or ''),
+                ts_iso,
+                parsed_data['tail_number'],
+                parsed_data['airfield_takeoff'],
+                parsed_data['airfield_landing'],
+                parsed_data['takeoff_time'],
+                parsed_data['eta'],
+                parsed_data['cargo_type'],
+                parsed_data['cargo_weight'],
+                parsed_data.get('remarks','')
+            ))
+
+            # 1) try to find an existing inbound flight for this tail + route
+            row = cur.execute(
+                "SELECT id FROM flights "
+                " WHERE tail_number=? AND airfield_takeoff=? AND airfield_landing=?",
+                (
+                    parsed_data['tail_number'],
+                    parsed_data['airfield_takeoff'],
+                    parsed_data['airfield_landing']
+                )
+            ).fetchone()
+
+            if row:
+                # 2a) update existing flight
+                flight_id = row[0]
+                cur.execute(
+                    """
+                    UPDATE flights
+                       SET takeoff_time=?,
+                           eta=?,
+                           cargo_type=?,
+                           cargo_weight=?,
+                           remarks=?
+                     WHERE id=?
+                    """,
+                    (
+                        parsed_data['takeoff_time'],
+                        parsed_data['eta'],
+                        parsed_data['cargo_type'],
+                        parsed_data['cargo_weight'],
+                        parsed_data['remarks'],
+                        flight_id
+                    )
+                )
+            else:
+                # 2b) insert a new inbound flight
+                cur.execute(
+                    """
+                    INSERT INTO flights
+                        (tail_number,
+                         direction,
+                         airfield_takeoff,
+                         airfield_landing,
+                         takeoff_time,
+                         eta,
+                         cargo_type,
+                         cargo_weight,
+                         remarks)
+                    VALUES (?, 'inbound', ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        parsed_data['tail_number'],
+                        parsed_data['airfield_takeoff'],
+                        parsed_data['airfield_landing'],
+                        parsed_data['takeoff_time'],
+                        parsed_data['eta'],
+                        parsed_data['cargo_type'],
+                        parsed_data['cargo_weight'],
+                        parsed_data['remarks']
+                    )
+                )
+                flight_id = cur.lastrowid
+
+            # 3) append an entry to flight_history
+            cur.execute(
+                """
+                INSERT INTO flight_history
+                    (flight_id, timestamp, data)
+                VALUES (?, datetime('now'), ?)
+                """,
+                (flight_id, json.dumps(parsed_data))
+            )
+
+            conn.commit()
+
+        # ── finally mark this WinLink message as parsed ────────────────
+        with sqlite3.connect(DB_FILE) as conn:
+            conn.execute(
+                "UPDATE winlink_messages SET parsed=1 WHERE id=?",
+                (m['id'],)
+            )
+
+    # end for
 
 # ───────────────────────────────────────────────────────────
 if __name__=="__main__":

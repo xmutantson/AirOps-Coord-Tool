@@ -83,6 +83,47 @@
   </form>
 
   <hr>
+  <form id="mappings-form" method="POST" action="{{ url_for('preferences') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <h3>Airport → WinLink Callsign Mappings</h3>
+    <div id="airport-mappings">
+      {% for code, cs in airport_mappings %}
+      <div class="mapping-row">
+        <input name="airport_codes[]" class="map-airport"
+               value="{{ code }}" placeholder="Airport ICAO or FAA"
+               oninput="this.value=this.value.toUpperCase()">
+        <input name="winlink_callsigns[]" class="map-callsign"
+               value="{{ cs }}" placeholder="WinLink Callsign"
+               oninput="this.value=this.value.toUpperCase()">
+        <button type="button" class="remove-mapping" title="Remove row">−</button>
+      </div>
+      {% endfor %}
+      {% if not airport_mappings %}
+      <div class="mapping-row">
+        <input name="airport_codes[]" class="map-airport"
+               placeholder="Airport ICAO or FAA"
+               oninput="this.value=this.value.toUpperCase()">
+        <input name="winlink_callsigns[]" class="map-callsign"
+               placeholder="WinLink Callsign"
+               oninput="this.value=this.value.toUpperCase()">
+        <button type="button" class="remove-mapping" title="Remove row">−</button>
+      </div>
+      {% endif %}
+    </div>
+    <button type="button" id="add-mapping" class="block-btn">＋ Add mapping</button>
+
+    <h3 style="margin-top:2em;">WinLink CC Addresses</h3>
+    <div class="cc-row">
+      {% for idx in [1,2,3] %}
+        <input name="winlink_cc_{{ idx }}" class="map-cc"
+               value="{{ (winlink_cc_1,winlink_cc_2,winlink_cc_3)[idx-1] }}"
+               placeholder="CC Address #{{ idx }}"
+               oninput="this.value=this.value.toUpperCase()">
+      {% endfor %}
+    </div>
+    <button type="submit" class="save-mappings-btn">💾 Save WinLink Mappings & CCs</button>
+  </form>
+  <hr>
 
   <!-- ── Unlock Admin Mode ───────────────────────────────── -->
   <h3>Unlock Admin Mode</h3>
@@ -112,6 +153,27 @@
   input.addEventListener('blur', () => {
     clearTimeout(timer);
     form.submit();
+  });
+})();
+</script>
+
+<script>
+(function(){
+  const addBtn    = document.getElementById('add-mapping');
+  const container = document.getElementById('airport-mappings');
+  if (!addBtn || !container) return;
+
+  addBtn.addEventListener('click', () => {
+    const template = container.querySelector('.mapping-row').cloneNode(true);
+    // Clear out values
+    template.querySelectorAll('input').forEach(i => i.value = '');
+    container.appendChild(template);
+  });
+
+  container.addEventListener('click', (e) => {
+    if (e.target.matches('.remove-mapping') && container.children.length > 1) {
+      e.target.closest('.mapping-row').remove();
+    }
   });
 })();
 </script>

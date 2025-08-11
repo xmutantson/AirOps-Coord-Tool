@@ -28,11 +28,25 @@
 
 {# — Send via WinLink — #}
 {% if winlink_configured %}
-<form method="POST" action="{{ url_for('winlink_send', flight_id=flight['id']) }}"
-      style="display:inline;margin-left:1em;">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <button type="submit" {% if not internet_ok %}disabled{% endif %}>📝 Send via WinLink</button>
-</form>
+  {% if winlink_job_active %}
+    <form method="POST"
+          action="{{ url_for('winlink_send', flight_id=flight['id']) }}"
+          style="display:inline;margin-left:1em;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-primary">
+        📝 Send via WinLink
+      </button>
+    </form>
+  {% else %}
+    <button
+      type="button"
+      class="btn btn-secondary"
+      style="display:inline;margin-left:1em;"
+      onclick="alert('You must start WinLink polling before sending.')"
+      title="Enable WinLink polling first">
+      📝 Send via WinLink
+    </button>
+  {% endif %}
 {% endif %}
 
 <form method="POST" action="{{ url_for('mark_sent', fid=flight['id']) }}">

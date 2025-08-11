@@ -105,20 +105,6 @@
   <form method="POST" action="{{ url_for('admin') }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <h3>WinLink CMS Settings</h3>
-    <div>
-      <label for="winlink_cms_host">CMS Host</label>
-      <input
-        type="text" id="winlink_cms_host" name="winlink_cms_host"
-        value="{{ winlink_cms_host }}"
-        placeholder="e.g. cms.winlink.org">
-    </div>
-    <div>
-      <label for="winlink_cms_port">CMS Port</label>
-      <input
-        type="number" id="winlink_cms_port" name="winlink_cms_port"
-        value="{{ winlink_cms_port }}"
-        placeholder="e.g. 8773">
-    </div>
     {% for i in [1,2,3] %}
     <div>
       <label for="winlink_callsign_{{i}}">Callsign {{i}}</label>

@@ -88,7 +88,8 @@
       <button id="nav-hamburger" aria-label="Customize Navbar">☰</button>
       <div id="nav-dropdown">
         <div>Navbar Tabs</div>
-        <label><input type="checkbox" data-toggle-tab="supervisor" checked> Airport Ops</label><br>
+        <label><input type="
+checkbox" data-toggle-tab="supervisor" checked> Airport Ops</label><br>
         <label><input type="checkbox" data-toggle-tab="radio" checked> Radio</label><br>
         <label><input type="checkbox" data-toggle-tab="ramp_boss" checked> Ramp Boss</label><br>
         <label><input type="checkbox" data-toggle-tab="queued_flights" checked> Ramp Ops</label><br>
@@ -109,8 +110,14 @@
 <!-- ── 30 s heartbeat: paint body.red when server unreachable ── -->
 <script>
 (()=>{               /* IIFE keeps global scope clean */
-  const CHECK_EVERY = 38_000;          // 30 s
-  const TIMEOUT_MS  = 5_000;           // abort after 5 s
+  const CHECK_EVERY   = 30_000;        // 30 s
+  const TIMEOUT_MS    = 5_000;         // abort after 5 s
+  const ALLOW_STALE_MS= 35_000;        // don't mark offline until 35 s since last good ping
+  let lastOK = Date.now();
+
+  // Flag to avoid false "offline" during navigations / reloads
+  window.__NAVIGATING_AWAY = false;
+  window.addEventListener('beforeunload', ()=> { window.__NAVIGATING_AWAY = true; });
 
   async function beat(){
     const ctrl = new AbortController();
@@ -118,8 +125,16 @@
     try{
       const r = await fetch("{{ url_for('ping') }}", { signal: ctrl.signal, cache: "no-store" });
 
-      // always toggle offline highlight
-      document.body.classList.toggle('offline', !r.ok);
+      // success path → clear offline + record lastOK
+      if (r.ok) {
+        document.body.classList.remove('offline');
+        lastOK = Date.now();
+      } else {
+        // non-OK response: only apply offline after leeway
+        if (!window.__NAVIGATING_AWAY && (Date.now() - lastOK) >= ALLOW_STALE_MS) {
+          document.body.classList.add('offline');
+        }
+      }
 
       // but only auto-redirect stale sessions when *not* on login or setup
       const onAuthPage =
@@ -130,8 +145,12 @@
         window.location.href = r.url;
         return;
       }
-    }catch(_){
-      document.body.classList.add('offline');
+    }catch(err){
+      // Fetch aborted (navigation/timeout) → don't flash red unless truly stale
+      const aborted = ctrl.signal.aborted || window.__NAVIGATING_AWAY;
+      if (!aborted && (Date.now() - lastOK) >= ALLOW_STALE_MS) {
+        document.body.classList.add('offline');
+      }
     }finally{
       clearTimeout(tid);
     }
@@ -216,6 +235,7 @@ if (typeof window.showToast !== 'function') {
         schedule();
         return;
       }
+      window.__NAVIGATING_AWAY = true;   // prevent heartbeat from painting red during reload
       location.reload();
     }, INTERVAL);
   }
