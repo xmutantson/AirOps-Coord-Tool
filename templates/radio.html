@@ -20,6 +20,9 @@
       {{ 'Start WinLink Polling' if not winlink_job_active else 'Stop WinLink Polling' }}
     </button>
   </form>
+  <a href="{{ url_for('winlink_inbox') }}" class="btn btn-secondary" style="margin-left:1em;">
+    📥 WinLink Inbox
+  </a>
 </div>
 
 <div id="radio-table">

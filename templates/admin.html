@@ -107,22 +107,39 @@
     <h3>WinLink CMS Settings</h3>
     <div>
       <label for="winlink_cms_host">CMS Host</label>
-      <input type="text" id="winlink_cms_host" name="winlink_cms_host" placeholder="e.g. winlink.example.com">
+      <input
+        type="text" id="winlink_cms_host" name="winlink_cms_host"
+        value="{{ winlink_cms_host }}"
+        placeholder="e.g. cms.winlink.org">
     </div>
     <div>
       <label for="winlink_cms_port">CMS Port</label>
-      <input type="number" id="winlink_cms_port" name="winlink_cms_port" placeholder="e.g. 8773">
+      <input
+        type="number" id="winlink_cms_port" name="winlink_cms_port"
+        value="{{ winlink_cms_port }}"
+        placeholder="e.g. 8773">
     </div>
     {% for i in [1,2,3] %}
     <div>
       <label for="winlink_callsign_{{i}}">Callsign {{i}}</label>
-      <input type="text" id="winlink_callsign_{{i}}" name="winlink_callsign_{{i}}" placeholder="CALLSIGN">
+      <input type="text" id="winlink_callsign_{{i}}" name="winlink_callsign_{{i}}"
+             value="{{ winlink_callsign_1 if i==1 else winlink_callsign_2 if i==2 else winlink_callsign_3 }}"
+             placeholder="CALLSIGN">
+
       <label for="winlink_password_{{i}}">Password {{i}}</label>
-      <input type="password" id="winlink_password_{{i}}" name="winlink_password_{{i}}">
+      <input type="password" id="winlink_password_{{i}}" name="winlink_password_{{i}}"
+             value="{{ winlink_password_1 if i==1 else winlink_password_2 if i==2 else winlink_password_3 }}">
     </div>
     {% endfor %}
     <button type="submit">Save WinLink Settings</button>
   </form>
+
+  <!-- ── PAT Configuration ──────────────────────────────── -->
+  <form method="POST" action="{{ url_for('configure_pat') }}" style="display:inline; margin-left:1rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit">Configure PAT</button>
+  </form>
+
   <!-- ── Exit Admin Mode ───────────────────────────────── -->
   <form method="POST" action="{{ url_for('admin') }}" style="margin-top:1rem">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

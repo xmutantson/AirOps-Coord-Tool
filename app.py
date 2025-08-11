@@ -44,7 +44,6 @@ import threading, time, socket, math
 from urllib.request import urlopen
 import queue
 import requests
-import telnetlib
 
 from functools import lru_cache
 
@@ -57,8 +56,6 @@ from apscheduler.schedulers.base import STATE_RUNNING
 from apscheduler.jobstores.base import JobLookupError
 
 import logging, sys
-
-from winlink import WinLinkClient
 
 # convenience logger
 logger = logging.getLogger(__name__)
@@ -2827,13 +2824,16 @@ def configure_wargame_jobs():
         scheduler.start()
 
 def configure_winlink_jobs():
-    # clear out any existing jobs
-    scheduler.remove_all_jobs()
+    # remove any existing WinLink poll job
+    try:
+        scheduler.remove_job('winlink_poll')
+    except JobLookupError:
+        pass
 
     scheduler.add_job(
-        'winlink_poll', 
-        poll_winlink_job, 
-        trigger='interval', 
+        'winlink_poll',
+        poll_winlink_job,
+        trigger='interval',
         minutes=5
     )
 
@@ -3582,31 +3582,23 @@ def radio_table_partial():
         hide_tbd=hide_tbd
     )
 
-# --- Radio message detail / copy-paste helper ---------------------------
-@app.route('/radio_detail/<int:fid>')
-def radio_detail(fid):
-    rows = dict_rows("SELECT * FROM flights WHERE id=?", (fid,))
-    if not rows:
-        return ("Not found", 404)
-    flight = rows[0]
-    callsign   = request.cookies.get('operator_call', 'YOURCALL').upper()
+# ───── Shared helpers for subject/body ─────────────────────────────
+def generate_body(flight):
+    """Build the WinLink message body for a flight."""
+    callsign     = request.cookies.get('operator_call', 'YOURCALL').upper()
     include_test = request.cookies.get('include_test','yes') == 'yes'
-
-    # build the body lines dynamically
-    # ---- figure out the next sequential message number for THIS callsign ---
+    # count previous messages
     with sqlite3.connect(DB_FILE) as c:
-        # how many previous history rows were sent by this operator?
-        cnt = c.execute("""
-            SELECT COUNT(*) FROM flight_history
-            WHERE json_extract(data, '$.operator_call') = ?
-        """, (callsign,)).fetchone()[0]
+        cnt = c.execute(
+            "SELECT COUNT(*) FROM flight_history "
+            "WHERE json_extract(data,'$.operator_call') = ?",
+            (callsign,)
+        ).fetchone()[0]
+    msg_num = f"{cnt + 1:03}"
 
-    msg_num = f"{cnt + 1:03}"           # 001, 002, …
-
-    # ---- build the Winlink body -------------------------------------------
     lines = []
     if include_test:
-        lines.append("**** TEST MESSAGE ONLY  (if reporting on an actual flight, delete this line). ****")
+        lines.append("**** TEST MESSAGE ONLY  (if actual flight, delete). ****")
     lines.append(f"{callsign} message number {msg_num}.")
     lines.append("")
     lines.append(f"Aircraft {flight['tail_number']}:")
@@ -3618,29 +3610,41 @@ def radio_detail(fid):
     lines.append("")
     lines.append("{DART Aircraft Takeoff Report, rev. 2024-05-14}")
 
-    body = "\n".join(lines)
+    return "\n".join(lines)
 
-    # For inbound flights, use “Landed” instead of “ETA”
+def generate_subject(flight):
+    """Build the WinLink message subject line for a flight."""
     if flight.get('direction') == 'inbound':
-        subject = (
+        return (
             f"Air Ops: {flight['tail_number']} | "
             f"{flight['airfield_takeoff']} to {flight['airfield_landing']} | "
             f"Landed {flight['eta'] or '----'}"
         )
     else:
-        subject = (
+        return (
             f"Air Ops: {flight['tail_number']} | "
             f"{flight['airfield_takeoff']} to {flight['airfield_landing']} | "
             f"took off {flight['takeoff_time'] or '----'} | "
             f"ETA {flight['eta'] or '----'}"
         )
 
-    # ── WinLink integration flags ───────────────────────────────────
-    # read CMS connection & creds out of your preferences table
-    wl_host     = get_preference('winlink_cms_host')     or ''
-    wl_port     = get_preference('winlink_cms_port')     or ''
-    wl_callsign = get_preference('winlink_callsign')     or ''
-    wl_pass     = get_preference('winlink_password')     or ''
+# --- Radio message detail / copy-paste helper ---------------------------
+@app.route('/radio_detail/<int:fid>')
+def radio_detail(fid):
+    rows = dict_rows("SELECT * FROM flights WHERE id=?", (fid,))
+    if not rows:
+        return ("Not found", 404)
+    flight = rows[0]
+
+    # build subject & body via shared helpers
+    subject = generate_subject(flight)
+    body    = generate_body(flight)
+
+    # read CMS connection & creds out of your preferences
+    wl_host     = get_preference('winlink_cms_host')       or ''
+    wl_port     = get_preference('winlink_cms_port')       or ''
+    wl_callsign = get_preference('winlink_callsign_1')     or ''
+    wl_pass     = get_preference('winlink_password_1')     or ''
 
     # fully configured?
     winlink_configured = all([wl_host, wl_port, wl_callsign, wl_pass])
@@ -3664,7 +3668,6 @@ def radio_detail(fid):
         subject_text=subject,
         body_text=body,
         active='radio',
-        # flags for your template to show/hide WinLink UI
         winlink_configured=winlink_configured,
         winlink_job_active=winlink_job_active,
         internet_ok=internet_ok
@@ -5378,6 +5381,18 @@ def admin():
                 flash("Both URL and label are required.", "error")
             return redirect(url_for('admin'))
 
+        # ── Save WinLink Settings ──────────────────────────
+        if 'winlink_cms_host' in request.form:
+            for key in (
+                'winlink_cms_host','winlink_cms_port',
+                'winlink_callsign_1','winlink_password_1',
+                'winlink_callsign_2','winlink_password_2',
+                'winlink_callsign_3','winlink_password_3'
+            ):
+                set_preference(key, request.form.get(key,'').strip())
+            flash("WinLink settings saved.", "success")
+            return redirect(url_for('admin'))
+
         # ── Update Default Origin (still in both Admin & Preferences) ──
         if 'default_origin' in request.form:
             val = escape(request.form['default_origin'].strip().upper())
@@ -5403,6 +5418,15 @@ def admin():
     embedded_name         = get_preference('embedded_name') or ''
     embedded_mode         = get_preference('embedded_mode') or 'iframe'
     enable_1090_distances = get_preference('enable_1090_distances') == 'yes'
+    # pull WinLink prefs for template
+    winlink_cms_host       = get_preference('winlink_cms_host')    or ''
+    winlink_cms_port       = get_preference('winlink_cms_port')    or ''
+    winlink_callsign_1     = get_preference('winlink_callsign_1')  or ''
+    winlink_password_1     = get_preference('winlink_password_1')  or ''
+    winlink_callsign_2     = get_preference('winlink_callsign_2')  or ''
+    winlink_password_2     = get_preference('winlink_password_2')  or ''
+    winlink_callsign_3     = get_preference('winlink_callsign_3')  or ''
+    winlink_password_3     = get_preference('winlink_password_3')  or ''
 
     return render_template(
       'admin.html',
@@ -5413,8 +5437,59 @@ def admin():
       embedded_url=embedded_url,
       embedded_name=embedded_name,
       embedded_mode=embedded_mode,
-      enable_1090_distances=enable_1090_distances
+      enable_1090_distances=enable_1090_distances,
+      winlink_cms_host=winlink_cms_host,
+      winlink_cms_port=winlink_cms_port,
+      winlink_callsign_1=winlink_callsign_1,
+      winlink_password_1=winlink_password_1,
+      winlink_callsign_2=winlink_callsign_2,
+      winlink_password_2=winlink_password_2,
+      winlink_callsign_3=winlink_callsign_3,
+      winlink_password_3=winlink_password_3
     )
+
+# ─────────── PAT Configuration ─────────────────────────────
+@app.post('/configure_pat')
+def configure_pat():
+    """Write out ~/.config/pat/config.json using WinLink prefs."""
+    # primary WinLink credentials
+    cs = get_preference('winlink_callsign_1') or ''
+    pw = get_preference('winlink_password_1') or ''
+
+    # determine PAT config path
+    home    = os.path.expanduser('~')
+    cfg_dir = os.path.join(home, '.config', 'pat')
+    cfg_file= os.path.join(cfg_dir, 'config.json')
+
+    try:
+        os.makedirs(cfg_dir, exist_ok=True)
+        # load existing or start fresh
+        cfg = {}
+        if os.path.exists(cfg_file):
+            with open(cfg_file, 'r') as f:
+                cfg = json.load(f)
+        # update primary credentials
+        cfg['mycall']                = cs
+        cfg['secure_login_password'] = pw
+        # build auxiliary addresses
+        aux_list = []
+        for idx in (2, 3):
+            call = get_preference(f'winlink_callsign_{idx}') or ''
+            pwd  = get_preference(f'winlink_password_{idx}') or ''
+            if call and pwd:
+                aux_list.append({"address": call, "password": pwd})
+        cfg['auxiliary_addresses'] = aux_list
+
+        # write back
+        with open(cfg_file, 'w') as f:
+            json.dump(cfg, f, indent=2)
+
+        flash("PAT configured successfully.", "success")
+    except Exception as e:
+        app.logger.exception("Failed to configure PAT")
+        flash(f"Error configuring PAT: {e}", "error")
+
+    return redirect(url_for('admin'))
 
 @app.route('/wargame')
 def wargame_index():
@@ -6336,31 +6411,68 @@ def winlink_send(flight_id):
 
 def poll_winlink_job():
     """APScheduler job: every 5min, pull inbound for each configured callsign."""
-    host = get_preference('winlink_cms_host') or ""
-    try:
-        port = int(get_preference('winlink_cms_port') or 0)
-    except ValueError:
-        return
-
+    # For each configured callsign/password, call PAT and pull any .b2f files
     for idx in (1, 2, 3):
         cs = get_preference(f'winlink_callsign_{idx}') or ""
         pw = get_preference(f'winlink_password_{idx}') or ""
-        if not all([host, port, cs, pw]):
+        if not all([cs, pw]):
             continue
 
+        # 1) connect to CMS via PAT
         try:
-            client = WinLinkClient(host, port, cs, pw)
-            messages = client.fetch_messages()
-            with sqlite3.connect(DB_FILE) as conn:
-                for m in messages:
-                    conn.execute("""
-                        INSERT OR IGNORE INTO winlink_messages
-                          (direction, callsign, subject, body, timestamp)
-                        VALUES (?, ?, ?, ?, ?)
-                    """, ('in', cs, m['subject'], m['body'], m.get('timestamp')))
-        except Exception:
-            # on any failure, skip to next callsign
+            subprocess.run(
+                ["pat", "connect", "telnet"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+        except subprocess.CalledProcessError:
+            # skip this callsign if we can't connect
             continue
+
+        # 2) find all inbound .b2f files for this callsign
+        inbox_dir = os.path.expanduser(f"~/.local/share/pat/mailbox/{cs}/in")
+        for b2f in glob.glob(os.path.join(inbox_dir, "*.b2f")):
+            try:
+                # feed "0\n0\nq\n" to choose mailbox 0, message 0, then quit
+                p = subprocess.run(
+                    ["pat", "read", b2f],
+                    input="0\n0\nq\n",
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+            except subprocess.CalledProcessError:
+                continue
+
+            # 3) parse Subject and body
+            raw = p.stdout.splitlines()
+            subject = ""
+            body_lines = []
+            in_body = False
+
+            for line in raw:
+                if line.startswith("Subject:"):
+                    subject = line.split(":", 1)[1].strip()
+                if in_body:
+                    if line.startswith("==="):
+                        break
+                    body_lines.append(line)
+                # once we’ve captured the Subject header, an empty line signals body start
+                if subject and line.strip() == "":
+                    in_body = True
+
+            body = "\n".join(body_lines).strip()
+
+            # 4) insert into SQLite
+            with sqlite3.connect(DB_FILE) as conn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO winlink_messages "
+                    "(direction, callsign, subject, body) VALUES (?, ?, ?, ?)",
+                    ("in", cs, subject, body)
+                )
 
 @app.route('/winlink/inbox')
 def winlink_inbox():
@@ -6381,8 +6493,10 @@ def winlink_inbox():
 @app.route('/winlink/start', methods=['POST'])
 def winlink_start():
     """Clear existing jobs, install our 5-min WinLink poll, and start the scheduler."""
-    # yank *all* jobs (Wargame will reconfigure itself separately)
-    scheduler.remove_all_jobs()
+    try:
+        scheduler.remove_job('winlink_poll')
+    except JobLookupError:
+        pass
     # now add back only WinLink
     configure_winlink_jobs()
     flash("WinLink polling started.", "success")

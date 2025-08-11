@@ -17,3 +17,4 @@ decompress-test.py
 test-winlink.py
 ultraraw.py
 winlink-*.py
+lzhuf.py
