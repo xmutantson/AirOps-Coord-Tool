@@ -18,3 +18,9 @@ test-winlink.py
 ultraraw.py
 winlink-*.py
 lzhuf.py
+build/
+dist/
+*.spec
+*.exe
+*.dll
+*.pyd
