@@ -62,6 +62,9 @@ import itertools
 
 import logging, sys
 
+# Start the RF broadcaster (AX.25 UI over Direwolf/KISS)
+from radio_tx import start_radio_tx
+
 # convenience logger
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -957,6 +960,20 @@ def _cleanup_before_view():
     if request.blueprint == 'inventory':
         cleanup_pending()
 
+# ---- Start radio transmitter thread once (on first real request) ----
+_radio_started = False
+@app.before_request
+def _start_radio_tx_once():
+    global _radio_started
+    if _radio_started:
+        return
+    try:
+        # reuse existing DB helper
+        start_radio_tx(lambda sql, params=(): dict_rows(sql, params))
+        _radio_started = True
+        logger.info("Radio TX thread started.")
+    except Exception as e:
+        logger.exception("Failed to start Radio TX thread: %s", e)
 
 @inventory_bp.route('/_advance_data')
 def inventory_advance_data():

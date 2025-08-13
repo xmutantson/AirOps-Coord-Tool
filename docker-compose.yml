@@ -6,16 +6,52 @@ services:
       - ./data:/app/data
       - flask_secret:/run/secrets
     restart: unless-stopped
+    devices:
+      - /dev/snd
+      - /dev/digrig-ptt:/dev/digrig-ptt
+    group_add:
+      - audio
 
-    # Waitress sizing (safe defaults for a Pi 4; tune by env without rebuilds)
     environment:
+      # ---- Waitress (web app) ----
       WAITRESS_LISTEN: "0.0.0.0:5150"
-      WAITRESS_THREADS: "32"            # 24–40 are fine on a Pi 4 for I/O-bound loads
-      WAITRESS_CONNECTION_LIMIT: "200"  # cap concurrent sockets per process
-      WAITRESS_CHANNEL_TIMEOUT: "120"   # > 30s SSE keep-alive
-      # WAITRESS_BACKLOG: "100"         # optional; leave unset unless needed
+      WAITRESS_THREADS: "32"
+      WAITRESS_CONNECTION_LIMIT: "200"
+      WAITRESS_CHANNEL_TIMEOUT: "120"
 
-    # A modest FD limit helps if many tabs open SSE
+      # ---- Direwolf / radio I/O ----
+      DIGIRIG_ENABLE: "1"
+      DIGIRIG_PTT: "/dev/digrig-ptt"
+      AX25_CALLSIGN: "KG7VSN-10"
+      AX25_RX_DEVICE: "plughw:CARD=Device,DEV=0"
+      AX25_TX_DEVICE: "plughw:CARD=Device,DEV=0"
+
+      # ---- AX.25 UI broadcaster (radio_tx.py) ----
+      AX25_DEST: "AOCTDB"        # 6-char destination
+      AX25_PATH: ""              # optional digipeater path (blank = direct)
+      MYCALL: "KG7VSN-10"        # overrides AX25_CALLSIGN if set
+
+      # KISS TCP the broadcaster talks to (Direwolf default 8001)
+      KISS_HOST: "127.0.0.1"
+      KISS_PORT: "8001"
+      # KISS verbosity (0/1). Turn on temporarily if you need troubleshooting.
+      KISS_VERBOSE: "0"
+
+      # Payload chunking/pacing
+      CHUNK_BYTES: "200"         # bytes per frame after encoding
+      PACE_MS: "350"             # ms between frames inside a burst
+      BURST_SIZE: "6"            # frames per kissutil session
+      BURST_PAUSE_MS: "750"      # ms between bursts
+      KISS_WARMUP_MS: "250"      # ms after kissutil starts before first frame
+
+      # New timing model (full snapshot + diffs)
+      FULL_INTERVAL_SEC: "900"   # 15 minutes
+      DIFF_INTERVAL_SEC: "30"    # 30 seconds (skips empty diffs)
+
+      # Compression (payload-only)
+      COMPRESS: "1"              # 1=enable compression (zlib), 0=plain JSON
+      ENCODING: "B91"            # Encoding alphabet for compressed bytes: B91 (Base91) or B64 (Base64)
+
     ulimits:
       nofile:
         soft: 4096

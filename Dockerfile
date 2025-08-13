@@ -5,6 +5,7 @@ FROM python:3.10.14-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
     sqlite3 openssl iproute2 wget ca-certificates \
+    direwolf ax25-tools alsa-utils \
  && rm -rf /var/lib/apt/lists/*
 
 # Install PAT for supported architectures

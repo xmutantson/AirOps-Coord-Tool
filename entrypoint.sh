@@ -2,6 +2,8 @@
 set -e
 
 SECRET_PATH=/run/secrets/flask_secret
+DW_CFG=/etc/direwolf.conf
+DW_LOG=/var/log/direwolf.log
 
 # 1) generate flask_secret if missing
 if [ ! -f "$SECRET_PATH" ]; then
@@ -23,6 +25,47 @@ if [ -z "$HOST_LAN_IP" ] && [ -z "$HOST_LAN_IFACE" ]; then
       export HOST_LAN_IP
       echo "Auto‐detected LAN IP: $HOST_LAN_IP on interface $iface"
     fi
+  fi
+fi
+
+# 2.5) Optional: start Direwolf with DigiRig CM108 PTT if enabled
+# Requires env: DIGIRIG_ENABLE=1, AX25_CALLSIGN, AX25_RX_DEVICE, AX25_TX_DEVICE, DIGIRIG_PTT
+start_direwolf() {
+  echo "Configuring Direwolf…"
+  : "${AX25_CALLSIGN:?AX25_CALLSIGN not set (e.g. KG7VSN-10)}"
+  : "${AX25_RX_DEVICE:?AX25_RX_DEVICE not set (e.g. plughw:CARD=Device,DEV=0)}"
+  : "${AX25_TX_DEVICE:?AX25_TX_DEVICE not set (e.g. plughw:CARD=Device,DEV=0)}"
+  : "${DIGIRIG_PTT:?DIGIRIG_PTT not set (e.g. /dev/digrig-ptt)}"
+
+  # Generate a minimal, solid Direwolf config tuned for 1200 AFSK VHF
+  cat > "$DW_CFG" <<EOF
+ADEVICE ${AX25_RX_DEVICE} ${AX25_TX_DEVICE}
+ARATE   48000
+ACHANNELS 1
+CHANNEL 0
+MODEM 1200
+MYCALL ${AX25_CALLSIGN}
+PTT CM108 ${DIGIRIG_PTT}
+AGWPORT 8000
+KISSPORT 8001
+EOF
+
+  mkdir -p "$(dirname "$DW_LOG")"
+  echo "Starting Direwolf (AGW:8000, KISS:8001)…"
+  # Run Direwolf in background; no chrt/nice (requires CAP_SYS_NICE).
+  ( set -m; exec direwolf -t 0 -c "$DW_CFG" >"$DW_LOG" 2>&1 & )
+  # Give Direwolf a moment to bind sockets.
+  sleep 2
+}
+
+# Optionally bring up Direwolf if enabled
+if [ "${DIGIRIG_ENABLE:-0}" = "1" ]; then
+  # Validate devices exist from host mapping
+  if [ ! -e /dev/snd ] || [ ! -e "${DIGIRIG_PTT:-/dev/digrig-ptt}" ]; then
+    echo "WARNING: DIGIRIG_ENABLE=1 but /dev/snd or ${DIGIRIG_PTT:-/dev/digrig-ptt} is missing."
+    echo "         Check docker compose 'devices:' and your udev rule."
+  else
+    start_direwolf
   fi
 fi
 

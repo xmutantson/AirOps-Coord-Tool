@@ -19,7 +19,6 @@ ultraraw.py
 winlink-*.py
 lzhuf.py
 build/
-dist/
 *.spec
 *.exe
 *.dll
