@@ -20,6 +20,5 @@ winlink-*.py
 lzhuf.py
 build/
 *.spec
-*.exe
 *.dll
 *.pyd
