@@ -156,6 +156,62 @@ pyinstaller --noconfirm --windowed --onefile aot_client.pyw
 
 > We now **commit `dist/`** so Windows users can download prebuilt artifacts directly from the repo.
 
+```
+# ------------------------------------------------------------
+# Build the Windows client (from Linux) using Wine + PyInstaller
+# ------------------------------------------------------------
+
+# 0) Choose an isolated Wine prefix for Windows-Python tools (recommended)
+export WINEARCH=win64
+export WINEPREFIX="${HOME}/.wine-py311"
+wineboot -u
+
+# 1) Download and install Windows Python in the Wine prefix
+#    (Pick a specific 3.11.x you like; 3.11 works well with PyInstaller.)
+PY_VER="3.11.6"
+PY_EXE="python-${PY_VER}-amd64.exe"
+
+# Download if missing
+[ -f "${PY_EXE}" ] || wget "https://www.python.org/ftp/python/${PY_VER}/${PY_EXE}"
+
+# Silent install, add pip and PATH for the Wine user
+# Flags reference: https://docs.python.org/3/using/windows.html#installing-without-ui
+wine "${PY_EXE}" /quiet InstallAllUsers=0 PrependPath=1 Include_launcher=1 Include_pip=1 Include_tcltk=1
+
+# 2) Path to the Windows Python inside Wine (your original path kept, now guaranteed to exist)
+#    If your Wine user is different, adjust the "kameron" part.
+WIN_PY_WINPATH='C:\users\kameron\AppData\Local\Programs\Python\Python311\python.exe'
+
+# Sanity check
+wine "$WIN_PY_WINPATH" --version || {
+  echo "ERROR: Could not run Windows Python via Wine at $WIN_PY_WINPATH"
+  echo "If needed, locate it with: find \"$WINEPREFIX/drive_c/users\" -iname python.exe"
+  exit 1
+}
+
+# 3) Make sure pip works; upgrade toolchain and install PyInstaller
+wine "$WIN_PY_WINPATH" -m pip install --upgrade pip setuptools wheel
+wine "$WIN_PY_WINPATH" -m pip install pyinstaller
+
+# (If pip was somehow not present, you can bootstrap it:)
+# wine "$WIN_PY_WINPATH" -m ensurepip --upgrade
+
+# 4) From the folder containing aot_client.pyw, build a GUI EXE (no console window)
+#    (Your original build line preserved, just with --windowed for GUI)
+wine "$WIN_PY_WINPATH" -m PyInstaller --noconfirm --windowed --onefile --name aot_client aot_client.pyw
+
+# 5) Find your EXE in ./dist/
+echo "Build complete. EXE is at: $(pwd)/dist/aot_client.exe"
+
+# ------------------------------------------------------------
+# Optional: use a Wine venv (keeps packages isolated per project)
+# (Uncomment to use.)
+# wine "$WIN_PY_WINPATH" -m venv venv-win
+# wine "venv-win\Scripts\python.exe" -m pip install --upgrade pip setuptools wheel pyinstaller
+# wine "venv-win\Scripts\python.exe" -m PyInstaller --noconfirm --windowed --onefile --name aot_client aot_client.pyw
+# ------------------------------------------------------------
+```
+
 ---
 
 ## 🔍 Troubleshooting
