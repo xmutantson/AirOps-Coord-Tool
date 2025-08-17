@@ -4,7 +4,7 @@
 {% block content %}
 <div class="container" style="max-width:400px; margin:3rem auto;">
   <h2>🔐 Please Log In</h2>
-  <form method="POST" action="{{ url_for('login', next=request.args.get('next')) }}">
+  <form method="POST" action="{{ url_for('auth.login', next=request.args.get('next')) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label>Password:</label>
     <input type="password" name="password" required>

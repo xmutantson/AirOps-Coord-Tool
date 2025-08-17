@@ -2,7 +2,7 @@
 {% block title %}Edit Flight {{ flight['id'] }} – Aircraft Ops{% endblock %}
 
 {% block content %}
-  <button onclick="location.href='{{ url_for('dashboard') }}'" style="margin-bottom:1rem">
+  <button onclick="location.href='{{ url_for('core.dashboard') }}'" style="margin-bottom:1rem">
     ← Back to Dashboard
   </button>
 
@@ -28,11 +28,9 @@
         {% if field=='direction' %}
           <label>{{ label }}</label>
           <div class="radio-toggle">
-            <input type="radio" id="dir-out-{{flight.id}}" name="direction" value="outbound"
-                   {% if flight['direction']=='outbound' %}checked{% endif %}>
+            <input type="radio" id="dir-out-{{flight.id}}" name="direction" value="outbound" {% if flight['direction']=='outbound' %}checked{% endif %}>
             <label for="dir-out-{{flight.id}}">Outbound</label>
-            <input type="radio" id="dir-in-{{flight.id}}" name="direction" value="inbound"
-                   {% if flight['direction']=='inbound' %}checked{% endif %}>
+            <input type="radio" id="dir-in-{{flight.id}}" name="direction" value="inbound" {% if flight['direction']=='inbound' %}checked{% endif %}>
             <label for="dir-in-{{flight.id}}">Inbound</label>
           </div>
         {% else %}
@@ -51,7 +49,7 @@
     </form>
 
     <form method="POST"
-          action="{{ url_for('delete_flight', fid=flight['id']) }}"
+          action="{{ url_for('ramp.delete_flight', fid=flight['id']) }}"
           onsubmit="return confirm('Really delete flight {{flight.id}}?');"
           style="margin-top:1rem">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

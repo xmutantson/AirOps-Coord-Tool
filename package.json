@@ -1,0 +1,23 @@
+{
+  "name": "aircraft_ops_tool",
+  "version": "1.0.0",
+  "description": "A lightweight Flask app for tracking inbound/outbound aircraft ops during emergencies. Runs great on a Raspberry Pi or small server and is fully dockerized.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "@eslint/js": "^9.33.0",
+    "eslint": "^9.33.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-html": "^8.1.3",
+    "eslint-plugin-import": "^2.32.0",
+    "eslint-plugin-n": "^17.21.3",
+    "eslint-plugin-security": "^3.0.1",
+    "prettier": "^3.6.2"
+  }
+}

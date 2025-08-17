@@ -49,8 +49,15 @@ def _session_id() -> str:
     alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUV"
     return "".join(random.choice(alphabet) for _ in range(4))
 
-def _format_tnc2(dest: str, src: str, path: str, payload: str) -> str:
-    hdr = f"{dest}>{src}" + (f",{path}" if path else "")
+def _format_tnc2(dest: str | None, src: str | None, path: str | None, payload: str) -> str:
+    """
+    Build a TNC2 frame line. Tolerates None for dest/src/path to avoid crashes
+    if callers pass through unset env vars.
+    """
+    d = (dest or "").strip() or "N0CALL"
+    s = (src  or "").strip() or "N0CALL"
+    p = (path or "").strip()
+    hdr = f"{d}>{s}" + (f",{p}" if p else "")
     return f"{hdr}:{payload}\r\n"  # CRLF for kissutil line parsing
 
 def _chunks(s: str, n: int) -> Iterable[str]:

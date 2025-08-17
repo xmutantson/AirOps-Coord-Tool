@@ -9,7 +9,7 @@
     ← Back to Overview
   </button>
 
-  <!-- two-column form, re-using the Ramp-Boss grid styles -->
+  <!-- two-column form, reusing the Ramp-Boss grid styles -->
   <div class="ramp-form-container">
     <form id="inventory-form"
           method="POST"
@@ -20,12 +20,9 @@
       <!-- Direction toggle: sticky at top (values now ‘in’/‘out’ to satisfy DB CHECK) -->
       <label>Direction</label>
       <div class="radio-toggle">
-        <input type="radio" id="dir-in"  name="direction" value="in"
-               {% if session.get('inv_direction','in') != 'out' %}checked{% endif %}>
+        <input type="radio" id="dir-in"  name="direction" value="in" {% if session.get('inv_direction','in') != 'out' %}checked{% endif %}>
         <label for="dir-in">Inbound</label>
-
-        <input type="radio" id="dir-out" name="direction" value="out"
-               {% if session.get('inv_direction','in') == 'out' %}checked{% endif %}>
+        <input type="radio" id="dir-out" name="direction" value="out" {% if session.get('inv_direction','in') == 'out' %}checked{% endif %}>
         <label for="dir-out">Outbound</label>
       </div>
 

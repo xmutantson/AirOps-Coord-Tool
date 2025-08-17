@@ -13,10 +13,7 @@
           <ul class="tight">
             {% for line in b.lines %}
               {% set done = (line.qty_done >= line.qty_required) %}
-              <li{% if done %} class="done"{% endif %}>
-                {{ line.name }} {{ line.size_lb|int }} lb × {{ line.qty_required }}
-                {% if line.qty_done %} — {{ line.qty_done }}/{{ line.qty_required }} done{% endif %}
-              </li>
+              <li{% if done %} class="done"{% endif %}>{{ line.name }} {{ line.size_lb|int }} lb × {{ line.qty_required }}{% if line.qty_done %} — {{ line.qty_done }}/{{ line.qty_required }} done{% endif %}</li>
             {% endfor %}
           </ul>
         </div>
@@ -38,10 +35,7 @@
           <ul class="tight">
             {% for line in b.lines %}
               {% set done = (line.qty_done >= line.qty_required) %}
-              <li{% if done %} class="done"{% endif %}>
-                {{ line.name }} {{ line.size_lb|int }} lb × {{ line.qty_required }}
-                {% if line.qty_done %} — {{ line.qty_done }}/{{ line.qty_required }} done{% endif %}
-              </li>
+              <li{% if done %} class="done"{% endif %}>{{ line.name }} {{ line.size_lb|int }} lb × {{ line.qty_required }}{% if line.qty_done %} — {{ line.qty_done }}/{{ line.qty_required }} done{% endif %}</li>
             {% endfor %}
           </ul>
         </div>
@@ -54,7 +48,7 @@
   <form id="wg-exit-form"
         class="wg-exit"
         method="post"
-        action="{{ url_for('wargame_exit_role') }}"
+        action="{{ url_for('wgindex.wargame_exit_role') }}"
         onsubmit="return confirm('Exit your Wargame role and choose a new one?');">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button type="submit" class="btn btn-yellow">Exit Role</button>
@@ -66,7 +60,7 @@
     let last = '{{ last_inventory_timestamp }}';
     function check() {
       if (document.visibilityState !== 'visible') return;
-      fetch('{{ url_for("wargame_inventory_last_update") }}')
+      fetch('{{ url_for("wginventory.wargame_inventory_last_update") }}')
         .then(r => r.json())
         .then(data => {
           if (data.timestamp !== last) location.reload();

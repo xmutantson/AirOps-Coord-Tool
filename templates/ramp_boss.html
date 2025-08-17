@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Ramp Boss Intake – Aircraft Ops{% endblock %}
+{% set scan_enabled = enable_adv_manifest_scan if enable_adv_manifest_scan is defined else True %}
 
 {% block content %}
   <div class="ramp-form-container">
@@ -78,7 +79,7 @@
              placeholder="e.g. 300"
              style="flex:1; min-width:10ch"
              value="{{ d.get('cargo_weight','') }}">
-        <select name="weight_unit" <select name="weight_unit" tabindex="-1" style="min-width:10ch">  style="min-width:10ch">
+        <select name="weight_unit" tabindex="-1" style="min-width:10ch">
           <option value="lbs" selected>lbs</option>
           <option value="kg">kg</option>
         </select>
@@ -112,13 +113,13 @@
           <button id="sendBtn" type="submit"
                   class="btn-primary"
                   name="action" value="send"
-                  formaction="{{ url_for('send_queued_flight', qid=d.id) }}">
+                  formaction="{{ url_for('ramp.send_queued_flight', qid=d.id) }}">
             SEND NOW
           </button>
           <button id="queueBtn" type="submit"
                   class="btn-secondary"
                   name="action" value="queue"
-                  formaction="{{ url_for('edit_queued_flight', qid=d.id) }}">
+                  formaction="{{ url_for('ramp.edit_queued_flight', qid=d.id) }}">
             SAVE TO QUEUE
           </button>
         {% else %}
@@ -126,13 +127,13 @@
           <button id="sendBtn" type="submit"
                   class="btn-primary"
                   name="action" value="send"
-                  formaction="{{ url_for('ramp_boss') }}">
+                  formaction="{{ url_for('ramp.ramp_boss') }}">
             SEND NOW
           </button>
           <button id="queueBtn" type="submit"
                   class="btn-secondary"
                   name="action" value="queue"
-                  formaction="{{ url_for('queue_flight') }}">
+                  formaction="{{ url_for('ramp.queue_flight') }}">
             Add To Queue
           </button>
         {% endif %}
@@ -232,6 +233,19 @@
     <div id="rb-feedback-container"></div>
   </div>
 
+  <!-- ───────── Advanced-Manifest Detect Modal ───────── -->
+  <div id="adv-detect-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.35);">
+    <div style="background:#fff; max-width:700px; margin:8vh auto; padding:1rem; border-radius:10px;">
+      <h3 style="margin-top:0;">Manifest detected — apply to inventory?</h3>
+      <div id="adv-detect-list" style="display:flex; flex-wrap:wrap; gap:.5rem;"></div>
+      <div style="margin-top:.75rem; display:flex; gap:.5rem; justify-content:flex-end;">
+        <button type="button" id="adv-detect-cancel">Cancel</button>
+        <button type="button" id="adv-detect-apply" class="btn-primary">Apply</button>
+      </div>
+      <div id="adv-detect-error" style="color:#b00; margin-top:.5rem; display:none;"></div>
+    </div>
+  </div>
+
   <!-- ───────────────── Ramp‑Boss main JS (validation, lookup, CW‑tools) ───────────────── -->
   <script>
     /* ───────────────── Prefill when editing a queued-flight draft ───────────────── */
@@ -317,6 +331,19 @@
     const dirRadios   = [...document.querySelectorAll('input[name="direction"]')];
     const queueBtn    = document.getElementById('queueBtn');
     const sendBtn     = document.getElementById('sendBtn');
+    const manifestId  = document.getElementById('manifest-id');
+    const csrfToken   = document.querySelector('input[name="csrf_token"]').value;
+
+    // Detect-Manifest modal nodes
+    const detectModal = document.getElementById('adv-detect-modal');
+    const detectList  = document.getElementById('adv-detect-list');
+    const detectErr   = document.getElementById('adv-detect-error');
+    const detectCancel= document.getElementById('adv-detect-cancel');
+    const detectApply = document.getElementById('adv-detect-apply');
+
+    function openDetectModal() { detectErr.style.display='none'; detectModal.style.display='block'; }
+    function closeDetectModal(){ detectModal.style.display='none'; detectList.innerHTML=''; }
+    if (detectCancel) detectCancel.addEventListener('click', closeDetectModal);
 
     function applyDirUI () {
       const dir = dirRadios.find(r => r.checked).value;
@@ -357,6 +384,121 @@
     }
     dirRadios.forEach(r => r.addEventListener('change', applyDirUI));
     applyDirUI();
+
+    /* ───────── Inbound: Tail lookup → try Advanced-Manifest detection ───────── */
+    const tailInp = document.getElementById('tail');
+    const lookupBtn = document.getElementById('lookup');
+    async function maybeDetectAdvancedManifest() {
+      const dir = dirRadios.find(r => r.checked).value;
+      if (!{{ 'true' if scan_enabled else 'false' }} || dir !== 'inbound') return;
+      const tail = (tailInp.value || '').trim().toUpperCase();
+      if (!tail) return;
+      try {
+        const resp = await fetch(`/api/adv_manifest_from_tail/${encodeURIComponent(tail)}`);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (!data.items || !data.items.length) return;
+        // Build UI: chip + category dropdown (pre-filled when guess exists)
+        detectList.innerHTML = '';
+        const cats = data.categories || [];
+        data.items.forEach((it, idx) => {
+          const wrap = document.createElement('div');
+          wrap.className = 'adv-chip';
+          wrap.style = 'border:1px solid #ccc; border-radius:16px; padding:.5rem .75rem;';
+          wrap.dataset.idx = String(idx);
+          wrap.dataset.sanitized = it.sanitized_name;
+          wrap.dataset.raw = it.raw_name || it.sanitized_name;
+          wrap.dataset.size = String(it.size_lb);
+          wrap.dataset.qty  = String(it.qty);
+          // label
+          const label = document.createElement('div');
+          label.innerHTML = `<strong>${it.sanitized_name}</strong> &nbsp; ${it.size_lb} lb × ${it.qty}`;
+          // category select
+          const sel = document.createElement('select');
+          sel.style = 'margin-left:.5rem;';
+          sel.innerHTML = `<option value="">Category…</option>` +
+            cats.map(c => `<option value="${c.id}">${c.display_name}</option>`).join('');
+          if (it.category_id) sel.value = String(it.category_id);
+          wrap.appendChild(label);
+          wrap.appendChild(sel);
+          detectList.appendChild(wrap);
+        });
+        openDetectModal();
+        // Only ONE apply handler; do not also auto-close here
+        detectApply.onclick = async () => {
+          detectErr.style.display = 'none';
+          // Safely collect chips; never send an empty payload
+          const chips = Array.from(detectList.getElementsByClassName('adv-chip'));
+          if (!chips.length) {
+            detectErr.textContent = 'No detected items to apply. Try Tail Lookup again.';
+            detectErr.style.display = 'block';
+            return;
+          }
+          let bad = false;
+          const items = chips.map(ch => {
+            const sel = ch.querySelector('select');
+            if (!sel || !sel.value) bad = true;
+            return {
+              sanitized_name: (ch.dataset.sanitized || '').trim(),
+              raw_name: (ch.dataset.raw || ch.dataset.sanitized || '').trim(),
+              size_lb: Number(ch.dataset.size || 0),
+              qty: Number(ch.dataset.qty || 0),
+              category_id: sel && sel.value ? Number(sel.value) : null
+            };
+          });
+          if (bad) {
+            detectErr.textContent = 'Please choose a category for each item.';
+            detectErr.style.display = 'block';
+            return;
+          }
+          if (!items.length) {
+            detectErr.textContent = 'Nothing to apply.';
+            detectErr.style.display = 'block';
+            return;
+          }
+          // Ensure we have a manifest session id
+          if (!manifestId.value) {
+            try {
+              const r = await fetch('/api/new_manifest_session', {
+                headers: { 'X-Requested-With':'XMLHttpRequest' }
+              });
+              const j = await r.json();
+              if (j && j.manifest_id) manifestId.value = j.manifest_id;
+            } catch(_) {}
+          }
+          // Apply to inventory (committed inbound entries)
+          const payload = { manifest_id: manifestId.value, items };
+          // Helpful console breadcrumb while we’re stabilizing
+          try { console.debug('apply_adv_manifest payload', payload); } catch(_) {}
+          const ap = await fetch('/api/apply_adv_manifest', {
+            method: 'POST',
+            headers: {
+              'Content-Type':'application/json',
+              'X-Requested-With':'XMLHttpRequest'
+            },
+            body: JSON.stringify(payload)
+          });
+          if (ap.ok) {
+            try {
+              const j = await ap.json();
+              console.debug('apply_adv_manifest result', j);
+            } catch(_){}
+            closeDetectModal();
+            // small toast
+            const ok = document.createElement('div');
+            ok.textContent = 'Manifest applied. It will be attached when you log arrival.';
+            ok.style = 'margin-top:.5rem; color:#060;';
+            feedbackBox.appendChild(ok);
+          } else {
+            let msg = 'Failed to apply manifest.';
+            try { const j = await ap.json(); if (j && j.error) msg = msg + ' ' + j.error; } catch(_){}
+            detectErr.textContent = msg;
+            detectErr.style.display = 'block';
+          }
+        };
+      } catch(_) {}
+    }
+    lookupBtn?.addEventListener('click', maybeDetectAdvancedManifest);
 
     /* ───────────────── Manifest editing helpers ────────────────────────── */
     async function loadExistingManifest () {
@@ -422,6 +564,10 @@
       refreshFromDOM();
       // snapshot chips are real → user should be able to press “Done”
       if (advLines.childElementCount) advDone.disabled = false;
+      // Rebuild remarks live from chips (canonical)
+      const rmf = document.getElementById('remarks');
+      const chipsNow = [...advLines.querySelectorAll('.adv-chip')];
+      rmf.value = buildManifestTextFromChips(chipsNow);
     }
 
     if (isEditDraft){
@@ -463,6 +609,7 @@
       if (d.pax_count)        form.pax_count.value    = d.pax_count;
       if (d.cargo_type)       form.cargo_type.value   = d.cargo_type;
       if (d.cargo_weight)     form.cargo_weight.value = d.cargo_weight;
+      if (d.remarks)          form.remarks.value      = d.remarks;
     });
 
    // ────────────────────────────────────────────────────────────────
@@ -765,16 +912,24 @@
   const advAdd     = document.getElementById('adv-add-line');
   const advLines   = document.getElementById('adv-lines');
   const advDone    = document.getElementById('adv-done');
-  const manifestId = document.getElementById('manifest-id');
   const advMode    = document.getElementById('advanced-mode');
   const rbForm     = document.getElementById('rb-form');
+  /* Reuse globals declared in the main script block:
+   - csrfToken (from the hidden CSRF field)
+   - manifestId (the hidden manifest/session id) */
   let   pendingIds = [];
   let   removedIds = [];      /* ids of compensating rows created by deletes */
   let   snapshot   = null;    /* chip HTML + header fields on panel-open    */
   let   advDirty   = false;   /* ⇢ NEW: true as soon as user changes chips  */
 
-  const csrfToken = document.querySelector('input[name="csrf_token"]').value;
   const showError = msg => showToast(msg, 'error');
+
+  // Canonical preview string: "Manifest: NAME SIZE lb×QTY; …;"
+  function buildManifestTextFromChips(chips) {
+    const parts = chips.map(c =>
+      `${c.dataset.sanitized} ${c.dataset.wpu} lb×${c.dataset.qty}`);
+    return parts.length ? `Manifest: ${parts.join('; ')};` : '';
+  }
 
   const inventoryUrl = "{{ url_for('inventory.inventory_advance_data') }}";
   let invPollTimer = null;
@@ -840,7 +995,7 @@
   /* Main entry-point – now async so we can fetch inventory once if needed */
   async function startAdvanced() {
     const dir = document.querySelector('input[name="direction"]:checked').value;
-    // ── 1) Re-use the session id if we already generated one earlier ──
+    // ── 1) Reuse the session id if we already generated one earlier ──
     if (!manifestId.value) {
       manifestId.value = ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g,
                        c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c/4)
@@ -1073,7 +1228,9 @@
       const cw  = document.getElementById('cargo_weight');
       const rmf = document.getElementById('remarks');
       cw.value  = Math.max(0, (+cw.value || 0) - j.total);
-      rmf.value = rmf.value.replace(`${j.sanitized} ${j.wpu} lb×${j.qty}; `, '');
+      // Rebuild canonical manifest preview after delete
+      const chipsNow = [...advLines.querySelectorAll('.adv-chip')];
+      rmf.value = buildManifestTextFromChips(chipsNow);
     });
 
     advLines.append(chip);
@@ -1096,7 +1253,9 @@
     const cw  = document.getElementById('cargo_weight');
     const rmf = document.getElementById('remarks');
     cw.value = (+cw.value || 0) + j.total;
-    rmf.value += `${j.sanitized} ${j.wpu} lb×${j.qty}; `;
+    // Canonical "Manifest: …; …;" live preview in Remarks
+    const chipsNow = [...advLines.querySelectorAll('.adv-chip')];
+    rmf.value = buildManifestTextFromChips(chipsNow);
 
     // auto‑fill Cargo Type
     const catName = (inventoryAdvancedData.all_categories
@@ -1163,10 +1322,8 @@
       cargoTypeField.value =
         (cats.size === 1 ? [...cats][0] : 'Mixed');
 
-      remarksField.value =
-        chips.map(c =>
-          `${c.dataset.sanitized} ${c.dataset.wpu} lb×${c.dataset.qty}`)
-             .join('; ') + ';';
+      // Canonical "Manifest: …; …;" string with trailing semicolon
+      remarksField.value = buildManifestTextFromChips(chips);
     } else {
       /* ── manifest now empty ── */
       cargoTypeField.value = '';

@@ -8,6 +8,7 @@
                  initial-scale=1,
                  maximum-scale=1,
                  user-scalable=no">
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
   <title>{% block title %}{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <meta name="csrf-token" content="{{ csrf_token() }}">
@@ -49,37 +50,37 @@
 {% if active not in ['login','setup'] %}
   <header>
     <nav class="main-nav">
-      <a href="{{ url_for('supervisor') }}"
+      <a href="{{ url_for('supervisor.supervisor') }}"
          data-tab="supervisor"
          class="{% if active=='supervisor' %}active{% endif %}">Airport Ops</a>
-      <a href="{{ url_for('dashboard') }}"
+      <a href="{{ url_for('core.dashboard') }}"
          data-tab="dashboard"
          class="{% if active=='dashboard' %}active{% endif %}">Dashboard</a>
-      <a href="{{ url_for('radio') }}"
+      <a href="{{ url_for('radio.radio') }}"
          data-tab="radio"
          class="{% if active=='radio' %}active{% endif %}">Radio</a>
-      <a href="{{ url_for('ramp_boss') }}"
+      <a href="{{ url_for('ramp.ramp_boss') }}"
          data-tab="ramp_boss"
          class="{% if active=='ramp_boss' %}active{% endif %}">Ramp Boss</a>
-      <a href="{{ url_for('queued_flights') }}"
+      <a href="{{ url_for('ramp.queued_flights') }}"
          data-tab="queued_flights"
          class="{% if active=='queued_flights' %}active{% endif %}">Ramp Ops</a>
       <a href="{{ url_for('inventory.inventory_overview') }}"
          data-tab="inventory"
          class="{% if active=='inventory' %}active{% endif %}">Inventory</a>
-      <a href="{{ url_for('preferences') }}"
+      <a href="{{ url_for('preferences.preferences') }}"
          class="{% if active=='preferences' %}active{% endif %}">Preferences</a>
       {% if embedded_name and embedded_url %}
-        <a href="{{ url_for('embedded') }}"
+        <a href="{{ url_for('core.embedded') }}"
            class="{% if active=='embedded' %}active{% endif %}">{{ embedded_name }}</a>
       {% endif %}
       {# Show Wargame tab only when training mode is on #}
       {% if wargame_mode %}
-        <a href="{{ url_for('wargame_index') }}"
+        <a href="{{ url_for('wgindex.wargame_index') }}"
            class="{% if active=='wargame' %}active{% endif %}">Wargame</a>
       {% endif %}
       {% if admin_unlocked %}
-        <a href="{{ url_for('admin') }}"
+        <a href="{{ url_for('admin.admin') }}"
            class="{% if active=='admin' %}active{% endif %}">Admin</a>
       {% endif %}
     </nav>
@@ -88,8 +89,7 @@
       <button id="nav-hamburger" aria-label="Customize Navbar">☰</button>
       <div id="nav-dropdown">
         <div>Navbar Tabs</div>
-        <label><input type="
-checkbox" data-toggle-tab="supervisor" checked> Airport Ops</label><br>
+        <label><input type="checkbox" data-toggle-tab="supervisor" checked> Airport Ops</label><br>
         <label><input type="checkbox" data-toggle-tab="radio" checked> Radio</label><br>
         <label><input type="checkbox" data-toggle-tab="ramp_boss" checked> Ramp Boss</label><br>
         <label><input type="checkbox" data-toggle-tab="queued_flights" checked> Ramp Ops</label><br>
@@ -123,7 +123,7 @@ checkbox" data-toggle-tab="supervisor" checked> Airport Ops</label><br>
     const ctrl = new AbortController();
     const tid  = setTimeout(()=>ctrl.abort(), TIMEOUT_MS);
     try{
-      const r = await fetch("{{ url_for('ping') }}", { signal: ctrl.signal, cache: "no-store" });
+      const r = await fetch("{{ url_for('api.ping') }}", { signal: ctrl.signal, cache: "no-store" });
 
       // success path → clear offline + record lastOK
       if (r.ok) {
@@ -204,9 +204,9 @@ if (typeof window.showToast !== 'function') {
 {# NOTE: We intentionally exclude the Inventory Wargame dashboard from the global auto-reload,
    because it uses SSE to refresh precisely on changes. #}
 {% if wargame_mode and request.endpoint in [
-      'wargame_radio_dashboard',
-      'wargame_ramp_dashboard',
-      'wargame_super_dashboard'
+      'wgradio.wargame_radio_dashboard',
+      'wgramp.wargame_ramp_dashboard',
+      'wgsuper.wargame_super_dashboard'
     ] %}
 <script>
 (function(){

@@ -21,11 +21,11 @@
 
 <script>
   async function loadSupervisorCounts(){
-    const resp = await fetch("{{ url_for('supervisor_counts_partial') }}");
+    const resp = await fetch("{{ url_for('supervisor.supervisor_counts_partial') }}");
     document.getElementById("supervisor-counts").innerHTML = await resp.text();
   }
   async function loadSupervisorRecent(){
-    const resp = await fetch("{{ url_for('supervisor_recent_flights_partial') }}");
+    const resp = await fetch("{{ url_for('supervisor.supervisor_recent_flights_partial') }}");
     document.getElementById("supervisor-recent-flights").innerHTML = await resp.text();
   }
   async function loadInventoryOverview(){

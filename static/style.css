@@ -866,7 +866,7 @@ table.wg-radio-table tr.read { opacity: .8; }
   }
 }
 /* ───────────────────────────────────────────────────────────────
-   New: generic primary / secondary buttons
+   generic primary / secondary buttons
    (used by Ramp-Boss “SEND NOW” / “Add To Queue”)
    ───────────────────────────────────────────────────────────── */
 /* Primary → reuse existing amber accent */
@@ -1071,3 +1071,10 @@ table.wg-radio-table tr.read { opacity: .8; }
 .hidden{
   display:none;
 }
+
+/* --- added by fix_all_patches.py: ensure all flash categories render visibly --- */
+.toast.message { background: #4caf50; }  /* default Flask category */
+.toast.warning { background: #ff9800; }
+.toast.import  { background: #673ab7; }
+.toast.db_reset{ background: #9c27b0; }
+/* --- end patch --- */

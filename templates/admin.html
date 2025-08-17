@@ -5,7 +5,7 @@
 <div class="container admin-console">
   <h2>🐙 Admin Console</h2>
 
-  <form id="admin-form" method="POST" action="{{ url_for('admin') }}">
+  <form id="admin-form" method="POST" action="{{ url_for('admin.admin') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
     <!-- ── Core Settings ──────────────────────────────────── -->
@@ -73,7 +73,7 @@
   </form>
 
   <!-- ── Wargame Mode ───────────────────────────────────────────── -->
-  <form method="POST" action="{{ url_for('admin') }}">
+  <form method="POST" action="{{ url_for('admin.admin') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label>Wargame Mode:</label>
     <select name="toggle_wargame" onchange="this.form.submit()">
@@ -84,7 +84,7 @@
 
   <!-- ── Change App Password ──────────────────────────── -->
   <hr>
-  <form method="POST" action="{{ url_for('admin') }}">
+  <form method="POST" action="{{ url_for('admin.admin') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <h3>Change App Password</h3>
 
@@ -102,7 +102,7 @@
     </button>
   </form>
   <!-- ── Winlink Client Settings ───────────────────────────────── -->
-  <form method="POST" action="{{ url_for('admin') }}">
+  <form method="POST" action="{{ url_for('admin.admin') }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <h3>WinLink CMS Settings</h3>
     {% for i in [1,2,3] %}
@@ -121,19 +121,19 @@
   </form>
 
   <!-- ── PAT Configuration ──────────────────────────────── -->
-  <form method="POST" action="{{ url_for('configure_pat') }}" style="display:inline; margin-left:1rem;">
+  <form method="POST" action="{{ url_for('admin.configure_pat') }}" style="display:inline; margin-left:1rem;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button type="submit">Configure PAT</button>
   </form>
 
   <!-- ── Exit Admin Mode ───────────────────────────────── -->
-  <form method="POST" action="{{ url_for('admin') }}" style="margin-top:1rem">
+  <form method="POST" action="{{ url_for('admin.admin') }}" style="margin-top:1rem">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button name="exit_admin" value="1">Exit Admin Mode</button>
   </form>
 
   <!-- ── Invalidate All Sessions (danger!) ──────────────────── -->
-  <form method="POST" action="{{ url_for('admin') }}" style="margin-top:1rem">
+  <form method="POST" action="{{ url_for('admin.admin') }}" style="margin-top:1rem">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button name="invalidate_sessions" value="1" class="danger">
       Invalidate All Sessions
@@ -143,18 +143,18 @@
   <!-- ── Data Management ────────────────────────────────── -->
   <hr>
   <h3>Data Management</h3>
-  <form style="display:inline" action="{{ url_for('export_all_csv') }}" method="GET">
+  <form style="display:inline" action="{{ url_for('exports.export_all_csv') }}" method="GET">
     <button>Export All CSVs</button>
   </form>
   {# importer disabled: use local DB functions instead #}
-  {# <form style="display:inline" action="{{ url_for('import_csv') }}" method="POST" enctype="multipart/form-data">
+  {# <form style="display:inline" action="{{ url_for('exports.import_csv') }}" method="POST" enctype="multipart/form-data">
        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
        <input type="file" name="csv_file" accept=".csv" required>
        <button>Import CSV</button>
      </form> #}
   <br><br>
   <form method="POST"
-        action="{{ url_for('reset_db') }}"
+        action="{{ url_for('core.reset_db') }}"
         onsubmit="return confirm('This will wipe ALL data—continue?')">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button class="danger">Reset Database</button>
@@ -172,10 +172,7 @@
     clearTimeout(timer);
     timer = setTimeout(()=> form.submit(), 800);
   });
-  input.addEventListener('blur', () => {
-    clearTimeout(timer);
-    form.submit();
-  });
+  input.addEventListener('blur', () => { clearTimeout(timer); const flag = form.querySelector('input[name="save_embedded"]'); if (flag) flag.remove(); form.submit(); });
 
   // ── Embedded-Tab autosave (only when both fields filled) ─
   const urlInput  = document.getElementById('embedded-url');

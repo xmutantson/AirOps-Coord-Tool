@@ -16,9 +16,9 @@
         <tr>
           <td>
             {{ q.id }}
-            <a href="{{ url_for('edit_queued_flight', qid=q.id) }}"
+            <a href="{{ url_for('ramp.edit_queued_flight', qid=q.id) }}"
                class="icon-btn" title="Edit">✏️</a>
-            <a href="{{ url_for('delete_queued_flight', qid=q.id) }}"
+            <a href="{{ url_for('ramp.delete_queued_flight', qid=q.id) }}"
                class="icon-btn"
                onclick="return confirm('Delete draft {{q.id}} ?')"
                title="Delete">🗑</a>
@@ -39,7 +39,7 @@
             <form method="post"
                   class="q-send-form"
                   data-tt="{{ q.travel_time or '' }}"
-                  action="{{ url_for('send_queued_flight', qid=q.id) }}">
+                  action="{{ url_for('ramp.send_queued_flight', qid=q.id) }}">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button type="submit">Send</button>
             </form>

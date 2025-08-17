@@ -9,7 +9,7 @@
             onclick="window.print()"
             style="margin-right:1rem;">🖨️ Print</button>
     Aircraft Ops Dashboard
-    (Hosted at: {{ mdns_name or '---' }}:5150 – {{ host_ip or '---' }}:5150)
+    (Hosted at: {{ mdns_host_label }} — fallback {{ mdns_fallback_label }})
   </span>
   <span id="clock" class="clock">00:00:00</span>
 
@@ -69,7 +69,7 @@
   async function refreshDashboard(){
     try {
       const resp = await fetch(
-        '{{ url_for("dashboard_table_partial") }}'
+        '{{ url_for("core.dashboard_table_partial") }}'
         + window.location.search
       );
       if (!resp.ok) throw new Error(resp.status);

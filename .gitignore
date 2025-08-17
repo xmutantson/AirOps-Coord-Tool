@@ -1,24 +1,54 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.so
+.venv/
 venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+
+# ---- Env & local data ----
+.env
+.env.*
 data/
+*.db
+*.sqlite*
+*.sqlite3
+*.log
+reports/
+
+# ---- Node/Frontend ----
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.tsbuildinfo
+
+# ---- Editors/OS ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# ---- Backups & scratch ----
+*.bak
+*.bak.*
+*.pre_fix.bak
+*~
+*.swp
+*.swo
+
+# ---- Project-specific ----
 flask_secret.txt
-graph.json
-# stop tracking our Winlink helper
+# legacy helper script you don't want tracked
 winlink.py
 
-# ignore all the currently untracked junk
-__pycache__/
-*.b2f
-*.hex
-deps/
-session.log
-raw_socket_diag.py
-decode_all.py
-decompress-test.py
-test-winlink.py
-ultraraw.py
-winlink-*.py
-lzhuf.py
-build/
-*.spec
-*.dll
-*.pyd
+# Optional: ignore dev-only helpers if you don't intend to track them
+tools/
+scripts/

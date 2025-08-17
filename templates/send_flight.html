@@ -2,8 +2,8 @@
 {% block title %}Send Flight {{ flight['id'] }} – Aircraft Ops{% endblock %}
 {% block content %}
   <div style="margin-bottom:20px">
-    <button onclick="location.href='{{ url_for('radio') }}'">↩️ Out-box</button>
-    <button onclick="location.href='{{ url_for('dashboard') }}'">Dashboard</button>
+    <button onclick="location.href='{{ url_for('radio.radio') }}'">↩️ Out-box</button>
+    <button onclick="location.href='{{ url_for('core.dashboard') }}'">Dashboard</button>
   </div>
 
 <h2>Flight {{ flight['tail_number'] }} (ID {{ flight['id'] }})</h2>
@@ -30,7 +30,7 @@
 {% if winlink_configured %}
   {% if winlink_job_active %}
     <form method="POST"
-          action="{{ url_for('winlink_send', flight_id=flight['id']) }}"
+          action="{{ url_for('winlink.winlink_send', flight_id=flight['id']) }}"
           style="display:inline;margin-left:1em;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit" class="btn btn-primary">
@@ -49,7 +49,7 @@
   {% endif %}
 {% endif %}
 
-<form method="POST" action="{{ url_for('mark_sent', fid=flight['id']) }}">
+<form method="POST" action="{{ url_for('radio.mark_sent', fid=flight['id']) }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <button type="submit" onclick="return confirm('Mark this message as SENT?')">
     ✅ Mark Sent

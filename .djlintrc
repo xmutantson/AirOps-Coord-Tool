@@ -1,0 +1,5 @@
+{
+  "profile": "jinja",
+  "quiet": true,
+  "ignore": "H001,H006,H016,H017,H023,H030,H031,H032"
+}

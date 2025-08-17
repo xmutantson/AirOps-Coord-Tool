@@ -6,7 +6,7 @@
 <div class="page-header-bar">
   <span class="page-title">
     Radio Operator Outbox
-    (Hosted at: {{ mdns_name or '---' }}:5150 -or- {{ host_ip or '---' }}:5150)
+    (Hosted at: {{ mdns_host_label }} — fallback {{ mdns_fallback_label }})
   </span>
   <span id="clock" class="clock">00:00:00</span>
 </div>
@@ -15,7 +15,7 @@
 <div class="winlink-controls" style="display:flex; gap:0.5rem; align-items:center; margin:1rem 0;">
   <form method="POST"
         id="winlink-poll-form"
-        action="{{ url_for('winlink_start') if not winlink_job_active else url_for('winlink_stop') }}">
+        action="{{ url_for('winlink.winlink_start') if not winlink_job_active else url_for('winlink.winlink_stop') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button type="submit"
             class="btn btn-{{ 'success' if not winlink_job_active else 'danger' }}">
@@ -24,7 +24,7 @@
   </form>
 
   <form method="POST"
-        action="{{ url_for('winlink_auto_start') if not winlink_auto_active else url_for('winlink_auto_stop') }}">
+        action="{{ url_for('winlink.winlink_auto_start') if not winlink_auto_active else url_for('winlink.winlink_auto_stop') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button type="submit"
             class="btn btn-{{ 'success' if not winlink_auto_active else 'danger' }}">
@@ -32,7 +32,7 @@
     </button>
   </form>
 
-   <a href="{{ url_for('winlink_inbox') }}" class="btn btn-secondary">
+   <a href="{{ url_for('winlink.winlink_inbox') }}" class="btn btn-secondary">
      📥 WinLink Inbox
      <span id="wl-unread-badge" class="wl-unread-badge" style="display:none;">
        UNREAD EMAILS: 0
@@ -80,7 +80,7 @@ function normalizeHHMM(t){
 <script>
   // 1) Every 30s, re-fetch only the radio table
   setInterval(async () => {
-    const resp = await fetch('{{ url_for("radio_table_partial") }}');
+    const resp = await fetch('{{ url_for("radio.radio_table_partial") }}');
     if (!resp.ok) return;
     document.getElementById('radio-table').innerHTML = await resp.text();
   }, 30000);
@@ -283,7 +283,7 @@ const pollForm = document.getElementById('winlink-poll-form');
 if (pollForm) {
   pollForm.addEventListener('submit', async function(e){
     // Only intercept on "Start" (not "Stop")
-    if (pollForm.action.endsWith('{{ url_for("winlink_start") }}')) {
+    if (pollForm.action.endsWith('{{ url_for("winlink.winlink_start") }}')) {
       e.preventDefault();
       // Fire one-time poll_now route with CSRF
       const CSRF_TOKEN = '{{ csrf_token() }}';
@@ -340,7 +340,7 @@ function contains(ranges, id){
 async function refreshUnreadBadge(){
   try{
     // 1) fetch current inbox (IDs only are all we need; using existing endpoint)
-    const resp = await fetch('{{ url_for("winlink_inbox_json") }}', { cache:'no-store' });
+    const resp = await fetch('{{ url_for("winlink.winlink_inbox_json") }}', { cache:'no-store' });
     if (!resp.ok) return;
     const msgs = await resp.json();
     const ids  = Array.isArray(msgs) ? msgs.map(m => +m.id).filter(Number.isFinite) : [];

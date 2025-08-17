@@ -9,6 +9,13 @@
     <!-- ── Ops / Display Prefs ─────────────────────────────── -->
     <h3>Display / Operational Prefs</h3>
 
+    <label
+      title="If Yes: on inbound Lookup Tail, parse the latest Remarks for advanced-manifest items and show the apply dialog."
+    >Inbound manifest auto-scan</label>
+    <select name="ramp_scan_adv_manifest" onchange="this.form.submit()">
+      <option value="yes" {% if scan_adv_pref=='yes' %}selected{% endif %}>Yes</option>
+      <option value="no"  {% if scan_adv_pref=='no'  %}selected{% endif %}>No</option>
+    </select>
     <label>Default Origin (ICAO or FAA):</label>
     <input
       id="default-origin"
@@ -83,7 +90,7 @@
   </form>
 
   <hr>
-  <form id="mappings-form" method="POST" action="{{ url_for('preferences') }}">
+  <form id="mappings-form" method="POST" action="{{ url_for('preferences.preferences') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <h3>Airport → WinLink Callsign Mappings</h3>
     <div id="airport-mappings">
@@ -127,7 +134,7 @@
 
   <!-- ── Unlock Admin Mode ───────────────────────────────── -->
   <h3>Unlock Admin Mode</h3>
-  <form method="POST" action="{{ url_for('preferences') }}">
+  <form method="POST" action="{{ url_for('preferences.preferences') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label for="admin-pass">Passphrase:</label>
     <input

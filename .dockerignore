@@ -1,42 +1,62 @@
-# Ignore everything by default; then whitelist only what the image needs.
-**
+# ---- VCS & meta ----
+.git
+.gitignore
+.gitattributes
+.github/
 
-# --- Whitelist app runtime files ---
-!Dockerfile
-!requirements.txt
-!entrypoint.sh
-!app.py
-!radio_tx.py
+# ---- Editors/OS ----
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
 
-# Templates / static assets used by Flask
-!templates/**
-!static/**
+# ---- Python build/run cruft ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
 
-# Data assets the app actually reads at runtime (keep if your app uses them)
-!airports.csv
-!english_adjectives.txt
-!graph.json
+# ---- Env & local data (don’t bake secrets or local DBs into the image) ----
+.env
+.env.*
+data/
+*.db
+*.sqlite*
+*.sqlite3
+*.log
+reports/
 
-# --- Everything else stays out of the build context ---
-# (These are implicitly ignored by the blanket **, listed here for clarity)
-# build artifacts & local envs
-# build/
-# dist/
-# venv/
-# __pycache__/
-# .pytest_cache/
-# scripts/
-# data/               # mounted via volume in docker-compose
+# ---- Node/Frontend ----
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.tsbuildinfo
 
-# private / dev-only files
-# flask_secret.txt
-# prepare_digrig_host.sh
-# viz.html
-# viz.py
-# winlink.py
-# winlink-ASCII.py
-# test-winlink.py
-# *.spec
-# *.exe
-# *.dll
-# *.pyd
+# ---- Backups & scratch ----
+*.bak
+*.bak.*
+*.pre_fix.bak
+*~
+*.swp
+*.swo
+
+# ---- Dev-only stuff you don’t need in the image ----
+tools/
+scripts/
+tests/
+docs/
+docker-compose.yml
+docker-compose.*.yml
+
+# (Everything else is allowed into the build context,
+# including app.py, radio_tx.py, modules/, templates/, static/,
+# airports.csv, english_adjectives.txt, graph.json, entrypoint.sh, etc.)

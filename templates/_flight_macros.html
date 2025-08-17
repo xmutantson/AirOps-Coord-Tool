@@ -3,17 +3,13 @@
 {% macro flight_row(f, hide_tbd, show_distance=False) -%}
 <tr class="clickable{% if not f.dest_mapped %} red-border{% elif f.is_ramp_entry and f.sent == 0 %} yellow-border{% endif %}">
   <td>
-    <a href="{{ url_for('edit_flight', fid=f.id) }}">{{ f.id }} ✏️</a>
+    <a href="{{ url_for('ramp.edit_flight', fid=f.id) }}">{{ f.id }} ✏️</a>
   </td>
   <td class="status">
     {% if f.complete %}🛬 Landed{% else %}✈️ In-Flight{% endif %}
   </td>
   <td>{{ f.tail_number }}</td>
-  {%- if show_distance %}
-    <td{% if f.distance_stale %} style="opacity:0.5"{% endif %}>
-      {{ f.distance or '' }}
-    </td>
-  {%- endif %}
+  {%- if show_distance %}<td{% if f.distance_stale %} style="opacity:0.5"{% endif %}>{{ f.distance or '' }}</td>{%- endif %}
   {%- for field in [
        'pilot_name',
        'pax_count',
@@ -38,7 +34,7 @@
 
 {% macro radio_row(f, hide_tbd) -%}
 <tr class="clickable{% if not f.dest_mapped %} red-border{% elif f.sent == 0 %} yellow-border{% endif %}"
-    onclick="location.href='{{ url_for('radio_detail',fid=f.id) }}'">
+    onclick="location.href='{{ url_for('radio.radio_detail',fid=f.id) }}'">
   <td>{{ f.id }}</td>
   <td class="status">{% if f.complete %}🛬{% else %}✈️{% endif %}</td>
   {%- for field in [
