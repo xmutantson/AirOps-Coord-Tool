@@ -72,6 +72,7 @@ def supervisor_recent_flights_partial():
           COALESCE(takeoff_time,'----') AS departure,
           COALESCE(eta,'----') AS arrival,
           cargo_weight,
+          flight_code,
           is_ramp_entry,
           sent,
           complete

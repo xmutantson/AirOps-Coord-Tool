@@ -176,6 +176,33 @@ thead { background: var(--table-head-bg); color: var(--table-head-fg); }
 th, td { padding: 0.75em 1em; text-align: left; border-bottom: 1px solid #eee; }
 tbody tr:hover { background: rgba(30,144,255,0.05); }
 
+/* Adaptive sizing for flight-list tables (Dashboard/Radio) */
+table.ops-flight-table th,
+table.ops-flight-table td {
+  padding: 0.4em 0.6em;     /* a bit denser */
+  white-space: nowrap;      /* prefer single-line cells */
+}
+/* Let the final column (Remarks) wrap as needed */
+table.ops-flight-table tbody td:last-child {
+  white-space: normal;
+}
+/* Keep status skinny & centered */
+table.ops-flight-table th.status,
+table.ops-flight-table td.status {
+  width: 1%;
+  text-align: center;
+  white-space: nowrap;
+}
+/* Code column: ultra-compact, monospace */
+table.ops-flight-table th.col-code,
+table.ops-flight-table td.col-code {
+  width: 1%;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+table.ops-flight-table a.code-link { text-decoration: none; }
+
+
 /* Row feedback/highlights */
 tr.yellow-border { background-color: var(--highlight-yellow); }
 tr.green-border  { background-color: #81C784; }
@@ -383,6 +410,14 @@ input.fade-red { background-color: #ff9999; animation: fadeRed 4s ease-in-out; }
   margin-top: 0.25em;              /* slightly tighter */
   padding: 0.5em;                  /* slightly tighter */
 }
+/* Flight Code input: ensure it’s comfortably wide & readable */
+#flight_code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  letter-spacing: 0.02em;
+  min-width: 26ch;       /* fits OOOMMDDYYDDDHHMM comfortably (+ wiggle room) */
+  flex: 2 1 auto;        /* bias more space to the code input in lookup-row */
+}
+
 .ramp-form-container button[type="submit"] {
   grid-column: 1 / -1;
   justify-self: stretch;

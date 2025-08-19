@@ -6,7 +6,7 @@ from flask import Blueprint, current_app, flash, jsonify, redirect, render_templ
 
 from modules.services.winlink.core import parse_winlink, generate_subject, generate_body
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
-from modules.utils.common import _start_radio_tx_once  # call run-once starter from this bp
+from modules.utils.common import _start_radio_tx_once, maybe_extract_flight_code  # call run-once starter from this bp
 
 # --- IMPORTANT ---
 # The star import above brings in a DB-only fallback wargame_task_finish that returns None
@@ -63,6 +63,9 @@ def radio():
         p = parse_winlink(subj, body)
         if tail_override:
             p['tail_number'] = tail_override
+        # attempt to extract flight_code from subject/body (manual Radio POST path)
+        fcode = maybe_extract_flight_code(subj) or maybe_extract_flight_code(body)
+        p['flight_code'] = fcode or ''
 
         # ── post-clean the two HHMM fields ────────────────────────────────
         def _clean(t: str) -> str:
@@ -146,15 +149,21 @@ def radio():
                     new_rem = (f"{old_rem} / Arrived {arrival}" if old_rem else f"Arrived {arrival}")
                     c.execute("""
                       UPDATE flights
-                         SET eta=?, complete=1, remarks=?
+                         SET eta=?, complete=1, remarks=?, flight_code=COALESCE(?, flight_code)
                        WHERE id=?
-                    """, (arrival, new_rem, match['id']))
+                    """, (arrival, new_rem, fcode, match['id']))
                     c.commit()
                     if is_ajax:
                         row = dict_rows("SELECT * FROM flights WHERE id=?", (match['id'],))[0]
                         row['action'] = 'updated'
                         return jsonify(row)
-                    flash(f"Flight {match['id']} marked as landed at {arrival}.")
+                    # Prefer flight_code for operator feedback; fall back to id if absent
+                    code_row = dict_rows(
+                        "SELECT flight_code FROM flights WHERE id=?",
+                        (match['id'],)
+                    )
+                    code_txt = (code_row[0]['flight_code'] or match['id']) if code_row else match['id']
+                    flash(f"Flight {code_txt} marked as landed at {arrival}.")
                     return redirect(url_for('radio.radio'))
                 # fall through to duplicate/ignore logic if still no match
 
@@ -233,7 +242,8 @@ def radio():
                     eta              = CASE WHEN ?<>'' THEN ? ELSE eta END,
                     cargo_type       = CASE WHEN ?<>'' THEN ? ELSE cargo_type   END,
                     cargo_weight     = CASE WHEN ?<>'' THEN ? ELSE cargo_weight END,
-                    remarks          = CASE WHEN ?<>'' THEN ? ELSE remarks      END
+                    remarks          = CASE WHEN ?<>'' THEN ? ELSE remarks      END,
+                    flight_code      = COALESCE(?, flight_code)
                   WHERE id=?
                 """, (
                   p['airfield_takeoff'],
@@ -242,6 +252,7 @@ def radio():
                   p['cargo_type'],   p['cargo_type'],
                   p['cargo_weight'], p['cargo_weight'],
                   p.get('remarks',''), p.get('remarks',''),
+                  fcode,
                   f['id']
                 ))
                 c.commit()
@@ -281,6 +292,7 @@ def radio():
                   INSERT INTO flights(
                     is_ramp_entry,
                     direction,
+                    flight_code,
                     tail_number,
                     airfield_takeoff,
                     takeoff_time,
@@ -289,8 +301,9 @@ def radio():
                     cargo_type,
                     cargo_weight,
                     remarks
-                  ) VALUES (0,'inbound',?,?,?,?,?,?,?,?)
+                  ) VALUES (0,'inbound',?,?,?,?,?,?,?,?,?)
                 """, (
+                  fcode,
                   p['tail_number'],
                   p['airfield_takeoff'],
                   p['takeoff_time'],
@@ -510,6 +523,7 @@ def mark_sent(fid=None, flight_id=None):
         # fetch flight + previous sent flag
         before   = dict_rows("SELECT * FROM flights WHERE id=?", (fid,))[0]
         prev_sent = int(before.get('sent') or 0)
+        code_txt  = (before.get('flight_code') or 'TBD')
         before['operator_call'] = callsign
         # count prior messages by this operator → message number
         cnt = c.execute(
@@ -534,6 +548,10 @@ def mark_sent(fid=None, flight_id=None):
         lines.append(f"  Total Weight of the Cargo ..... {before.get('cargo_weight','none')}")
         lines.append("")
         lines.append("Additional notes/comments:")
+        # Include Flight Code in the Additional notes/comments block
+        if before.get('flight_code'):
+            lines.append(f"  Flight Code: {before['flight_code']}")
+        # Then the operator remarks, if any
         lines.append(f"  {before.get('remarks','')}")
         lines.append("")
         lines.append("{DART Aircraft Takeoff Report, rev. 2024-05-14}")
@@ -573,5 +591,5 @@ def mark_sent(fid=None, flight_id=None):
         except Exception:
             pass
 
-    flash(f"Flight {fid} marked as sent.")
+    flash(f"Flight {code_txt} marked as sent.")
     return redirect(url_for('radio.radio'))

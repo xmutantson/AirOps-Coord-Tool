@@ -1,5 +1,5 @@
 # radio_tx.py
-import os, json, time, subprocess, threading, tempfile, shutil, base64, zlib, random
+import os, json, time, subprocess, threading, tempfile, shutil, base64, zlib, random, socket
 from typing import Callable, Dict, Any, List, Iterable, Tuple
 
 # ---- ENV / knobs ----
@@ -18,6 +18,10 @@ KISS_WARMUP_MS     = int(os.getenv("KISS_WARMUP_MS", "250"))      # ms before fi
 KISS_VERBOSE       = os.getenv("KISS_VERBOSE", "0") == "1"
 COMPRESS           = os.getenv("COMPRESS", "1") == "1"
 ENCODING           = (os.getenv("ENCODING", "B91") or "B91").upper()  # B91 or B64
+FORCE_FULL_DELAY_MS= int(os.getenv("FORCE_FULL_DELAY_MS", "500"))
+
+# inbound request trigger
+_REQ_FULL_EVENT = threading.Event()
 
 # ---- tiny base91 encoder (encode only; client decodes) ----
 _B91_ENC = (
@@ -64,23 +68,101 @@ def _chunks(s: str, n: int) -> Iterable[str]:
     for i in range(0, len(s), n):
         yield s[i:i+n]
 
+# ---- KISS RX helpers (minimal) ----
+FEND=0xC0; FESC=0xDB; TFEND=0xDC; TFESC=0xDD
+def _kiss_unescape(data: bytes) -> bytes:
+    out = bytearray(); i = 0
+    while i < len(data):
+        b = data[i]
+        if b == FESC and i + 1 < len(data):
+            nb = data[i+1]
+            out.append(FEND if nb==TFEND else FESC if nb==TFESC else nb); i += 2
+        else:
+            out.append(b); i += 1
+    return bytes(out)
+
+def _kiss_frames(stream: bytes):
+    buf = bytearray(); in_frame = False
+    for b in stream:
+        if b == FEND:
+            if in_frame and buf: yield bytes(buf)
+            buf.clear(); in_frame = True
+        elif in_frame:
+            buf.append(b)
+
+def _ax25_addr_to_str(addr7: bytes) -> str:
+    cs = ''.join(chr((b >> 1) & 0x7F) for b in addr7[:6]).strip()
+    ssid = (addr7[6] >> 1) & 0x0F
+    return f"{cs}-{ssid}" if ssid else cs
+
+def _parse_ax25(frame: bytes):
+    if len(frame) < 2*7+2: return None
+    i=0; addrs=[]
+    while True:
+        if i+7>len(frame): return None
+        a=frame[i:i+7]; addrs.append(a); i+=7
+        if a[6]&0x01: break
+        if len(addrs)>10: return None
+    if i+2>len(frame): return None
+    control=frame[i]; pid=frame[i+1]; i+=2
+    if control!=0x03 or pid!=0xF0: return None
+    info = frame[i:]
+    try: text = info.decode("utf-8", errors="strict")
+    except UnicodeDecodeError: text = info.decode("latin-1", errors="replace")
+    return (_ax25_addr_to_str(addrs[0]), _ax25_addr_to_str(addrs[1]), text)
+
+def _kiss_rx_loop():
+    """Listen to KISS TCP and trigger immediate full when client asks."""
+    while True:
+        try:
+            with socket.create_connection((KISS_HOST, KISS_PORT), timeout=5) as s:
+                s.settimeout(1.0)
+                while True:
+                    try:
+                        chunk = s.recv(4096)
+                        if not chunk: break
+                        for raw in _kiss_frames(chunk):
+                            if not raw: continue
+                            # first byte is KISS port/command; strip it
+                            body = _kiss_unescape(raw)
+                            if not body: continue
+                            if body[0] & 0x0F != 0x00:  # only 'data' on port 0
+                                continue
+                            ax = body[1:]
+                            parsed = _parse_ax25(ax)
+                            if not parsed: continue
+                            _dst, _src, info = parsed
+                            if info and "AOT" in info.upper():
+                                if "REQ" in info.upper() and "UPD" in info.upper():
+                                    _REQ_FULL_EVENT.set()
+                    except socket.timeout:
+                        continue
+        except Exception:
+            time.sleep(1.0)
+
 def _compact(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     RF object per flight (matches client table expectations):
       i,t,d,p,s,c,et,al,at,re,nt  plus optional pc,ct,cw,rm
-    nt (needs tx) := (re==1 and s==0)
+    Where:
+      • i  = flight identifier shown to the client → **flight_code if present, else numeric id**
+      • nt = (re==1 and s==0)
     """
     out: Dict[str, Any] = {}
     for r in rows:
         fid = r.get("id")
         if fid is None:
             continue
+        # Prefer flight_code as the identifier; fall back to numeric id if missing
+        fcode = (r.get("flight_code") or "").strip()
+        key   = fcode if fcode else str(fid)
+        ident = fcode if fcode else str(fid)
         s  = int(r.get("sent") or 0)
         c  = int(r.get("complete") or 0)
         re = int(r.get("is_ramp_entry") or 0)
         nt = 1 if (re == 1 and s == 0) else 0
         obj = {
-            "i": fid,
+            "i": ident,                 # display/primary identifier (code if available)
             "t": r.get("tail_number") or "",
             "d": r.get("direction") or "",
             "p": r.get("pilot_name") or "",
@@ -92,11 +174,13 @@ def _compact(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             "re": re,
             "nt": nt,
         }
+        if fcode:
+            obj["fc"] = fcode          # include explicit flight_code field when present
         if r.get("pax_count"):    obj["pc"] = r.get("pax_count")
         if r.get("cargo_type"):   obj["ct"] = r.get("cargo_type")
         if r.get("cargo_weight"): obj["cw"] = r.get("cargo_weight")
         if r.get("remarks"):      obj["rm"] = r.get("remarks")
-        out[str(fid)] = obj
+        out[str(key)] = obj
     return out
 
 def _diff(prev: Dict[str, Any], cur: Dict[str, Any]) -> Dict[str, Any]:
@@ -192,6 +276,31 @@ def tx_loop(fetch_rows_fn: Callable[[str, tuple], list]):
     while True:
         try:
             now = time.time()
+            # immediate forced full when requested by client
+            if _REQ_FULL_EVENT.is_set():
+                _REQ_FULL_EVENT.clear()
+                time.sleep(max(0, FORCE_FULL_DELAY_MS)/1000.0)
+                rows = _fetch_rows(fetch_rows_fn)
+                cur  = _compact(rows)
+                session_sid = _session_id()
+                body_obj = {"full": True, "fl": cur}
+                enc_flag, blob = _encode_payload(body_obj)
+                parts = list(_chunks(blob, CHUNK_BYTES)) or [""]
+                total = len(parts)
+                frames: List[str] = []
+                for seq, part in enumerate(parts, start=1):
+                    msg = f"AOT {seq}/{total}|F|{session_sid}|{enc_flag}|{part}"
+                    frames.append(_format_tnc2(DEST, MYCALL, PATH, msg))
+                i = 0
+                while i < len(frames):
+                    j = min(i + BURST_SIZE, len(frames))
+                    _send_burst_stream(frames[i:j]); i = j
+                    if i < len(frames): time.sleep(BURST_PAUSE_MS / 1000.0)
+                prev_snapshot = cur
+                last_full = time.time()
+                last_diff = last_full
+                # continue to normal cadence checks after forced full
+
             need_full = (now - last_full) >= FULL_INTERVAL_SEC or not prev_snapshot
             need_diff = (now - last_diff) >= DIFF_INTERVAL_SEC and not need_full
 
@@ -262,3 +371,5 @@ def tx_loop(fetch_rows_fn: Callable[[str, tuple], list]):
 
 def start_radio_tx(fetch_rows_fn: Callable[[str, tuple], list]):
     threading.Thread(target=tx_loop, args=(fetch_rows_fn,), daemon=True).start()
+    # start KISS RX listener to handle "AOT REQ FULL"
+    threading.Thread(target=_kiss_rx_loop, daemon=True).start()

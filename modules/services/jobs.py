@@ -188,7 +188,7 @@ def process_remote_confirmations():
     delivery  = now.isoformat()  # visible to Radio immediately
 
     pending = dict_rows("""
-      SELECT id, tail_number, airfield_takeoff, airfield_landing, sent_time
+      SELECT id, tail_number, airfield_takeoff, airfield_landing, sent_time, flight_code
         FROM flights
        WHERE is_ramp_entry=1
          AND direction='outbound'
@@ -214,6 +214,9 @@ def process_remote_confirmations():
             f"took off {takeoff_hhmm} | landed {landed_hhmm} [WGID:{msg_id}]"
         )
 
+        # Reuse the original flight's code; do NOT generate a new one here.
+        fcode = (f.get('flight_code') or '').strip().upper() or None
+
         # Build a Winlink-style body matching our Ramp-Boss outbound format
         # so parse_winlink (Cargo Type, Total Weight, etc) still works if needed.
         sender_call = get_airfield_callsign(f['airfield_landing'])
@@ -229,6 +232,11 @@ def process_remote_confirmations():
             "",
             "{DART Aircraft Takeoff Report, rev. 2024-05-14}"
         ]
+        # Insert Flight Code into the notes block (body only), if present
+        if fcode:
+            insert_at = len(body_lines) - 2  # before the blank line + DART footer
+            body_lines.insert(insert_at, "  ")
+            body_lines.insert(insert_at + 1, f"  Flight Code: {fcode}")
         body = "\n".join(body_lines)
         with sqlite3.connect(DB_FILE) as c:
             # Start radio inbound SLA for this message (batch semantics handled by dispatcher)

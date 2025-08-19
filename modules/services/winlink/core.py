@@ -1,6 +1,7 @@
 
 from markupsafe import escape
 import sqlite3, re, os, json
+from datetime import datetime
 
 from typing import Tuple, Optional
 
@@ -256,6 +257,27 @@ def generate_body(flight, callsign=None, include_test=None):
     lines.append("")
     lines.append("Additional notes/comments:")
     lines.append(f"  {flight.get('remarks','')}")
+
+    # --- Ensure a Flight Code is present in the body ---
+    # 1) use existing if valid; 2) otherwise compute from origin/dest + server date/time
+    fc = (flight.get('flight_code') or '').strip().upper()
+    info = parse_flight_code(fc) if fc else None
+    if not info:
+        try:
+            o_raw = (flight.get('airfield_takeoff') or '').strip().upper()
+            d_raw = (flight.get('airfield_landing') or '').strip().upper()
+            ooo = to_three_char_code(o_raw) or (o_raw[:3] if o_raw else '')
+            ddd = to_three_char_code(d_raw) or (d_raw[:3] if d_raw else '')
+            if len(ooo)==3 and len(ddd)==3:
+                mmddyy = datetime.utcnow().strftime('%m%d%y')   # server date
+                hhmm   = datetime.utcnow().strftime('%H%M')     # server time
+                fc = find_unique_code_or_bump(ooo, mmddyy, ddd, hhmm)
+                info = parse_flight_code(fc)
+        except Exception:
+            fc = ''
+    if fc and info:
+        lines.append("  ")
+        lines.append(f"  Flight Code: {fc}")
     lines.append("")
     lines.append("{DART Aircraft Takeoff Report, rev. 2024-05-14}")
 

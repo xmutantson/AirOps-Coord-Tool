@@ -122,6 +122,91 @@ from flask import current_app
 from flask import flash, jsonify, make_response, redirect, render_template, request, session, url_for
 app = current_app  # legacy shim for helpers
 
+# ───── Flight Code helpers/spec ─────────────────────────────────────────────
+# Format: OOOMMDDYYDDDHHMM  (OOO/IATA pref, DDD/IATA pref, local date mmddyy)
+FLIGHT_CODE_RE      = re.compile(r'^[A-Z0-9]{3}\d{6}[A-Z0-9]{3}\d{4}$')
+FLIGHT_CODE_ANY_RE  = re.compile(r'(?<![A-Z0-9])([A-Z0-9]{3}\d{6}[A-Z0-9]{3}\d{4})(?![A-Z0-9])')
+
+def to_three_char_code(raw_code: str) -> str | None:
+    """
+    Map any airport token to a 3-char ops code, *preferring IATA*.
+    If no IATA exists, return None (caller decides whether to accept raw).
+    """
+    code = (raw_code or '').strip().upper()
+    if not code:
+        return None
+    with sqlite3.connect(get_db_file()) as c:
+        c.row_factory = sqlite3.Row
+        row = c.execute(
+            "SELECT iata_code, icao_code, ident, local_code, gps_code "
+            "FROM airports WHERE ? IN (icao_code, iata_code, gps_code, ident, local_code) LIMIT 1",
+            (code,)
+        ).fetchone()
+    if row and (row['iata_code'] and len(row['iata_code'].strip()) == 3):
+        return row['iata_code'].strip().upper()
+    # Already a plausible 3-char ops code (A–Z/0–9)? accept upstream can prompt if needed
+    if re.fullmatch(r'[A-Z0-9]{3}', code):
+        return code
+    return None
+
+def _norm_hhmm(hhmm: str) -> str:
+    s = (hhmm or '').strip()
+    # allow '930' → '0930'
+    if not s.isdigit(): raise ValueError("HHMM must be numeric")
+    if len(s) not in (3,4): raise ValueError("HHMM must be 3–4 digits")
+    s = s.zfill(4)
+    h, m = int(s[:2]), int(s[2:])
+    if h>23 or m>59: raise ValueError("HHMM out of range")
+    return f"{h:02}{m:02}"
+
+def compute_flight_code(origin_code: str, date_dt, dest_code: str, hhmm_str: str) -> str:
+    """
+    Build OOOMMDDYYDDDHHMM using IATA-preferred 3-char codes.
+    `date_dt` is treated as *local date* by caller (UI freezes locally).
+    """
+    ooo = to_three_char_code(origin_code)
+    ddd = to_three_char_code(dest_code)
+    if not ooo or not ddd:
+        raise ValueError("origin/destination must map to a 3-char ops code")
+    hhmm   = _norm_hhmm(hhmm_str)
+    mmddyy = date_dt.strftime("%m%d%y")
+    return f"{ooo}{mmddyy}{ddd}{hhmm}"
+
+def parse_flight_code(code: str) -> dict | None:
+    c = (code or '').strip().upper()
+    if not FLIGHT_CODE_RE.fullmatch(c):
+        return None
+    return {
+        'origin'     : c[0:3],
+        'date_mmddyy': c[3:9],
+        'dest'       : c[9:12],
+        'hhmm'       : c[12:16],
+    }
+
+def maybe_extract_flight_code(text: str | None) -> str | None:
+    if not text: return None
+    m = FLIGHT_CODE_ANY_RE.search(text.upper())
+    return m.group(1) if m else None
+
+def find_unique_code_or_bump(ooo: str, mmddyy: str, ddd: str, hhmm: str) -> str:
+    """
+    If OOOMMDDYYDDDHHMM collides, bump HHMM by +1 minute (up to +59), keeping OOO/DDD/date fixed.
+    """
+    def build(hhmm_): return f"{ooo}{mmddyy}{ddd}{hhmm_}"
+    cur = _norm_hhmm(hhmm)
+    with sqlite3.connect(get_db_file()) as c:
+        c.row_factory = sqlite3.Row
+        for _ in range(60):
+            code = build(cur)
+            hit  = c.execute("SELECT 1 FROM flights WHERE flight_code=? LIMIT 1", (code,)).fetchone()
+            if not hit:
+                return code
+            # +1 minute (wrap within day; date stays frozen per spec)
+            h, m = int(cur[:2]), int(cur[2:])
+            total = (h*60 + m + 1) % 1440
+            cur = f"{total//60:02}{total%60:02}"
+    raise RuntimeError("Could not find unique flight code within +59 minutes")
+
 def connect(db, timeout=30, **kwargs):
     # Only add the tracing connection factory when requested
     if SQL_TRACE:
@@ -759,6 +844,8 @@ def run_migrations():
     ensure_column("flights", "cargo_weight_real", "REAL")
     # Ensure the canonical timestamp column exists on flights
     ensure_column("flights", "timestamp", "TEXT")
+    # Flight Code storage (no DB uniqueness; app handles deconflict)
+    ensure_column("flights", "flight_code", "TEXT")
 
     with sqlite3.connect(get_db_file()) as c:
         # backfill any missing timestamps on existing rows
@@ -778,6 +865,8 @@ def run_migrations():
              WHERE id = NEW.id;
           END;
         """)
+        # index for fast lookups by code
+        c.execute("CREATE INDEX IF NOT EXISTS idx_flights_code ON flights(flight_code)")
 
     # Wargame: hold cargo manifest on inbound schedule so it becomes flight.remarks
     ensure_column("wargame_inbound_schedule", "manifest", "TEXT")
@@ -1379,7 +1468,32 @@ def apply_incoming_parsed(p: dict) -> tuple[int,str]:
         if _is_winlink_reflector_bounce(p.get('subject',''), p.get('body','')):
             return 0, 'ignored_reflector'
 
-        # 2) landing?
+        # 2) attempt flight-code extraction from subject/body
+        fcode = maybe_extract_flight_code(p.get('subject','')) or \
+                maybe_extract_flight_code(p.get('body',''))
+
+        # 2a) landed by explicit code match (preferred new step)
+        if fcode:
+            match = c.execute("""
+              SELECT id, remarks FROM flights
+               WHERE flight_code=? AND complete=0
+               ORDER BY id DESC LIMIT 1
+            """, (fcode,)).fetchone()
+            if match:
+                arrival = hhmm_norm(p.get('eta') or now_hhmm())
+                before = dict_rows("SELECT * FROM flights WHERE id=?", (match['id'],))[0]
+                c.execute("INSERT INTO flight_history(flight_id, timestamp, data) VALUES (?,?,?)",
+                          (match['id'], datetime.utcnow().isoformat(), json.dumps(before)))
+                old_rem = match['remarks'] or ''
+                new_rem = (f"{old_rem} / Arrived {arrival}" if old_rem else f"Arrived {arrival}")
+                c.execute("""
+                  UPDATE flights
+                     SET eta=?, complete=1, sent=0, remarks=?, flight_code=?
+                   WHERE id=?
+                """, (arrival, new_rem, fcode, match['id']))
+                return match['id'], 'landed'
+
+        # 2b) landing? (legacy heuristics)
         # detect “landed HHMM” too (e.g. “landed 09:53” or “landed 0953”)
         lm = re.search(r'\blanded\s*(\d{1,2}:?\d{2})\b', p['subject'], re.I)
         if lm:
@@ -1432,9 +1546,9 @@ def apply_incoming_parsed(p: dict) -> tuple[int,str]:
                 )
                 c.execute("""
                   UPDATE flights
-                     SET eta=?, complete=1, sent=0, remarks=?
+                     SET eta=?, complete=1, sent=0, remarks=?, flight_code=COALESCE(?, flight_code)
                    WHERE id=?
-                """, (arrival, new_rem, match['id']))
+                """, (arrival, new_rem, fcode, match['id']))
                 return match['id'], 'landed'
 
         # 3) not a landing → match by tail & takeoff_time
@@ -1473,6 +1587,14 @@ def apply_incoming_parsed(p: dict) -> tuple[int,str]:
             ))
 
             # Only overwrite when parser actually returned non-empty values
+            # Use code to backfill origin/dest/takeoff if parser didn't find them
+            if fcode:
+                info = parse_flight_code(fcode)
+                if info:
+                    if not p['airfield_takeoff']: p['airfield_takeoff'] = info['origin']
+                    if not p['airfield_landing']: p['airfield_landing'] = info['dest']
+                    if not p['takeoff_time']:     p['takeoff_time']     = info['hhmm']
+
             c.execute("""
               UPDATE flights SET
                 airfield_takeoff = ?,
@@ -1480,7 +1602,8 @@ def apply_incoming_parsed(p: dict) -> tuple[int,str]:
                 eta              = CASE WHEN ?<>'' THEN ? ELSE eta END,
                 cargo_type       = CASE WHEN ?<>'' THEN ? ELSE cargo_type   END,
                 cargo_weight     = CASE WHEN ?<>'' THEN ? ELSE cargo_weight END,
-                remarks          = CASE WHEN ?<>'' THEN ? ELSE remarks      END
+                remarks          = CASE WHEN ?<>'' THEN ? ELSE remarks      END,
+                flight_code      = COALESCE(?, flight_code)
               WHERE id=?
             """, (
               p['airfield_takeoff'],
@@ -1489,18 +1612,28 @@ def apply_incoming_parsed(p: dict) -> tuple[int,str]:
               p['cargo_type'],     p['cargo_type'],
               p['cargo_weight'],   p['cargo_weight'],
               p.get('remarks',''), p.get('remarks',''),
+              fcode,
               f['id']
             ))
             return f['id'], 'updated'
 
         # 4) new entry (mark pure Winlink imports as inbound)
+        # Backfill fields from code for brand-new entries
+        if fcode:
+            info = parse_flight_code(fcode)
+            if info:
+                p['airfield_takeoff'] = p['airfield_takeoff'] or info['origin']
+                p['airfield_landing'] = p['airfield_landing'] or info['dest']
+                p['takeoff_time']     = p['takeoff_time']     or info['hhmm']
+
         fid = c.execute("""
           INSERT INTO flights(
-            is_ramp_entry, direction,
+            is_ramp_entry, direction, flight_code,
             tail_number, airfield_takeoff, takeoff_time,
             airfield_landing, eta, cargo_type, cargo_weight, remarks
-          ) VALUES (0,'inbound',?,?,?,?,?,?,?,?)
+          ) VALUES (0,'inbound',?,?,?,?,?,?,?,?,?)
         """, (
+          fcode,
           p['tail_number'],
           p['airfield_takeoff'],
           p['takeoff_time'],
@@ -1647,6 +1780,15 @@ def generate_radio_message():
     tko_hhmm = now.strftime('%H%M')
     eta_hhmm = (now + timedelta(minutes=random.randint(12, 45))).strftime('%H%M')
 
+    # Compute a Flight Code for the email body (freeze today's date + this leg's HHMM)
+    try:
+        frozen_mmddyy = now.strftime('%m%d%y')
+        ooo = to_three_char_code(af)  or (af  or '')[:3].upper()
+        ddd = to_three_char_code(dest) or (dest or '')[:3].upper()
+        fcode = find_unique_code_or_bump(ooo, frozen_mmddyy, ddd, tko_hhmm)
+    except Exception:
+        fcode = None
+
     size    = random.randint(500, 2000)
     manifest, total_wt, cargo_type = generate_cargo_manifest()
     subject = (
@@ -1655,6 +1797,8 @@ def generate_radio_message():
     )
 
     notes = ["Auto-generated Wargame traffic."]
+    if fcode:
+        notes.append(f"Flight Code: {fcode}")
     if manifest:
         notes.append(f"Manifest: {manifest}")
     body = "\n".join([
@@ -2121,14 +2265,24 @@ def generate_ramp_flight():
         total_wt += size * qty
     remarks = ensure_trailing_semicolon('; '.join(lines)) if lines else ''
 
+    # Build flight code (freeze *now* date + planned HHMM)
+    try:
+        frozen_mmddyy = datetime.utcnow().strftime('%m%d%y')
+        # Prefer 3-char mapping; fall back to first 3
+        ooo = to_three_char_code(dep) or (dep or '')[:3].upper()
+        ddd = to_three_char_code(arr) or (arr or '')[:3].upper()
+        fcode = find_unique_code_or_bump(ooo, frozen_mmddyy, ddd, tko_hhmm)
+    except Exception:
+        fcode = None
+
     with sqlite3.connect(get_db_file()) as c:
         cur = c.execute("""
           INSERT INTO flights
             (tail_number, airfield_takeoff, airfield_landing,
              takeoff_time, eta, cargo_type, cargo_weight, cargo_weight_real,
-             is_ramp_entry, direction, complete, remarks)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?)
-        """, (tail, dep, arr, tko_hhmm, eta_hhmm, 'Mixed', total_wt, float(total_wt), direction, remarks))
+             is_ramp_entry, direction, complete, remarks, flight_code)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, ?, ?)
+        """, (tail, dep, arr, tko_hhmm, eta_hhmm, 'Mixed', total_wt, float(total_wt), direction, remarks, fcode))
 
         fid = cur.lastrowid
 

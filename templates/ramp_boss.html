@@ -27,11 +27,24 @@
 
       <!-- tail number + lookup -->
       <label for="tail">Tail Number*</label>
-      <div class="lookup-row">
-      <input id="tail" name="tail_number" required style="min-width:10ch" class="force-upper"
-             value="{{ d.get('tail_number','') }}">
+      <div class="lookup-row" style="gap:.5rem; flex-wrap:wrap">
+        <input id="tail" name="tail_number" required style="min-width:10ch" class="force-upper"
+               value="{{ d.get('tail_number','') }}">
         <button type="button" id="lookup">Lookup Tail</button>
       </div>
+
+      <!-- Inbound-only Flight Code row (label left, field right) -->
+      <label id="lab-flight-code" for="flight_code" style="display:none;">Flight Code</label>
+      <div id="flight-code-row" style="display:none; align-items:center; gap:.4rem;">
+        <input id="flight_code" name="flight_code" class="force-upper"
+               placeholder="OOOMMDDYYDDDHHMM" style="min-width:26ch;">
+        <button type="button" id="code-extract" title="Extract origin/dest/HHMM only if blank">Extract</button>
+        <div id="code-extract-hint" style="font-size:.9em; color:#a33; display:none;"></div>
+      </div>
+      <!-- frozen mmddyy+hhmm part (used when OOO/DDD change) -->
+      <input type="hidden" id="code-stamp"  name="code_stamp" value="">
+      <!-- backend may want explicit takeoff_time even for inbound convert -->
+      <input type="hidden" id="takeoff_time" name="takeoff_time" value="">
 
       <label for="pilot">Pilot Name</label>
       <input id="pilot" name="pilot_name" style="min-width:10ch"
@@ -321,6 +334,7 @@
     const isEditDraft   = !!draftId;
     const defaultOrigin = "{{ default_origin }}";
     const depField    = document.getElementById('dep_time');   // hidden
+    const takeoffTime = document.getElementById('takeoff_time');
     const isDraft     = {{ 'true' if draft else 'false' }};
     const travelHInp  = document.getElementById('travel_h');
     const travelMInp  = document.getElementById('travel_m');
@@ -333,6 +347,15 @@
     const sendBtn     = document.getElementById('sendBtn');
     const manifestId  = document.getElementById('manifest-id');
     const csrfToken   = document.querySelector('input[name="csrf_token"]').value;
+
+    // Flight code widgets
+    const fcLabel = document.getElementById('fc-label');
+    const fcInput        = document.getElementById('flight_code');
+    const fcStamp        = document.getElementById('code-stamp');
+    const fcRow          = document.getElementById('flight-code-row');
+    const fcLab          = document.getElementById('lab-flight-code');
+    const fcExtractBtn   = document.getElementById('code-extract');
+    const fcExtractHint  = document.getElementById('code-extract-hint');
 
     // Detect-Manifest modal nodes
     const detectModal = document.getElementById('adv-detect-modal');
@@ -364,6 +387,11 @@
         if (!isDraft) travelHInp.value = travelMInp.value = '';
         if (!originField.value && defaultOrigin) originField.value = defaultOrigin;
         if (!isDraft) destField.value = '';
+        // Outbound: hide Flight Code row (we still compute server-side)
+        if (fcRow) fcRow.style.display = 'none';
+        if (fcLab) fcLab.style.display = 'none';
+        // (keep fcStamp for outbound code generation flow below; input stays hidden)
+        if (typeof refreshFlightCode === 'function') refreshFlightCode();  // still generates for backend
       } else {
         originField.style.display = labOrigin.style.display = '';
         destField.style.display   = labDest.style.display   = 'none';
@@ -373,6 +401,11 @@
         if (!isDraft) travelHInp.value = travelMInp.value = '';
         if (!destField.value && defaultOrigin) destField.value = defaultOrigin;
         if (!isDraft) originField.value = '';
+        // Inbound: show Flight Code row; clear preview/stamp
+        if (fcRow) fcRow.style.display = 'inline-flex';
+        if (fcLab) fcLab.style.display = '';
+        if (fcInput)  fcInput.value = '';
+        if (fcStamp)  fcStamp.value = '';
       }
 
       /* queue button only for outbound */
@@ -384,6 +417,73 @@
     }
     dirRadios.forEach(r => r.addEventListener('change', applyDirUI));
     applyDirUI();
+
+    // ───────── Flight Code helpers & events ─────────
+    const FLIGHT_CODE_RE = /^[A-Z0-9]{3}\d{6}[A-Z0-9]{3}\d{4}$/;
+    function mmddyyLocal(d=new Date()){
+      const y = d.getFullYear()%100, m=d.getMonth()+1, day=d.getDate();
+      return `${m.toString().padStart(2,'0')}${day.toString().padStart(2,'0')}${y.toString().padStart(2,'0')}`;
+    }
+    function normHHMM(s){
+      const t = String(s||'').trim();
+      if(!/^\d{3,4}$/.test(t)) return '';
+      const z = t.padStart(4,'0'); const h=+z.slice(0,2), m=+z.slice(2);
+      return (h<=23 && m<=59) ? z : '';
+    }
+    // lightweight client preview for OOO/DDD: KSEA/CSEA → SEA; else first 3
+    function toThreePreview(v){
+      const s = String(v||'').trim().toUpperCase();
+      if(!s) return '';
+      if((s.length===4) && (s[0]==='K' || s[0]==='C')) return s.slice(1,4);
+      return s.slice(0,3);
+    }
+    function composeCode(ooo, mmddyy, ddd, hhmm){
+      if(ooo.length!==3 || ddd.length!==3 || hhmm.length!==4) return '';
+      return `${ooo}${mmddyy}${ddd}${hhmm}`;
+    }
+    function refreshFlightCode(){
+      const dir = dirRadios.find(r=>r.checked).value;
+      if (dir !== 'outbound' || !fcInput || !fcStamp) return;
+      // Freeze time part once (MMDDYY+HHMM). Use current dep/local date.
+      if (!fcStamp.value){
+        const hhmm = normHHMM(depField.value || nowHHMM());
+        if(!hhmm) return;
+        fcStamp.value     = `${mmddyyLocal()}${hhmm}`;
+        if (takeoffTime) takeoffTime.value = hhmm;   // mirror to backend field
+      }
+      const ooo    = toThreePreview(originField.value || defaultOrigin);
+      const ddd    = toThreePreview(destField.value);
+      const mmddyy = fcStamp.value.slice(0,6);
+      const hhmm   = fcStamp.value.slice(6);
+      fcInput.value = composeCode(ooo, mmddyy, ddd, hhmm) || '';
+    }
+
+    // Recompute when OOO/DDD change (time stays frozen) — outbound only
+    originField.addEventListener('input', refreshFlightCode);
+    destField  .addEventListener('input', refreshFlightCode);
+
+    // Inbound “Extract”: fill Origin/Dest/Dep HHMM only if blank; never overwrite non-empty
+    if (fcExtractBtn){
+      fcExtractBtn.addEventListener('click', async () => {
+        fcExtractHint.style.display = 'none'; fcExtractHint.textContent='';
+        const code = (fcInput?.value||'').trim().toUpperCase();
+        if(!FLIGHT_CODE_RE.test(code)){
+          fcExtractHint.textContent = 'Invalid format'; fcExtractHint.style.display='block'; return;
+        }
+        try{
+          const r = await fetch(`/api/flight_code/convert?code=${encodeURIComponent(code)}`);
+          if(!r.ok) throw new Error();
+          const j = await r.json();
+          if(!j.ok) throw new Error();
+          if(j.origin && !originField.value) originField.value = j.origin;
+          if(j.dest   && !destField.value)   destField.value   = j.dest;
+          if(j.hhmm   && takeoffTime && !takeoffTime.value) takeoffTime.value = j.hhmm;
+        }catch(_){
+          fcExtractHint.textContent = 'Unknown airport in code or server error';
+          fcExtractHint.style.display='block';
+        }
+      });
+    }
 
     /* ───────── Inbound: Tail lookup → try Advanced-Manifest detection ───────── */
     const tailInp = document.getElementById('tail');
@@ -591,7 +691,7 @@
 
     }
 
-    // Tail-lookup
+    // Tail-lookup (overwrite with DB values; also set flight_code; no extract)
     document.getElementById('lookup').addEventListener('click', async () => {
       const tail = form.tail_number.value.trim().toUpperCase();
       if (!tail) return showToast('Enter tail number first!', 'error');
@@ -610,6 +710,7 @@
       if (d.cargo_type)       form.cargo_type.value   = d.cargo_type;
       if (d.cargo_weight)     form.cargo_weight.value = d.cargo_weight;
       if (d.remarks)          form.remarks.value      = d.remarks;
+      if (typeof d.flight_code !== 'undefined' && fcInput) fcInput.value = (d.flight_code || '');
     });
 
    // ────────────────────────────────────────────────────────────────
@@ -662,6 +763,14 @@
       if (dir === 'outbound') {
         /* stamp *current* browser time for take-off, *right now* */
         depField.value = nowHHMM();
+
+        // Freeze code stamp (MMDDYY+HHMM) if not set yet; mirror HHMM to backend
+        if (typeof mmddyyLocal === 'function' && typeof nowHHMM === 'function' && typeof FLIGHT_CODE_RE !== 'undefined') {
+          if (fcStamp && !fcStamp.value){
+            fcStamp.value = `${mmddyyLocal()}${depField.value}`;
+          }
+          if (takeoffTime) takeoffTime.value = depField.value;
+        }
 
         /* ── when we’re inside EDIT-DRAFT mode and targeting
          *    /send_queued_flight/<id>, also send it as `takeoff_time`
@@ -783,7 +892,7 @@
         <table class="full-bleed">
           <thead>
             <tr>
-              <th>#</th><th>Dir</th><th>Tail #</th><th>Pilot</th><th>PAX #</th>
+              <th>#</th><th>Code</th><th>Dir</th><th>Tail #</th><th>Pilot</th><th>PAX #</th>
               <th>Origin</th><th>${f.direction==='outbound'?'Dep':'Arr'} HHMM</th>
               <th>Dest</th><th>ETA</th><th>Cargo Type</th><th>Cargo Wt</th><th>Remarks</th>
             </tr>
@@ -791,6 +900,7 @@
           <tbody>
             <tr class="${rowClass}">
               <td>${f.id}</td>
+              <td>${f.flight_code || 'TBD'}</td>
               <td>${f.direction}</td>
               <td>${f.tail_number}</td>
               <td>${f.pilot_name||'TBD'}</td>

@@ -1,8 +1,8 @@
 <h3 style="text-align:center; margin-top:0; margin-bottom:1rem;">Priority Flights</h3>
-<table>
+<table class="ops-flight-table">
   <thead>
     <tr>
-      <th>#</th>
+      <th class="col-code">Code</th>
       <th>Tail #</th>
       <th>Status</th>
       {% if enable_1090_distances %}
@@ -17,7 +17,11 @@
   <tbody>
     {% for f in flights %}
     <tr{% if f.is_ramp_entry and f.sent == 0 %} class="yellow-border"{% endif %}>
-      <td>{{ f.id }}</td>
+      <td class="col-code">
+        <a href="{{ url_for('ramp.edit_flight', fid=f.id) }}" class="code-link">
+          {{ f.flight_code or 'TBD' }}
+        </a>
+      </td>
       <td>{{ f.tail_number }}</td>
       <td>
         {% if f.complete %}

@@ -1,12 +1,12 @@
 {% extends "base.html" %}
-{% block title %}Send Flight {{ flight['id'] }} – Aircraft Ops{% endblock %}
+{% block title %}Send Flight {{ flight['flight_code'] or flight['tail_number'] }} – Aircraft Ops{% endblock %}
 {% block content %}
   <div style="margin-bottom:20px">
     <button onclick="location.href='{{ url_for('radio.radio') }}'">↩️ Out-box</button>
     <button onclick="location.href='{{ url_for('core.dashboard') }}'">Dashboard</button>
   </div>
 
-<h2>Flight {{ flight['tail_number'] }} (ID {{ flight['id'] }})</h2>
+<h2>Flight {{ flight['tail_number'] }} — Code {{ flight['flight_code'] or 'TBD' }}</h2>
 
 <h3>Subject</h3>
 <div class="radio-content-box">

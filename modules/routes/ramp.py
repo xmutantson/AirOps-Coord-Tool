@@ -19,6 +19,24 @@ from flask import flash, jsonify, redirect, render_template, request, url_for
 bp = Blueprint(__name__.rsplit('.', 1)[-1], __name__)
 app = current_app  # legacy shim if route body references 'app'
 
+def _compute_fcode_from_form(airfield_takeoff: str, airfield_landing: str, hhmm: str) -> str | None:
+    # 1) accept a valid client-provided code as-is
+    raw = (request.form.get('flight_code','') or '').strip().upper()
+    if raw and FLIGHT_CODE_RE.fullmatch(raw):
+        return raw
+    # 2) otherwise compute with frozen stamp if provided
+    stamp = (request.form.get('code_stamp','') or '').strip()
+    try:
+        if stamp and len(stamp) == 10 and stamp.isdigit():
+            mmddyy, hhmm_ = stamp[:6], stamp[6:]
+        else:
+            mmddyy, hhmm_ = datetime.utcnow().strftime('%m%d%y'), (hhmm or '').zfill(4)
+        ooo = to_three_char_code(airfield_takeoff) or (airfield_takeoff or '')[:3].upper()
+        ddd = to_three_char_code(airfield_landing) or (airfield_landing or '')[:3].upper()
+        return find_unique_code_or_bump(ooo, mmddyy, ddd, hhmm_)
+    except Exception:
+        return None
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Advanced-Manifest: detection, parsing, and application endpoints
 @bp.get('/api/adv_manifest_from_tail/<string:tail>')
@@ -213,16 +231,20 @@ def ramp_boss():
 
             data['takeoff_time'] = hhmm_norm(request.form['dep_time'])
             data['eta']          = hhmm_norm(request.form['eta'])
+            # compute/accept flight code (uses frozen MMDDYY+HHMM if posted)
+            data['flight_code']  = _compute_fcode_from_form(
+                data['airfield_takeoff'], data['airfield_landing'], data['takeoff_time']
+            )
 
             with sqlite3.connect(DB_FILE) as c:
                 fid = c.execute("""
                      INSERT INTO flights(
                        is_ramp_entry,direction,pilot_name,pax_count,tail_number,
                        airfield_takeoff,takeoff_time,airfield_landing,eta,
-                       cargo_type,cargo_weight,remarks)
+                       cargo_type,cargo_weight,remarks,flight_code)
                      VALUES (1,:direction,:pilot_name,:pax_count,:tail_number,
                              :airfield_takeoff,:takeoff_time,:airfield_landing,:eta,
-                             :cargo_type,:cargo_weight,:remarks)
+                             :cargo_type,:cargo_weight,:remarks,:flight_code)
                 """, data).lastrowid
 
                 c.execute("""INSERT INTO flight_history(flight_id,timestamp,data)
@@ -270,6 +292,11 @@ def ramp_boss():
             arrival = hhmm_norm(request.form['dep_time'])   # dep_time field = ARRIVAL HHMM
             data['eta']          = arrival      # store arrival in eta column
             data['takeoff_time'] = ''           # unknown / N/A
+            # accept a code typed/pasted by operator (no recompute in inbound)
+            fcode = None
+            raw = (request.form.get('flight_code','') or '').strip().upper()
+            if raw and FLIGHT_CODE_RE.fullmatch(raw):
+                fcode = raw
 
             with sqlite3.connect(DB_FILE) as c:
                 c.row_factory = sqlite3.Row
@@ -291,13 +318,14 @@ def ramp_boss():
                           complete       = 1,
                           sent           = 0,
                           is_ramp_entry  = 1,
+                          flight_code    = COALESCE(?, flight_code),
                           remarks        = CASE
                                              WHEN LENGTH(remarks)
                                                THEN remarks || ' / Arrived ' || ?
                                              ELSE 'Arrived ' || ?
                                           END
                         WHERE id=?
-                    """, (arrival, arrival, arrival, match['id']))
+                    """, (arrival, fcode, arrival, arrival, match['id']))
                     # add history snapshot
                     c.execute("""INSERT INTO flight_history(flight_id,timestamp,data)
                                  VALUES (?,?,?)""",
@@ -329,11 +357,11 @@ def ramp_boss():
                         INSERT INTO flights(
                            is_ramp_entry,direction,pilot_name,pax_count,tail_number,
                            airfield_takeoff,takeoff_time,airfield_landing,eta,
-                           cargo_type,cargo_weight,remarks,complete)
+                           cargo_type,cargo_weight,remarks,complete,flight_code)
                         VALUES (1,'inbound',:pilot_name,:pax_count,:tail_number,
                                 :airfield_takeoff,'',:airfield_landing,:eta,
-                                :cargo_type,:cargo_weight,:remarks,1)
-                    """, data).lastrowid
+                                :cargo_type,:cargo_weight,:remarks,1,:flight_code)
+                    """, data | {'flight_code': fcode}).lastrowid
                     c.execute("""INSERT INTO flight_history(flight_id,timestamp,data)
                                  VALUES (?,?,?)""",
                               (fid, datetime.utcnow().isoformat(), json.dumps(data)))
@@ -634,6 +662,10 @@ def send_queued_flight(qid):
       'cargo_weight'    : '0',     # will recompute
       'remarks'         : q['remarks'] or ''
     }
+    # compute/accept flight code for the actual sent flight
+    flight_code = _compute_fcode_from_form(
+        data['airfield_takeoff'], data['airfield_landing'], takeoff
+    )
 
     with sqlite3.connect(DB_FILE) as c:
         c.row_factory = sqlite3.Row
@@ -641,11 +673,11 @@ def send_queued_flight(qid):
           INSERT INTO flights(
             is_ramp_entry,direction,pilot_name,pax_count,tail_number,
             airfield_takeoff,takeoff_time,airfield_landing,eta,
-            cargo_type,cargo_weight,remarks
+            cargo_type,cargo_weight,remarks,flight_code
           ) VALUES (1,:direction,:pilot_name,:pax_count,:tail_number,
                     :airfield_takeoff,:takeoff_time,:airfield_landing,:eta,
-                    :cargo_type,:cargo_weight,:remarks)
-        """, data).lastrowid
+                    :cargo_type,:cargo_weight,:remarks,:flight_code)
+        """, data | {'flight_code': flight_code}).lastrowid
 
         # ── rebuild the manifest exactly like edit_queued_flight does ──
         mid = request.form.get('manifest_id','').strip()
@@ -748,7 +780,13 @@ def send_queued_flight(qid):
         # delete the draft record
         c.execute("DELETE FROM queued_flights WHERE id=?", (qid,))
 
-    flash(f"Flight {fid} sent.", 'success')
+    # Prefer flight_code in success message; fall back to 'TBD' if absent
+    try:
+        code_row = dict_rows("SELECT flight_code FROM flights WHERE id=?", (fid,))
+        code_txt = (code_row[0]['flight_code'] or 'TBD') if code_row else 'TBD'
+    except Exception:
+        code_txt = 'TBD'
+    flash(f"Flight {code_txt} sent.", 'success')
     # Browser fetch() → JSON; classic form-POST → normal redirect
     if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
         return jsonify(
@@ -1013,6 +1051,13 @@ def edit_flight(fid):
 @bp.post('/delete_flight/<int:fid>')
 def delete_flight(fid):
     """Delete a flight *and* apply compensating inventory lines."""
+    # Grab the code before deleting so our flash references the code, not the id
+    try:
+        code_row = dict_rows("SELECT flight_code FROM flights WHERE id=?", (fid,))
+        code_txt = (code_row[0]['flight_code'] or 'TBD') if code_row else 'TBD'
+    except Exception:
+        code_txt = 'TBD'
+
     with sqlite3.connect(DB_FILE) as c:
         c.row_factory = sqlite3.Row
         rows = c.execute(
@@ -1033,7 +1078,7 @@ def delete_flight(fid):
             ))
         c.execute("DELETE FROM flight_cargo WHERE flight_id=?", (fid,))
         c.execute("DELETE FROM flights WHERE id=?", (fid,))
-    flash(f"Flight {fid} deleted and inventory restored.")
+    flash(f"Flight {code_txt} deleted and inventory restored.")
     return redirect(url_for('core.dashboard'))
 
 @bp.post('/delete_flight_cargo/<int:fcid>')
