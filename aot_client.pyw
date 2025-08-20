@@ -182,6 +182,14 @@ class AOTAssembler:
             raise ValueError(f"decode({enc}) failed: {e}")
 
     def feed(self, aot_line: str):
+        # AOT <seq>/<total>|<F|D>|<sid>|<Z|B|J>|<chunk>
+        # Ignore benign control packets like "AOT REQ UPD" if they slip through
+        try:
+            if aot_line.upper().startswith("AOT REQ "):
+                self.log(f"REQ ignored: {aot_line.strip()}")
+                return
+        except Exception:
+            pass
         if not aot_line.startswith("AOT "): return
         try:
             head, rest = aot_line[4:].split("|", 1)

@@ -290,7 +290,7 @@ def tx_loop(fetch_rows_fn: Callable[[str, tuple], list]):
                 frames: List[str] = []
                 for seq, part in enumerate(parts, start=1):
                     msg = f"AOT {seq}/{total}|F|{session_sid}|{enc_flag}|{part}"
-                    frames.append(_format_tnc2(DEST, MYCALL, PATH, msg))
+                    frames.append(_format_tnc2(MYCALL, DEST, PATH, msg))
                 i = 0
                 while i < len(frames):
                     j = min(i + BURST_SIZE, len(frames))
@@ -318,7 +318,7 @@ def tx_loop(fetch_rows_fn: Callable[[str, tuple], list]):
                 for seq, part in enumerate(parts, start=1):
                     # AOT <seq>/<total>|F|<sid>|<J|Z|B>|<chunk>
                     msg = f"AOT {seq}/{total}|F|{session_sid}|{enc_flag}|{part}"
-                    frames.append(_format_tnc2(DEST, MYCALL, PATH, msg))
+                    frames.append(_format_tnc2(MYCALL, DEST, PATH, msg))
 
                 i = 0
                 while i < len(frames):
@@ -345,7 +345,7 @@ def tx_loop(fetch_rows_fn: Callable[[str, tuple], list]):
                     for seq, part in enumerate(parts, start=1):
                         # AOT <seq>/<total>|D|<sid>|<J|Z|B>|<chunk>
                         msg = f"AOT {seq}/{total}|D|{sid}|{enc_flag}|{part}"
-                        frames.append(_format_tnc2(DEST, MYCALL, PATH, msg))
+                        frames.append(_format_tnc2(MYCALL, DEST, PATH, msg))
 
                     i = 0
                     while i < len(frames):
