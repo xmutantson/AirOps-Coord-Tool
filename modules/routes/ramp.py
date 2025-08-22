@@ -525,6 +525,9 @@ def queue_flight():
     airfield_takeoff  = escape(request.form.get('origin','').strip().upper())
     # ── preferred hidden field (added by Ramp-Boss JS) ───────────
     travel_time = request.form.get('travel_time','').strip()
+    # weight handling for drafts (keep typed unless manifest exists)
+    unit              = request.form.get('weight_unit','lbs')
+    typed_cargo_wt    = norm_weight(request.form.get('cargo_weight',''), unit)
 
     # fallback for older clients that still submit separate HH/MM boxes
     if not travel_time:
@@ -543,12 +546,13 @@ def queue_flight():
           INSERT INTO queued_flights(
             direction, pilot_name, pax_count, tail_number,
             airfield_takeoff, airfield_landing, travel_time,
-            cargo_type, remarks, created_at
-          ) VALUES (?,?,?,?,?,?,?,?,?,?)
+            cargo_weight, cargo_type, remarks, created_at
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
         """, (
           direction, pilot_name, pax_count, tail_number,
           airfield_takeoff, airfield_landing, travel_time,
-          cargo_type, remarks, created_at
+          typed_cargo_wt,
+          cargo_type,        remarks,        created_at
         ))
         qid = cur.lastrowid
 
@@ -578,18 +582,27 @@ def queue_flight():
           HAVING SUM(CASE direction WHEN 'out' THEN quantity ELSE -quantity END) > 0
         """, (qid, mid))
 
-        # --- Pre-fill the draft’s cargo_weight field ----------------------
-        cw_total = c.execute(
-            "SELECT COALESCE(SUM(total_weight),0) FROM flight_cargo WHERE queued_id=?",
+        # --- Overwrite draft cargo_weight ONLY if a snapshot exists ---
+        nrows = c.execute(
+            "SELECT COUNT(*) FROM flight_cargo WHERE queued_id=?",
             (qid,)
-        ).fetchone()[0] or 0.0
-        c.execute("UPDATE queued_flights SET cargo_weight=? WHERE id=?",
-                  (cw_total, qid))
-        # end if(mid)
+        ).fetchone()[0] or 0
+        if nrows > 0:
+            cw_total = c.execute(
+                "SELECT COALESCE(SUM(total_weight),0) FROM flight_cargo WHERE queued_id=?",
+                (qid,)
+            ).fetchone()[0] or 0.0
+            c.execute("UPDATE queued_flights SET cargo_weight=? WHERE id=?",
+                      (cw_total, qid))
+        # end snapshot
 
-        # --- Canonicalize remarks + cargo_type for the draft ---------------
-        # Build "Manifest: NAME SIZE lb×QTY; …;" from the snapshot rows
-        rows = c.execute("""
+        # --- Canonicalize remarks + cargo_type from snapshot (only if snapshot exists) ---
+        if nrows > 0:
+            # Preserve operator-entered values from THIS POST unless blank
+            posted_remarks = remarks
+            posted_type    = cargo_type
+            # Build "Manifest: NAME SIZE lb×QTY; …;" from the snapshot rows
+            rows = c.execute("""
           SELECT ic.display_name AS cat,
                  fc.sanitized_name AS name,
                  fc.weight_per_unit AS wpu,
@@ -598,20 +611,25 @@ def queue_flight():
             JOIN inventory_categories ic ON ic.id = fc.category_id
            WHERE fc.queued_id = ?
            ORDER BY fc.id
-        """, (qid,)).fetchall()
-        def _fmt_wpu(w):
-            try:
-                f = float(w)
-                return str(int(f)) if f.is_integer() else str(f)
-            except Exception:
-                return str(w)
-        remarks_txt = ("Manifest: " + "; ".join(
-            f"{r['name']} {_fmt_wpu(r['wpu'])} lb×{r['qty']}" for r in rows
-        ) + ";") if rows else ""
-        cats = {r['cat'] for r in rows}
-        cargo_type = (cats.pop() if len(cats) == 1 else 'Mixed') if rows else ''
-        c.execute("UPDATE queued_flights SET remarks=?, cargo_type=? WHERE id=?",
-                  (remarks_txt, cargo_type, qid))
+            """, (qid,)).fetchall()
+            def _fmt_wpu(w):
+                try:
+                    f = float(w)
+                    return str(int(f)) if f.is_integer() else str(f)
+                except Exception:
+                    return str(w)
+            remarks_txt = ("Manifest: " + "; ".join(
+                f"{r['name']} {_fmt_wpu(r['wpu'])} lb×{r['qty']}" for r in rows
+            ) + ";") if rows else ""
+            cats = {r['cat'] for r in rows}
+            new_type = (cats.pop() if len(cats) == 1 else 'Mixed') if rows else ''
+            # Only overwrite if the operator didn't supply a value
+            if not (posted_remarks or '').strip():
+                c.execute("UPDATE queued_flights SET remarks=? WHERE id=?",
+                          (remarks_txt, qid))
+            if not (posted_type or '').strip():
+                c.execute("UPDATE queued_flights SET cargo_type=? WHERE id=?",
+                          (new_type, qid))
 
     flash(f"Flight draft {qid} added to queue.", 'info')
     if request.headers.get('X-Requested-With')=='XMLHttpRequest':
@@ -747,35 +765,47 @@ def send_queued_flight(qid):
           "  FROM flight_cargo WHERE flight_id=?",
           (fid,)
         ).fetchone()[0] or 0.0
+        # If there is no manifest content, fall back to the draft’s typed cargo weight
+        # Parse typed draft weight safely (handles "1200 lbs", "1200 lb", or plain number)
+        cw_raw = (q.get('cargo_weight') or '')
+        try:
+            cw_s = str(cw_raw).lower().strip()
+            if cw_s.endswith('lbs'): cw_s = cw_s[:-3]
+            if cw_s.endswith('lb'):  cw_s = cw_s[:-2]
+            draft_fallback = float(cw_s.strip() or 0.0)
+        except Exception:
+            draft_fallback = 0.0
+        effective_tot  = tot if rows else draft_fallback
         c.execute("""
           UPDATE flights
              SET cargo_weight     = printf('%.0f lbs', ?),
                  cargo_weight_real = ?
            WHERE id=?
-        """, (tot, tot, fid))
+        """, (effective_tot, effective_tot, fid))
 
-        # cargo_type: single category or Mixed
-        cats = {r['cat'] for r in rows}
-        new_type = cats.pop() if len(cats)==1 else 'Mixed'
-        # build a fresh remarks string (drop trailing “.0” on whole numbers)
-        def fmt_wpu(w):
-            try:
-                f = float(w)
-                return str(int(f)) if f.is_integer() else str(f)
-            except:
-                return str(w)
-
-        new_remarks = (
-          "Manifest: " + '; '.join(
-            f"{r['sanitized_name']} {fmt_wpu(r['wpu'])} lb×{r['quantity']}"
-            for r in rows
-          ) + ';'
-        ) if rows else ''
-        c.execute("""
-          UPDATE flights
-             SET cargo_type = ?, remarks = ?
-           WHERE id = ?
-        """, (new_type, new_remarks, fid))
+        # Only set cargo_type / remarks from manifest when queued fields were blank.
+        if rows:
+            # cargo_type: single category or Mixed
+            cats = {r['cat'] for r in rows}
+            new_type = cats.pop() if len(cats)==1 else 'Mixed'
+            # build a fresh remarks string (drop trailing “.0” on whole numbers)
+            def fmt_wpu(w):
+                try:
+                    f = float(w)
+                    return str(int(f)) if f.is_integer() else str(f)
+                except:
+                    return str(w)
+            new_remarks = (
+              "Manifest: " + '; '.join(
+                f"{r['sanitized_name']} {fmt_wpu(r['wpu'])} lb×{r['quantity']}"
+                for r in rows
+              ) + ';'
+            )
+            # Preserve operator-edited values if present.
+            if not (q['cargo_type'] or '').strip():
+                c.execute("UPDATE flights SET cargo_type=? WHERE id=?", (new_type, fid))
+            if not (q['remarks'] or '').strip():
+                c.execute("UPDATE flights SET remarks=? WHERE id=?", (new_remarks, fid))
 
         # delete the draft record
         c.execute("DELETE FROM queued_flights WHERE id=?", (qid,))
@@ -918,8 +948,21 @@ def edit_queued_flight(qid):
             mid   = request.form.get('manifest_id','')
             rows  = []                       # ← default when no live session
             if mid:
+                # Only treat this POST as a new commit if the manifest has newer rows
+                # than our saved snapshot. This protects operator-edited remarks unless
+                # they actually hit "Done" in this edit session.
+                inv_latest = c.execute(
+                    "SELECT MAX(timestamp) FROM inventory_entries "
+                    " WHERE session_id=? AND pending=0", (mid,)
+                ).fetchone()[0]
+                snap_latest = c.execute(
+                    "SELECT MAX(timestamp) FROM flight_cargo WHERE queued_id=?",
+                    (qid,)
+                ).fetchone()[0]
+                committed_now = bool(inv_latest and (not snap_latest or inv_latest > snap_latest))
 
                 # 1️⃣ collect a **combined** view (old snapshot + new edits)
+                #    (We will only apply it if committed_now is True.)
                 rows = c.execute("""
                   SELECT
                     category_id,
@@ -954,60 +997,70 @@ def edit_queued_flight(qid):
                   HAVING net_qty > 0
                 """, (qid, mid)).fetchall()
 
-            # 2️⃣ replace the snapshot with the fresh aggregate
-            c.execute("DELETE FROM flight_cargo WHERE queued_id=?", (qid,))
-            for cat_id, name, wpu, qty, tot, ts in rows:
-                c.execute("""
-                  INSERT INTO flight_cargo(
-                    queued_id, session_id, category_id, sanitized_name,
-                    weight_per_unit, quantity, total_weight,
-                    direction, timestamp
-                  ) VALUES (?,?,?,?,?,?,?,?,?)
-                """, (
-                  qid, mid,
-                  cat_id, name, wpu,
-                  qty,  tot,
-                  'out', ts
-                ))
+            # 2️⃣ Replace snapshot only if a *new* commit happened now
+            if mid and committed_now:
+                c.execute("DELETE FROM flight_cargo WHERE queued_id=?", (qid,))
+                for cat_id, name, wpu, qty, tot, ts in rows:
+                    c.execute("""
+                      INSERT INTO flight_cargo(
+                        queued_id, session_id, category_id, sanitized_name,
+                        weight_per_unit, quantity, total_weight,
+                        direction, timestamp
+                      ) VALUES (?,?,?,?,?,?,?,?,?)
+                    """, (
+                      qid, mid,
+                      cat_id, name, wpu,
+                      qty,  tot,
+                      'out', ts
+                    ))
             # ──────────────────────────────────────────────────────────
             #  Re-compute the new total weight for this draft and store
             #  it, so the “Cargo Weight” input is pre-filled next time.
             # ──────────────────────────────────────────────────────────
-            cw_total = c.execute(
-                "SELECT COALESCE(SUM(total_weight),0) "
-                "  FROM flight_cargo WHERE queued_id=?",
+            nrows = c.execute(
+                "SELECT COUNT(*) FROM flight_cargo WHERE queued_id=?",
                 (qid,)
-            ).fetchone()[0] or 0.0
-            c.execute(
-                "UPDATE queued_flights SET cargo_weight=? WHERE id=?",
-                (cw_total, qid)
-            )
+            ).fetchone()[0] or 0
+            if nrows > 0:
+                cw_total = c.execute(
+                    "SELECT COALESCE(SUM(total_weight),0) "
+                    "  FROM flight_cargo WHERE queued_id=?",
+                    (qid,)
+                ).fetchone()[0] or 0.0
+                c.execute(
+                    "UPDATE queued_flights SET cargo_weight=? WHERE id=?",
+                    (cw_total, qid)
+                )
 
         # After snapshot refresh, also refresh remarks + cargo_type
-        with sqlite3.connect(DB_FILE) as c2:
-            c2.row_factory = sqlite3.Row
-            rows2 = c2.execute("""
-              SELECT ic.display_name AS cat,
-                     fc.sanitized_name AS name,
-                     fc.weight_per_unit AS wpu,
-                     fc.quantity AS qty
-                FROM flight_cargo fc
-                JOIN inventory_categories ic ON ic.id = fc.category_id
-               WHERE fc.queued_id = ?
-               ORDER BY fc.id
-            """, (qid,)).fetchall()
-            def _fmt_wpu(w):
-                try:
-                    f = float(w);  return str(int(f)) if f.is_integer() else str(f)
-                except Exception:
-                    return str(w)
-            remarks_txt = ("Manifest: " + "; ".join(
-                f"{r['name']} {_fmt_wpu(r['wpu'])} lb×{r['qty']}" for r in rows2
-            ) + ";") if rows2 else ""
-            cats = {r['cat'] for r in rows2}
-            cargo_type = (cats.pop() if len(cats) == 1 else 'Mixed') if rows2 else ''
-            c2.execute("UPDATE queued_flights SET remarks=?, cargo_type=? WHERE id=?",
-                       (remarks_txt, cargo_type, qid))
+        # IMPORTANT: Only overwrite operator-typed remarks/cargo_type if a new
+        # commit occurred *this* POST (i.e., user hit "Done" now).
+        if mid and committed_now:
+            with sqlite3.connect(DB_FILE) as c2:
+                c2.row_factory = sqlite3.Row
+                rows2 = c2.execute("""
+                  SELECT ic.display_name AS cat,
+                         fc.sanitized_name AS name,
+                         fc.weight_per_unit AS wpu,
+                         fc.quantity AS qty
+                    FROM flight_cargo fc
+                    JOIN inventory_categories ic ON ic.id = fc.category_id
+                   WHERE fc.queued_id = ?
+                   ORDER BY fc.id
+                """, (qid,)).fetchall()
+                def _fmt_wpu(w):
+                    try:
+                        f = float(w);  return str(int(f)) if f.is_integer() else str(f)
+                    except Exception:
+                        return str(w)
+                remarks_txt = ("Manifest: " + "; ".join(
+                    f"{r['name']} {_fmt_wpu(r['wpu'])} lb×{r['qty']}" for r in rows2
+                ) + ";") if rows2 else ""
+                cats = {r['cat'] for r in rows2}
+                cargo_type = (cats.pop() if len(cats) == 1 else 'Mixed') if rows2 else ''
+                c2.execute(
+                    "UPDATE queued_flights SET remarks=?, cargo_type=? WHERE id=?",
+                    (remarks_txt, cargo_type, qid))
 
         flash("Draft updated","success")
         # ── XHR requests expect JSON so the front-end can redirect itself ──
