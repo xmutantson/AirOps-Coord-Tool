@@ -141,7 +141,7 @@ def reconcile_inventory_batches(session_id: str) -> None:
     """
     For the just-committed /inventory session:
       • Match **only** by exact item (sanitized name) **and** exact size.
-      • Use either parsed lines from raw_name (e.g., "beans 25 lb×3"), or the
+      • Use either parsed lines from raw_name (e.g., "beans 25 lbx3"), or the
         structured columns (sanitized_name, weight_per_unit, quantity).
       • There is **no weight-based fallback**; any remainder stays unapplied
         until exact stock lines are logged.
@@ -242,7 +242,7 @@ def reconcile_inventory_batches(session_id: str) -> None:
             return applied
 
         for e in entries:
-            # 1) Try parsing raw_name ("beans 25 lb×3" etc.)
+            # 1) Try parsing raw_name ("beans 25 lbx3" etc.)
             parsed = _parse_manifest(e['raw_name'])
             if parsed:
                 for it in parsed:

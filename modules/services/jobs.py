@@ -413,7 +413,8 @@ def auto_winlink_send_job():
             continue
 
         subject = generate_subject(f)
-        body    = generate_body(f, callsign="A-O-C-T", include_test=False)
+        op_call = "A-O-C-T"
+        body    = generate_body(f, callsign=op_call, include_test=False)
         cs      = get_preference('winlink_callsign_1') or ''
 
         # build PAT compose cmd: flags (including CC) must come before the recipient
@@ -428,6 +429,21 @@ def auto_winlink_send_job():
             # mark flight sent & record
             with sqlite3.connect(DB_FILE) as conn:
                 ts_iso = iso8601_ceil_utc()
+                # --- Snapshot state into flight_history so the AOCT counter advances ---
+                try:
+                    before_rows = dict_rows("SELECT * FROM flights WHERE id=?", (f['id'],))
+                    if before_rows:
+                        before = before_rows[0]
+                        # match manual path: stash operator_call in the snapshot payload
+                        before['operator_call'] = op_call
+                        conn.execute(
+                            "INSERT INTO flight_history(flight_id, timestamp, data) VALUES (?,?,?)",
+                            (f['id'], ts_iso, json.dumps(before))
+                        )
+                except Exception:
+                    # don't block auto-send if history snapshot fails
+                    pass
+
                 conn.execute("UPDATE flights SET sent=1, sent_time=? WHERE id=?", (ts_iso, f['id']))
                 conn.execute("""
                     INSERT INTO winlink_messages
@@ -438,7 +454,7 @@ def auto_winlink_send_job():
                 conn.execute("""
                     INSERT INTO outgoing_messages (flight_id, operator_call, timestamp, subject, body)
                     VALUES (?,?,?,?,?)
-                """, (f['id'], 'A-O-C-T', ts_iso, subject, body))
+                """, (f['id'], op_call, ts_iso, subject, body))
 
         except subprocess.CalledProcessError as e:
             app.logger.error("Auto-send failed for flight %s: %s", f['id'], e)

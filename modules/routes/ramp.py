@@ -601,7 +601,7 @@ def queue_flight():
             # Preserve operator-entered values from THIS POST unless blank
             posted_remarks = remarks
             posted_type    = cargo_type
-            # Build "Manifest: NAME SIZE lb×QTY; …;" from the snapshot rows
+            # Build "Manifest: NAME SIZE lbxQTY; …;" from the snapshot rows
             rows = c.execute("""
           SELECT ic.display_name AS cat,
                  fc.sanitized_name AS name,
@@ -619,7 +619,7 @@ def queue_flight():
                 except Exception:
                     return str(w)
             remarks_txt = ("Manifest: " + "; ".join(
-                f"{r['name']} {_fmt_wpu(r['wpu'])} lb×{r['qty']}" for r in rows
+                f"{r['name']} {_fmt_wpu(r['wpu'])} lbx{r['qty']}" for r in rows
             ) + ";") if rows else ""
             cats = {r['cat'] for r in rows}
             new_type = (cats.pop() if len(cats) == 1 else 'Mixed') if rows else ''
@@ -797,7 +797,7 @@ def send_queued_flight(qid):
                     return str(w)
             new_remarks = (
               "Manifest: " + '; '.join(
-                f"{r['sanitized_name']} {fmt_wpu(r['wpu'])} lb×{r['quantity']}"
+                f"{r['sanitized_name']} {fmt_wpu(r['wpu'])} lbx{r['quantity']}"
                 for r in rows
               ) + ';'
             )
@@ -1054,7 +1054,7 @@ def edit_queued_flight(qid):
                     except Exception:
                         return str(w)
                 remarks_txt = ("Manifest: " + "; ".join(
-                    f"{r['name']} {_fmt_wpu(r['wpu'])} lb×{r['qty']}" for r in rows2
+                    f"{r['name']} {_fmt_wpu(r['wpu'])} lbx{r['qty']}" for r in rows2
                 ) + ";") if rows2 else ""
                 cats = {r['cat'] for r in rows2}
                 cargo_type = (cats.pop() if len(cats) == 1 else 'Mixed') if rows2 else ''

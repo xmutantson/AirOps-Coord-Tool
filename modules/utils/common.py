@@ -1902,7 +1902,7 @@ def generate_cargo_manifest():
     lines = []
     for (name, size) in sorted(agg.keys(), key=lambda t: (t[0], t[1])):
         qty = agg[(name, size)]
-        lines.append(f"{name} {size} lb×{qty}")
+        lines.append(f"{name} {size} lbx{qty}")
         total += size * qty
 
     manifest = "; ".join(lines)
@@ -1965,7 +1965,7 @@ def generate_ramp_request():
     for r in picks:
         have = int(r['qty'])
         ask  = _r.randint(1, min(4, have))
-        lines.append(f"{r['noun']} {int(r['size_lb'])} lb×{ask}")
+        lines.append(f"{r['noun']} {int(r['size_lb'])} lbx{ask}")
         total_wt += r['size_lb'] * ask
     manifest = ensure_trailing_semicolon('; '.join(lines)) if lines else ''
 
@@ -1997,7 +1997,7 @@ def ensure_trailing_semicolon(s: str) -> str:
 def _parse_manifest(manifest: str):
     """
     Return list of dicts: [{'name':str,'size_lb':float,'qty':int}, ...]
-    Accepts 'tarps 10 lb×3; water 20 lb×2' and minor variants (x, lbs, spaces).
+    Accepts 'tarps 10 lbx3; water 20 lbx2' and minor variants (x, lbs, spaces).
     """
     items = []
     for part in (manifest or '').split(';'):
@@ -2204,7 +2204,7 @@ def generate_inventory_outbound_request():
         if have <= 0: 
             continue
         ask = _r.randint(1, have)  # do not exceed stock
-        lines.append(f"{r['noun']} {int(r['size_lb'])} lb×{ask}")
+        lines.append(f"{r['noun']} {int(r['size_lb'])} lbx{ask}")
     if not lines:
         return
     # _create_inventory_batch normalizes trailing ';'
@@ -2246,7 +2246,7 @@ def generate_inventory_inbound_delivery():
     lines = []
     for name, size in combos:
         qty = random.randint(1,5)
-        lines.append(f"{name} {size} lb×{qty}")
+        lines.append(f"{name} {size} lbx{qty}")
     manifest = '; '.join(lines)
     # _create_inventory_batch normalizes trailing ';'
     bid = _create_inventory_batch('in', manifest, ts)
@@ -2271,7 +2271,7 @@ def generate_ramp_flight():
     lines, total_wt = [], 0
     for name, size in combos:
         qty = random.randint(1,9)
-        lines.append(f"{name} {size} lb×{qty}")
+        lines.append(f"{name} {size} lbx{qty}")
         total_wt += size * qty
     remarks = ensure_trailing_semicolon('; '.join(lines)) if lines else ''
 
