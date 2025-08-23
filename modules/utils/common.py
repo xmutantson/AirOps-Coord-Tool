@@ -478,6 +478,16 @@ def maybe_start_distances():
     )
     if not (rows and rows[0]['value']=='yes'):
         return
+
+    # Ensure the background thread uses a REAL Flask app object, not the LocalProxy.
+    # Without this, `app.extensions[...]` inside the thread raises outside request ctx
+    # and gets swallowed by broad excepts, leaving the distances map empty.
+    try:
+        from flask import current_app as _current_app
+        globals()['app'] = _current_app._get_current_object()
+    except Exception:
+        pass
+
     # grab receiver location once
     fetch_recv_loc()
     # spin up the background worker
