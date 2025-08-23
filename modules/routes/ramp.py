@@ -1,7 +1,7 @@
 
 from markupsafe import escape
 import sqlite3, json, uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Wargame finish helper — soft import (no-op if unavailable)
 try:
@@ -237,23 +237,36 @@ def ramp_boss():
             )
 
             with sqlite3.connect(DB_FILE) as c:
-                fid = c.execute("""
-                     INSERT INTO flights(
-                       is_ramp_entry,direction,pilot_name,pax_count,tail_number,
-                       airfield_takeoff,takeoff_time,airfield_landing,eta,
-                       cargo_type,cargo_weight,remarks,flight_code)
-                     VALUES (1,:direction,:pilot_name,:pax_count,:tail_number,
-                             :airfield_takeoff,:takeoff_time,:airfield_landing,:eta,
-                             :cargo_type,:cargo_weight,:remarks,:flight_code)
-                """, data).lastrowid
-
-                c.execute("""INSERT INTO flight_history(flight_id,timestamp,data)
-                             VALUES (?,?,?)""",
-                          (fid, datetime.utcnow().isoformat(), json.dumps(data)))
+                c.row_factory = sqlite3.Row
+                c.execute("BEGIN IMMEDIATE")
+                if data.get('flight_code'):
+                    ex = c.execute("SELECT id FROM flights WHERE flight_code=?",
+                                   (data['flight_code'],)).fetchone()
+                else:
+                    ex = None
+                if ex:
+                    fid    = ex['id']
+                    action = 'update_ignored'
+                else:
+                    fid = c.execute("""
+                         INSERT INTO flights(
+                           is_ramp_entry,direction,pilot_name,pax_count,tail_number,
+                           airfield_takeoff,takeoff_time,airfield_landing,eta,
+                           cargo_type,cargo_weight,remarks,flight_code)
+                         VALUES (1,:direction,:pilot_name,:pax_count,:tail_number,
+                                 :airfield_takeoff,:takeoff_time,:airfield_landing,:eta,
+                                 :cargo_type,:cargo_weight,:remarks,:flight_code)
+                    """, data).lastrowid
+                    # snapshot history atomically with the insert
+                    c.execute("""INSERT INTO flight_history(flight_id,timestamp,data)
+                                 VALUES (?,?,?)""",
+                              (fid, datetime.utcnow().isoformat(), json.dumps(data)))
+                    action = 'new'
+                c.commit()
 
                 # ── 1. turn the *committed* manifest into flight_cargo rows ──
                 mid = request.form.get('manifest_id','')
-                if mid:
+                if mid and action != 'update_ignored':
                     c.execute("""
                       INSERT INTO flight_cargo(
                         flight_id, session_id, category_id, sanitized_name,
@@ -267,15 +280,16 @@ def ramp_boss():
                     """, (fid, mid))
 
                 # mark this as a NEW insert
-                action = 'new'
+                action = action if 'action' in locals() else 'new'
 
-            # WARGAME: start Radio‑outbound SLA (once; until operator marks “sent”)
-            wargame_start_radio_outbound(fid)
-            # WARGAME: start Ramp‑outbound SLA (once; creation time)
-            try:
-                wargame_task_start_once('ramp', 'outbound', key=f"flight:{fid}", gen_at=datetime.utcnow().isoformat())
-            except Exception:
-                pass
+            if action != 'update_ignored':
+                # WARGAME: start Radio-outbound SLA (once; until operator marks “sent”)
+                wargame_start_radio_outbound(fid)
+                # WARGAME: start Ramp-outbound SLA (once; creation time)
+                try:
+                    wargame_task_start_once('ramp', 'outbound', key=f"flight:{fid}", gen_at=datetime.utcnow().isoformat())
+                except Exception:
+                    pass
 
             # If operator just marked this outbound complete, finalize Ramp‑outbound SLA.
             # We detect a 0 -> 1 transition using the pre‑update prev_complete captured above.
@@ -300,6 +314,7 @@ def ramp_boss():
 
             with sqlite3.connect(DB_FILE) as c:
                 c.row_factory = sqlite3.Row
+                c.execute("BEGIN IMMEDIATE")
 
                 # try to find the most-recent, still-open outbound leg
                 match = c.execute("""
@@ -352,19 +367,31 @@ def ramp_boss():
 
                 else:
                     # ----- no match → insert a standalone inbound row -----
-                    action = 'new'
-                    fid = c.execute("""
-                        INSERT INTO flights(
-                           is_ramp_entry,direction,pilot_name,pax_count,tail_number,
-                           airfield_takeoff,takeoff_time,airfield_landing,eta,
-                           cargo_type,cargo_weight,remarks,complete,flight_code)
-                        VALUES (1,'inbound',:pilot_name,:pax_count,:tail_number,
-                                :airfield_takeoff,'',:airfield_landing,:eta,
-                                :cargo_type,:cargo_weight,:remarks,1,:flight_code)
-                    """, data | {'flight_code': fcode}).lastrowid
-                    c.execute("""INSERT INTO flight_history(flight_id,timestamp,data)
-                                 VALUES (?,?,?)""",
-                              (fid, datetime.utcnow().isoformat(), json.dumps(data)))
+                    # Duplicate-arrival guard: same tail & arrival time already logged?
+                    dup = c.execute("""
+                        SELECT id FROM flights
+                         WHERE is_ramp_entry=1 AND direction='inbound'
+                           AND tail_number=? AND IFNULL(eta,'')=?
+                           AND complete=1
+                         ORDER BY id DESC LIMIT 1
+                    """, (data['tail_number'], arrival)).fetchone()
+                    if dup:
+                        fid = dup['id']
+                        action = 'update_ignored'
+                    else:
+                        action = 'new'
+                        fid = c.execute("""
+                            INSERT INTO flights(
+                               is_ramp_entry,direction,pilot_name,pax_count,tail_number,
+                               airfield_takeoff,takeoff_time,airfield_landing,eta,
+                               cargo_type,cargo_weight,remarks,complete,flight_code)
+                            VALUES (1,'inbound',:pilot_name,:pax_count,:tail_number,
+                                    :airfield_takeoff,'',:airfield_landing,:eta,
+                                    :cargo_type,:cargo_weight,:remarks,1,:flight_code)
+                        """, data | {'flight_code': fcode}).lastrowid
+                        c.execute("""INSERT INTO flight_history(flight_id,timestamp,data)
+                                     VALUES (?,?,?)""",
+                                  (fid, datetime.utcnow().isoformat(), json.dumps(data)))
 
                     # ── attach any committed Advanced-Cargo manifest ──
                     mid = request.form.get('manifest_id','')
@@ -382,16 +409,17 @@ def ramp_boss():
                            WHERE session_id=? AND pending=0
                         """, (fid, mid))
 
-            # Route to Radio outbox: Ramp has now touched this record
-            with sqlite3.connect(DB_FILE) as c:
-                c.execute("UPDATE flights SET is_ramp_entry=1, sent=0 WHERE id=?", (fid,))
+            # Route to Radio outbox only if we actually created/updated something
+            if action != 'update_ignored':
+                with sqlite3.connect(DB_FILE) as c:
+                    c.execute("UPDATE flights SET is_ramp_entry=1, sent=0 WHERE id=?", (fid,))
 
             # Start Radio "landing notice" SLA once (avoid resetting on later edits)
             pending = dict_rows(
                 "SELECT 1 FROM wargame_tasks WHERE role='radio' AND kind='landing' AND key=?",
                 (f"flight:{fid}",)
             )
-            if not pending:
+            if action != 'update_ignored' and not pending:
                 wargame_task_start(
                     role='radio',
                     kind='landing',
@@ -400,7 +428,8 @@ def ramp_boss():
                 )
 
             # Close Ramp inbound SLA (arrival was handled)
-            wargame_finish_ramp_inbound(fid)
+            if action != 'update_ignored':
+                wargame_finish_ramp_inbound(fid)
 
         # ── at this point we have `fid` of the row we inserted/updated ──
         # fetch it back in full
@@ -542,6 +571,33 @@ def queue_flight():
     # --- Insert into queued_flights ---
     with sqlite3.connect(DB_FILE) as c:
         c.row_factory = sqlite3.Row
+        c.execute("BEGIN IMMEDIATE")
+        # NEW: reject identical queue duplicates in a short window (double-click guard)
+        try:
+            cutoff = (datetime.utcnow() - timedelta(seconds=30)).isoformat()
+            qdup = c.execute("""
+              SELECT id FROM queued_flights
+               WHERE direction=? AND tail_number=?
+                 AND airfield_takeoff=? AND airfield_landing=?
+                 AND COALESCE(travel_time,'')=? AND COALESCE(cargo_type,'')=?
+                 AND COALESCE(remarks,'')=? AND COALESCE(cargo_weight,'')=?  -- guard weight too
+                 AND created_at >= ?
+               ORDER BY id DESC LIMIT 1
+            """, (
+              direction, tail_number,
+              airfield_takeoff, airfield_landing,
+              travel_time, cargo_type, remarks, typed_cargo_wt, cutoff
+            )).fetchone()
+        except Exception:
+            qdup = None
+        if qdup:
+            qid = qdup['id']
+            c.commit()
+            flash(f"Duplicate ignored; using draft {qid}.", 'info')
+            if request.headers.get('X-Requested-With')=='XMLHttpRequest':
+                return jsonify({'status':'queued','qid':qid})
+            return redirect(url_for('ramp.queued_flights'))
+
         cur = c.execute("""
           INSERT INTO queued_flights(
             direction, pilot_name, pax_count, tail_number,
@@ -653,6 +709,7 @@ def queued_flights():
 def send_queued_flight(qid):
     # fetch draft
     q = dict_rows("SELECT * FROM queued_flights WHERE id=?", (qid,))
+
     if not q:
         flash(f"Queue entry {qid} not found.", 'error')
         return redirect(url_for('ramp.queued_flights'))
@@ -687,15 +744,34 @@ def send_queued_flight(qid):
 
     with sqlite3.connect(DB_FILE) as c:
         c.row_factory = sqlite3.Row
-        fid = c.execute("""
-          INSERT INTO flights(
-            is_ramp_entry,direction,pilot_name,pax_count,tail_number,
-            airfield_takeoff,takeoff_time,airfield_landing,eta,
-            cargo_type,cargo_weight,remarks,flight_code
-          ) VALUES (1,:direction,:pilot_name,:pax_count,:tail_number,
-                    :airfield_takeoff,:takeoff_time,:airfield_landing,:eta,
-                    :cargo_type,:cargo_weight,:remarks,:flight_code)
-        """, data | {'flight_code': flight_code}).lastrowid
+        # NEW: one-shot consume of the draft (prevents double-send)
+        ensure_column("queued_flights", "consumed", "INTEGER DEFAULT 0")
+        c.execute("BEGIN IMMEDIATE")
+        touched = c.execute(
+            "UPDATE queued_flights SET consumed=1 WHERE id=? AND IFNULL(consumed,0)=0",
+            (qid,)
+        ).rowcount
+        if touched == 0:
+            c.commit()
+            flash(f"Queue entry {qid} was already sent.", 'info')
+            return redirect(url_for('ramp.queued_flights'))
+        # NEW: idempotency by flight_code (if same code already created, reuse it)
+        fid = None
+        if flight_code:
+            ex = c.execute("SELECT id FROM flights WHERE flight_code=?",
+                           (flight_code,)).fetchone()
+            if ex:
+                fid = ex['id']
+        if not fid:
+            fid = c.execute("""
+              INSERT INTO flights(
+                is_ramp_entry,direction,pilot_name,pax_count,tail_number,
+                airfield_takeoff,takeoff_time,airfield_landing,eta,
+                cargo_type,cargo_weight,remarks,flight_code
+              ) VALUES (1,:direction,:pilot_name,:pax_count,:tail_number,
+                        :airfield_takeoff,:takeoff_time,:airfield_landing,:eta,
+                        :cargo_type,:cargo_weight,:remarks,:flight_code)
+            """, data | {'flight_code': flight_code}).lastrowid
 
         # ── rebuild the manifest exactly like edit_queued_flight does ──
         mid = request.form.get('manifest_id','').strip()

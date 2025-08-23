@@ -16,6 +16,7 @@ from modules.services.winlink.core import (
     generate_body,          # used in auto_winlink_send_job
 )
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
+from modules.utils.common import _is_winlink_reflector_bounce
 from app import DB_FILE, scheduler
 from flask import current_app
 app = current_app  # legacy shim for helpers
@@ -604,25 +605,42 @@ def process_unparsed_winlink_messages():
     """)
 
     for m in msgs:
+        # normalize receive time once
+        raw_ts = m.get('timestamp')
+        try:
+            if raw_ts:
+                dt = datetime.fromisoformat(raw_ts.replace('Z', '+00:00'))
+            else:
+                dt = None
+        except Exception:
+            dt = None
+        ts_iso = iso8601_ceil_utc(dt)
+
+        # Reflector bounce? Mirror to incoming_messages for audit, mark parsed, and skip flights.
+        if _is_winlink_reflector_bounce(m.get('subject',''), m.get('body','')):
+            with sqlite3.connect(DB_FILE) as conn:
+                conn.execute("""
+                    INSERT INTO incoming_messages(
+                        sender, subject, body, timestamp,
+                        tail_number, airfield_takeoff, airfield_landing,
+                        takeoff_time, eta, cargo_type, cargo_weight, remarks
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (
+                    (m.get('sender') or ''), (m.get('subject') or ''), (m.get('body') or ''), ts_iso,
+                    '', '', '', '', '', '', '', ''
+                ))
+                conn.execute("UPDATE winlink_messages SET parsed=1 WHERE id=?", (m['id'],))
+            continue
+
         # run your existing parser
         parsed_data = parse_winlink(m['subject'], m['body'])
 
         # ── upsert flight record and record history ─────────────────────
         with sqlite3.connect(DB_FILE) as conn:
+            conn.row_factory = sqlite3.Row
             cur = conn.cursor()
 
             # Mirror into incoming_messages so exports see it
-            # We stored receive-time into winlink_messages.timestamp; normalize to ceil-Z.
-            raw_ts = m.get('timestamp')
-            try:
-                if raw_ts:
-                    # fromisoformat needs offset; accept 'Z' too
-                    dt = datetime.fromisoformat(raw_ts.replace('Z', '+00:00'))
-                else:
-                    dt = None
-            except Exception:
-                dt = None
-            ts_iso = iso8601_ceil_utc(dt)
             sender_for_log = (m.get('sender') or '')
             cur.execute("""
                 INSERT INTO incoming_messages(
@@ -646,55 +664,84 @@ def process_unparsed_winlink_messages():
             ))
 
             # 1) try to find an existing inbound flight for this tail + route
-            row = cur.execute(
-                "SELECT id FROM flights "
-                " WHERE tail_number=? AND airfield_takeoff=? AND airfield_landing=?",
-                (
-                    parsed_data['tail_number'],
-                    parsed_data['airfield_takeoff'],
-                    parsed_data['airfield_landing']
-                )
-            ).fetchone()
+            row = cur.execute("""
+                SELECT id FROM flights
+                 WHERE tail_number=? AND airfield_takeoff=? AND airfield_landing=?
+            """, (
+                parsed_data['tail_number'],
+                parsed_data['airfield_takeoff'],
+                parsed_data['airfield_landing']
+            )).fetchone()
 
             if row:
-                # 2a) update existing flight
+                # 2a) update existing flight only if there are material changes
                 flight_id = row[0]
-                cur.execute(
-                    """
-                    UPDATE flights
-                       SET takeoff_time=?,
-                           eta=?,
-                           cargo_type=?,
-                           cargo_weight=?,
-                           remarks=?
-                     WHERE id=?
-                    """,
-                    (
+                existing = cur.execute("SELECT * FROM flights WHERE id=?", (flight_id,)).fetchone()
+                no_change = (
+                    (existing['takeoff_time'] or '') == (parsed_data['takeoff_time'] or '') and
+                    (existing['eta'] or '')          == (parsed_data['eta'] or '')          and
+                    (existing['cargo_type'] or '')   == (parsed_data['cargo_type'] or '')   and
+                    (existing['cargo_weight'] or '') == (parsed_data['cargo_weight'] or '') and
+                    (existing['remarks'] or '')      == (parsed_data.get('remarks','') or '')
+                )
+                if not no_change:
+                    cur.execute("""
+                        UPDATE flights
+                           SET takeoff_time=?,
+                               eta=?,
+                               cargo_type=?,
+                               cargo_weight=?,
+                               remarks=?
+                         WHERE id=?
+                    """, (
                         parsed_data['takeoff_time'],
                         parsed_data['eta'],
                         parsed_data['cargo_type'],
                         parsed_data['cargo_weight'],
-                        parsed_data['remarks'],
+                        parsed_data.get('remarks',''),
                         flight_id
-                    )
-                )
+                    ))
+                    # append history only when something changed
+                    cur.execute("""
+                        INSERT INTO flight_history (flight_id, timestamp, data)
+                        VALUES (?, datetime('now'), ?)
+                    """, (flight_id, json.dumps(parsed_data)))
             else:
-                # 2b) insert a new inbound flight
-                cur.execute(
-                    """
-                    INSERT INTO flights
-                        (tail_number,
-                         direction,
-                         airfield_takeoff,
-                         airfield_landing,
-                         takeoff_time,
-                         eta,
-                         cargo_type,
-                         cargo_weight,
-                         remarks)
-                    VALUES (?, 'inbound', ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
+                # 2b) insert a new inbound flight — but guard against perfect duplicates
+                dup = cur.execute("""
+                    SELECT id FROM flights
+                     WHERE IFNULL(complete,0)=0
+                       AND tail_number=? AND airfield_takeoff=? AND airfield_landing=?
+                       AND IFNULL(takeoff_time,'')=? AND IFNULL(eta,'')=?
+                       AND IFNULL(cargo_type,'')=? AND IFNULL(cargo_weight,'')=?
+                       AND IFNULL(remarks,'')=?
+                     ORDER BY id DESC LIMIT 1
+                """, (
+                    parsed_data['tail_number'],
+                    parsed_data['airfield_takeoff'],
+                    parsed_data['airfield_landing'],
+                    parsed_data['takeoff_time'] or '',
+                    parsed_data['eta'] or '',
+                    parsed_data['cargo_type'] or '',
+                    parsed_data['cargo_weight'] or '',
+                    parsed_data.get('remarks','') or ''
+                )).fetchone()
+                if dup:
+                    flight_id = dup[0]
+                else:
+                    cur.execute("""
+                        INSERT INTO flights
+                            (tail_number,
+                             direction,
+                             airfield_takeoff,
+                             airfield_landing,
+                             takeoff_time,
+                             eta,
+                             cargo_type,
+                             cargo_weight,
+                             remarks)
+                        VALUES (?, 'inbound', ?, ?, ?, ?, ?, ?, ?)
+                    """, (
                         parsed_data['tail_number'],
                         parsed_data['airfield_takeoff'],
                         parsed_data['airfield_landing'],
@@ -702,20 +749,13 @@ def process_unparsed_winlink_messages():
                         parsed_data['eta'],
                         parsed_data['cargo_type'],
                         parsed_data['cargo_weight'],
-                        parsed_data['remarks']
-                    )
-                )
-                flight_id = cur.lastrowid
-
-            # 3) append an entry to flight_history
-            cur.execute(
-                """
-                INSERT INTO flight_history
-                    (flight_id, timestamp, data)
-                VALUES (?, datetime('now'), ?)
-                """,
-                (flight_id, json.dumps(parsed_data))
-            )
+                        parsed_data.get('remarks','')
+                    ))
+                    flight_id = cur.lastrowid
+                    cur.execute("""
+                        INSERT INTO flight_history (flight_id, timestamp, data)
+                        VALUES (?, datetime('now'), ?)
+                    """, (flight_id, json.dumps(parsed_data)))
 
             conn.commit()
 

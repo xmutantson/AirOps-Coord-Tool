@@ -717,10 +717,34 @@
    //  FORM SUBMIT (SEND NOW  *or*  ADD TO QUEUE)
    // ────────────────────────────────────────────────────────────────
 
+    let rbSubmitting = false;
+    function lockButtons(btn){
+      try {
+        if (btn) {
+          btn.dataset.originalText = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = '⏳ Working…';
+        }
+        if (sendBtn && btn !== sendBtn) sendBtn.disabled = true;
+        if (queueBtn && btn !== queueBtn) queueBtn.disabled = true;
+      } catch(_){}
+    }
+    function unlockButtons(){
+      rbSubmitting = false;
+      [sendBtn, queueBtn].forEach(b=>{
+        if (!b) return;
+        b.disabled = false;
+        if (b.dataset.originalText) b.textContent = b.dataset.originalText;
+      });
+    }
     form.addEventListener('submit', async e => {
       e.preventDefault();
+      if (rbSubmitting) return;
+      rbSubmitting = true;
+      const clicked = e.submitter || sendBtn || queueBtn;
+      lockButtons(clicked);
       // basic required‐field check
-      if (!validateRampBoss()) return;
+      if (!validateRampBoss()){ unlockButtons(); return; }
 
       /* compute where this form will POST _before_ we touch it anywhere else */
       const targetURL =
@@ -738,7 +762,7 @@
             if (!exists &&
                 !confirm(`"${destVal}" is not a known airport code. Continue anyway?`)) {
               destField.focus();
-              return;
+              unlockButtons(); return;
             }
           }
         } catch (err) {
@@ -752,7 +776,9 @@
       const t = depField.value.trim();
       if (t.length < 3 || t.length > 4 || isNaN(t)) {
         depField.classList.add('error');
-        return showToast('Time must be 3–4 digits', 'error');
+        showToast('Time must be 3–4 digits', 'error');
+        unlockButtons();
+        return;
       }
       depField.classList.remove('error');
 
@@ -835,7 +861,7 @@
       }
 
       // 2)  finish the manifest (pending → 0)
-      await commitManifest();
+      try { await commitManifest(); } catch(_){ unlockButtons(); return; }
 
 
       // 3)  post the flight (destination URL depends on which button)
@@ -848,7 +874,7 @@
       // ── always re-enable, even if server replied 400/500 ─────────────
       travelHInp.disabled = false;
       travelMInp.disabled = false;
-      if (!resp.ok) return showToast('Save failed', 'error');
+      if (!resp.ok){ showToast('Save failed', 'error'); unlockButtons(); return; }
       /* endpoints now return JSON for XHR; fall back gracefully */
       let j=null;
       if (resp.headers.get('content-type')?.includes('json')){
@@ -878,6 +904,7 @@
           // Clear advanced cargo chips
           advLines.innerHTML     = '';
           manifestId.value       = '';
+          unlockButtons();
           return; /* skip the outbound “success row” build */
       }
 
@@ -934,6 +961,7 @@
       // chips/manifest cleared – ready for a fresh flight
       advLines.innerHTML = '';
       manifestId.value   = '';
+      unlockButtons();
     });
 
 

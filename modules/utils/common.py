@@ -1418,8 +1418,19 @@ def _is_winlink_reflector_bounce(subj: str, body: str) -> bool:
     b = (body or '').lower()
     if 'winlink test message reflector' in s or 'winlink test message reflector' in b:
         return True
+    s = (subj or '')
+    b = (body or '').lower()
     # Quoted headers in the bounce often include “To: TEST”
     if re.search(r'(?im)^\s*To:\s*TEST\b', body or ''):
+        return True
+    # Additional light-touch heuristics that are common on reflector bounces
+    if re.search(r'(?i)\bauto(?:mated)?[ -]?reply|automated response\b', s):
+        return True
+    if re.search(r'(?im)^\s*From:.*\bno-?reply\b', body or ''):
+        return True
+    if re.search(r'(?im)^\s*(To|From):.*\btest@winlink\.org\b', body or ''):
+        return True
+    if 'do not reply' in b or 'do-not-reply' in b:
         return True
     return False
 

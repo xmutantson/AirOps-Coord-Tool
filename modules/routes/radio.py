@@ -6,7 +6,7 @@ from flask import Blueprint, current_app, flash, jsonify, redirect, render_templ
 
 from modules.services.winlink.core import parse_winlink, generate_subject, generate_body
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
-from modules.utils.common import _start_radio_tx_once, maybe_extract_flight_code  # call run-once starter from this bp
+from modules.utils.common import _start_radio_tx_once, maybe_extract_flight_code, _is_winlink_reflector_bounce  # call run-once starter from this bp
 
 # --- IMPORTANT ---
 # The star import above brings in a DB-only fallback wargame_task_finish that returns None
@@ -107,6 +107,12 @@ def radio():
                     logger.debug("Could not finish Radio‑inbound SLA for WGID %s: %s", wgid, exc)
             else:
                 logger.debug("No WGID in message; skipping Radio SLA finish.")
+
+            # If this is a Winlink Test Message Reflector bounce, stop after auditing.
+            if _is_winlink_reflector_bounce(subj, body):
+                if is_ajax:
+                    return jsonify({'action': 'ignored_reflector'})
+                return redirect(url_for('radio.radio'))
 
             # 2) landing-report?
             lm = re.search(r'\blanded\s*(\d{1,2}:?\d{2})\b', subj, re.I)
@@ -267,6 +273,29 @@ def radio():
 
             else:
                 # ── NEW NON-RAMP ENTRY ────────────────────────────
+                # Perfect-duplicate guard: refuse identical open leg
+                dup_new = c.execute("""
+                    SELECT id FROM flights
+                     WHERE IFNULL(complete,0)=0
+                       AND tail_number=? AND airfield_takeoff=? AND airfield_landing=?
+                       AND IFNULL(takeoff_time,'')=? AND IFNULL(eta,'')=?
+                       AND IFNULL(cargo_type,'')=? AND IFNULL(cargo_weight,'')=?
+                       AND IFNULL(remarks,'')=?
+                     ORDER BY id DESC LIMIT 1
+                """, (
+                  p['tail_number'], p['airfield_takeoff'], p['airfield_landing'],
+                  p['takeoff_time'] or '', p['eta'] or '',
+                  p['cargo_type'] or '', p['cargo_weight'] or '', p.get('remarks','') or ''
+                )).fetchone()
+                if dup_new:
+                    if is_ajax:
+                        full = dict_rows("SELECT * FROM flights WHERE id=?", (dup_new['id'],))
+                        row = full[0] if full else {'id': dup_new['id']}
+                        row['action'] = 'update_ignored'
+                        return jsonify(row)
+                    flash(f"Duplicate Winlink ignored (flight #{dup_new['id']}).")
+                    return redirect(url_for('radio.radio'))
+
                 open_prev = c.execute("""
                     SELECT id, remarks FROM flights
                      WHERE tail_number=? AND complete=0
@@ -520,21 +549,39 @@ def mark_sent(fid=None, flight_id=None):
     now_ts   = datetime.utcnow().isoformat()
 
     with sqlite3.connect(current_app.config['DB_FILE']) as c:
-        # fetch flight + previous sent flag
-        before   = dict_rows("SELECT * FROM flights WHERE id=?", (fid,))[0]
-        prev_sent = int(before.get('sent') or 0)
-        code_txt  = (before.get('flight_code') or 'TBD')
-        before['operator_call'] = callsign
+        c.row_factory = sqlite3.Row
+        # fetch current row (for subject/body), but gate with an atomic UPDATE below
+        rows = c.execute("SELECT * FROM flights WHERE id=?", (fid,)).fetchall()
+        if not rows:
+            flash("Flight not found.")
+            return redirect(url_for('radio.radio'))
+        before  = dict(rows[0])
+        code_txt = (before.get('flight_code') or 'TBD')
+
+        # Atomically mark as sent only if not already sent (double-click safe)
+        c.execute("BEGIN IMMEDIATE")
+        updated = c.execute(
+            "UPDATE flights SET sent=1, sent_time=? WHERE id=? AND IFNULL(sent,0)=0",
+            (now_ts, fid)
+        ).rowcount
+        if updated == 0:
+            c.execute("ROLLBACK")
+            flash(f"Flight {code_txt} was already marked as sent.")
+            return redirect(url_for('radio.radio'))
+
         # count prior messages by this operator → message number
         cnt = c.execute(
             "SELECT COUNT(*) FROM flight_history WHERE json_extract(data,'$.operator_call') = ?",
             (callsign,)
         ).fetchone()[0]
 
+        # snapshot the state we’re sending (like manual path)
+        snap = dict(before)
+        snap['operator_call'] = callsign
         c.execute("""
             INSERT INTO flight_history(flight_id, timestamp, data)
             VALUES (?,?,?)
-        """, (fid, now_ts, json.dumps(before)))
+        """, (fid, now_ts, json.dumps(snap)))
         # now snapshot the outgoing Winlink message
         include_test = request.cookies.get('include_test','yes') == 'yes'
         # build body exactly as radio_detail()
@@ -575,21 +622,19 @@ def mark_sent(fid=None, flight_id=None):
             VALUES (?,?,?,?,?)
         """, (fid, callsign, now_ts, subject, body))
 
-        # also stamp the time so background acks can key off it
-        c.execute("UPDATE flights SET sent = 1, sent_time = ? WHERE id = ?", (now_ts, fid))
+        # commit the atomic mark + snapshots
+        c.commit()
 
-    # finalize SLA on the first transition 0 -> 1
-    if prev_sent == 0:
-        # if this is an outbound flight, finish Radio‑outbound SLA
-        try:
-            row = dict_rows("SELECT direction FROM flights WHERE id=?", (fid,))
-            if row and (row[0]['direction'] == 'outbound'):
-                wargame_finish_radio_outbound(fid)
-            else:
-                # inbound: this is the landing confirmation being sent
-                wargame_task_finish('radio','landing', key=f"flight:{fid}")
-        except Exception:
-            pass
+    # finalize SLA — reaching here means this call performed the 0→1 transition
+    try:
+        row = dict_rows("SELECT direction FROM flights WHERE id=?", (fid,))
+        if row and (row[0]['direction'] == 'outbound'):
+            wargame_finish_radio_outbound(fid)
+        else:
+            # inbound: this is the landing confirmation being sent
+            wargame_task_finish('radio','landing', key=f"flight:{fid}")
+    except Exception:
+        pass
 
     flash(f"Flight {code_txt} marked as sent.")
     return redirect(url_for('radio.radio'))

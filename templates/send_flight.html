@@ -31,9 +31,10 @@
   {% if winlink_job_active %}
     <form method="POST"
           action="{{ url_for('winlink.winlink_send', flight_id=flight['id']) }}"
-          style="display:inline;margin-left:1em;">
+          style="display:inline;margin-left:1em;"
+          onsubmit="return lockSubmit(this)">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button type="submit" class="btn btn-primary">
+      <button type="submit" class="btn btn-primary" data-single-submit>
         📝 Send via WinLink
       </button>
     </form>
@@ -49,9 +50,9 @@
   {% endif %}
 {% endif %}
 
-<form method="POST" action="{{ url_for('radio.mark_sent', fid=flight['id']) }}">
+<form method="POST" action="{{ url_for('radio.mark_sent', fid=flight['id']) }}" onsubmit="return lockSubmit(this)">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <button type="submit" onclick="return confirm('Mark this message as SENT?')">
+  <button type="submit" onclick="return confirm('Mark this message as SENT?')" data-single-submit>
     ✅ Mark Sent
   </button>
 </form>
@@ -85,6 +86,20 @@ function fallbackCopy(text, cb) {
   catch (err) { /* swallow */ }
   document.body.removeChild(ta);
   cb();
+}
+</script>
+
+<script>
+// Prevent accidental double-submits on both forms
+function lockSubmit(formEl) {
+  // only lock if the confirm (if any) passed and we're actually submitting
+  const btn = formEl.querySelector('button[type="submit"][data-single-submit]');
+  if (btn && !btn.disabled) {
+    btn.disabled = true;
+    btn.dataset.originalText = btn.innerHTML;
+    btn.innerHTML = '⏳ Working…';
+  }
+  return true; // allow the submit to proceed
 }
 </script>
 
