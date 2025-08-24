@@ -145,6 +145,7 @@ from modules.utils.common import (
     seed_default_categories,
     format_airport,
     fmt_airport,
+    clear_airport_cache,
     get_preference,
     # request-cycle helpers (live in modules/utils/common.py)
     require_login,
@@ -163,6 +164,48 @@ sqlite3.connect = connect
 # Flask app + CSRF + Rate limits
 app = Flask(__name__)
 
+# ──────────────────────────────────────────────────────────────────────────────
+# On-demand per-request profiler (profiles only when ?__profile=1 is present)
+# Writes /tmp/aoct-profiles/req-<path>-<utc>.pstats and logs the filename.
+class _ProfileThisRequest:
+    def __init__(self, app, outdir="/tmp/aoct-profiles"):
+        self.app = app
+        self.outdir = outdir
+        try:
+            os.makedirs(outdir, exist_ok=True)
+        except Exception:
+            pass
+
+    def __call__(self, environ, start_response):
+        qs = environ.get("QUERY_STRING", "")
+        want = ("__profile=1" in qs) or (environ.get("HTTP_X_PROFILE", "") == "1")
+        if not want:
+            return self.app(environ, start_response)
+
+        from datetime import datetime as _dt
+        import cProfile, pstats, io, threading
+
+        pr = cProfile.Profile()
+        pr.enable()
+        app_iter = self.app(environ, start_response)
+        chunks = []
+        try:
+            for chunk in app_iter:
+                chunks.append(chunk)
+        finally:
+            if hasattr(app_iter, "close"):
+                try: app_iter.close()
+                except Exception: pass
+            pr.disable()
+            ts = _dt.utcnow().strftime("%Y%m%d-%H%M%S")
+            path = (environ.get("PATH_INFO","/").strip("/") or "root").replace("/", "_")
+            fname = f"{self.outdir}/req-{path}-{ts}-{threading.get_ident()}.pstats"
+            try:
+                pr.dump_stats(fname)
+                logger.info("PROFILE wrote %s", fname)
+            except Exception:
+                logger.exception("PROFILE failed to write stats")
+        return iter(chunks)
 
 @app.route('/favicon.ico')
 def _favicon_redirect():
@@ -181,6 +224,8 @@ except Exception as _e:
     except Exception:
         pass
 
+# Always installed; zero overhead unless ?__profile=1 (or header X-Profile: 1)
+app.wsgi_app = _ProfileThisRequest(app.wsgi_app)
 
 # Make `import app` resolve to this module before any submodules import it
 sys.modules.setdefault('app', sys.modules[__name__])
@@ -504,6 +549,7 @@ run_migrations()
 ensure_airports_table()
 load_airports_from_csv()
 seed_default_categories()
+clear_airport_cache()
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpful route dump + dev diagnostics

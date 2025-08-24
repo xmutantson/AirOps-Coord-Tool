@@ -1,5 +1,6 @@
 # ---- compat shims for app-level globals (avoid circular imports) ----
 import sys as _sys, logging as _logging, re as _re, random as _random
+from functools import lru_cache
 
 # Safe fallbacks so static analysis and runtime don’t crash if app globals aren’t ready yet.
 SQL_TRACE = False
@@ -127,6 +128,7 @@ app = current_app  # legacy shim for helpers
 FLIGHT_CODE_RE      = re.compile(r'^[A-Z0-9]{3}\d{6}[A-Z0-9]{3}\d{4}$')
 FLIGHT_CODE_ANY_RE  = re.compile(r'(?<![A-Z0-9])([A-Z0-9]{3}\d{6}[A-Z0-9]{3}\d{4})(?![A-Z0-9])')
 
+@lru_cache(maxsize=8192)
 def to_three_char_code(raw_code: str) -> str | None:
     """
     Map any airport token to a 3-char ops code, *preferring IATA*.
@@ -138,9 +140,17 @@ def to_three_char_code(raw_code: str) -> str | None:
     with sqlite3.connect(get_db_file()) as c:
         c.row_factory = sqlite3.Row
         row = c.execute(
-            "SELECT iata_code, icao_code, ident, local_code, gps_code "
-            "FROM airports WHERE ? IN (icao_code, iata_code, gps_code, ident, local_code) LIMIT 1",
-            (code,)
+            """
+            SELECT iata_code, icao_code, ident, local_code, gps_code
+              FROM airports
+             WHERE icao_code  = ?
+                OR iata_code  = ?
+                OR gps_code   = ?
+                OR ident      = ?
+                OR local_code = ?
+             LIMIT 1
+            """,
+            (code, code, code, code, code)
         ).fetchone()
     if row and (row['iata_code'] and len(row['iata_code'].strip()) == 3):
         return row['iata_code'].strip().upper()
@@ -931,6 +941,34 @@ def run_migrations():
     # Helpful index for inventory reconciliation lookups
     with sqlite3.connect(get_db_file()) as c:
         c.execute("CREATE INDEX IF NOT EXISTS idx_wg_items_lookup ON wargame_inventory_batch_items(lower(name), size_lb)")
+        # ---- Hot-path indexes to speed dashboard/radio/ramp flows ----
+        # flights: common filters & sorts
+        c.execute("CREATE INDEX IF NOT EXISTS idx_flights_tail_time    ON flights(tail_number, takeoff_time)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_flights_tail_open    ON flights(tail_number, complete, id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_flights_route_open   ON flights(tail_number, airfield_takeoff, airfield_landing, complete, id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_flights_ramp_unsent  ON flights(is_ramp_entry, sent, id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_flights_complete_id  ON flights(complete, id)")
+        # airports: ensure per-column probes are indexed even on older DBs
+        c.execute("CREATE INDEX IF NOT EXISTS idx_airports_ident       ON airports(ident)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_airports_icao        ON airports(icao_code)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_airports_iata        ON airports(iata_code)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_airports_gps         ON airports(gps_code)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_airports_local       ON airports(local_code)")
+        # inventory & batches
+        c.execute("CREATE INDEX IF NOT EXISTS idx_inv_entries_sku      ON inventory_entries(sanitized_name, weight_per_unit)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_inv_entries_commit   ON inventory_entries(pending, direction, timestamp)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_wg_batches_open_out  ON wargame_inventory_batches(direction, satisfied_at, created_at)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_wg_items_by_batch    ON wargame_inventory_batch_items(batch_id)")
+        # wargame flows
+        c.execute("CREATE INDEX IF NOT EXISTS idx_wg_tasks_role_kind   ON wargame_tasks(role, kind)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_wg_inbound_eta       ON wargame_inbound_schedule(eta)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_wg_ramp_open         ON wargame_ramp_requests(satisfied_at)")
+
+    # Keep cache tidy after structural changes
+    try:
+        clear_airport_cache()
+    except Exception:
+        pass
 
 def cleanup_pending():
     """Purge any pending inventory‐entries older than 15 minutes."""
@@ -969,10 +1007,15 @@ def ensure_airports_table():
             local_code TEXT
           )
         """)
-        c.execute("""
-          CREATE INDEX IF NOT EXISTS idx_airports_search
-            ON airports(ident, icao_code, iata_code, gps_code, local_code)
-        """)
+
+        # Per-column indexes let SQLite OR-optimizer hit each probe efficiently.
+        c.execute("CREATE INDEX IF NOT EXISTS idx_airports_ident      ON airports(ident)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_airports_icao       ON airports(icao_code)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_airports_iata       ON airports(iata_code)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_airports_gps        ON airports(gps_code)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_airports_local      ON airports(local_code)")
+        # Keep the old composite for legacy queries; harmless if unused.
+        c.execute("CREATE INDEX IF NOT EXISTS idx_airports_search     ON airports(ident, icao_code, iata_code, gps_code, local_code)")
 
 def load_airports_from_csv():
     """One-time load/refresh of airports.csv into airports table."""
@@ -999,6 +1042,12 @@ def load_airports_from_csv():
                 r['gps_code']  or None,
                 r['local_code'] or None
             ))
+
+    # Any refresh invalidates cached lookups.
+    try:
+        clear_airport_cache()
+    except Exception:
+        pass
 
 def iso8601_ceil_utc(dt: datetime | None = None) -> str:
     """
@@ -1288,6 +1337,7 @@ def hide_tbd_filter(value):
     """
     return '' if value in (None, '', 'TBD', '—') else value
 
+@lru_cache(maxsize=8192)
 def canonical_airport_code(code: str) -> str:
     """
     Given any airport code, return the best canonical code for mapping.
@@ -1299,9 +1349,17 @@ def canonical_airport_code(code: str) -> str:
     with sqlite3.connect(get_db_file()) as c:
         c.row_factory = sqlite3.Row
         row = c.execute(
-            "SELECT icao_code, iata_code, local_code "
-            "FROM airports WHERE ? IN (icao_code, iata_code, gps_code, ident, local_code) LIMIT 1",
-            (code,)
+            """
+            SELECT icao_code, iata_code, local_code
+              FROM airports
+             WHERE icao_code  = ?
+                OR iata_code  = ?
+                OR gps_code   = ?
+                OR ident      = ?
+                OR local_code = ?
+             LIMIT 1
+            """,
+            (code, code, code, code, code)
         ).fetchone()
     if not row:
         return code
@@ -1345,10 +1403,15 @@ def format_airport(raw_code: str, pref: str) -> str:
     # Query all possible matches in one go
     with sqlite3.connect(get_db_file()) as c:
         c.row_factory = sqlite3.Row
-        matches = c.execute("""
-            SELECT * FROM airports
-             WHERE ? IN (icao_code, iata_code, gps_code, ident, local_code)
-        """, (code,)).fetchall()
+        matches = c.execute(
+            """
+            SELECT *
+              FROM airports
+             WHERE icao_code  = ?
+                OR iata_code  = ?
+                OR gps_code   = ?
+                OR ident      = ?
+                OR local_code = ?""", (code, code, code, code, code)).fetchall()
 
     if not matches:
         return raw_code
@@ -1378,6 +1441,7 @@ def format_airport(raw_code: str, pref: str) -> str:
     # Fallback
     return raw_code
 
+@lru_cache(maxsize=4096)
 def airport_aliases(code: str) -> list:
     """Return every recorded airport code (ident, ICAO, IATA, GPS, local) for the given input."""
     c = code.strip().upper()
@@ -2324,8 +2388,6 @@ def too_large(e):
         413
     )
 
-from functools import lru_cache
-
 # LRU-cached front door used by routes/templates. Normalize args for cache hits.
 @lru_cache(maxsize=4096)
 def fmt_airport(code: str, pref: str) -> str:
@@ -2343,8 +2405,11 @@ def fmt_airport(code: str, pref: str) -> str:
 _fmt_airport = fmt_airport
 
 def clear_airport_cache() -> None:
-    """Clear the airport-format LRU cache (useful if the airports table is refreshed)."""
-    try:
-        fmt_airport.cache_clear()
-    except Exception:
-        pass
+    """
+    Clear all airport-related LRU caches (use after CSV reloads or admin edits).
+    """
+    for fn in (fmt_airport, canonical_airport_code, to_three_char_code, airport_aliases):
+        try:
+            fn.cache_clear()            # only those wrapped by lru_cache have it
+        except Exception:
+            pass
