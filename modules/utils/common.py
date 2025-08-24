@@ -2324,9 +2324,27 @@ def too_large(e):
         413
     )
 
+from functools import lru_cache
+
+# LRU-cached front door used by routes/templates. Normalize args for cache hits.
+@lru_cache(maxsize=4096)
 def fmt_airport(code: str, pref: str) -> str:
-    # Delegate to the canonical formatter to keep semantics consistent.
-    return format_airport(code, pref)
+    """
+    Cached airport formatter:
+      - Normalizes inputs for maximal cache locality.
+      - Delegates to format_airport(...) for the actual DB-backed lookup.
+    """
+    c = (code or '').strip().upper()
+    p = str(pref or '').strip().lower()
+    return format_airport(c, p)
+
 
 # Back-compat for modules that still call _fmt_airport(...)
 _fmt_airport = fmt_airport
+
+def clear_airport_cache() -> None:
+    """Clear the airport-format LRU cache (useful if the airports table is refreshed)."""
+    try:
+        fmt_airport.cache_clear()
+    except Exception:
+        pass

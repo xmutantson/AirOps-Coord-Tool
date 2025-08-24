@@ -144,6 +144,7 @@ from modules.utils.common import (
     load_airports_from_csv,
     seed_default_categories,
     format_airport,
+    fmt_airport,
     get_preference,
     # request-cycle helpers (live in modules/utils/common.py)
     require_login,
@@ -152,6 +153,7 @@ from modules.utils.common import (
     _ensure_wargame_scheduler_once,
     _start_radio_tx_once,
     maybe_start_distances,
+
 )
 
 # Replace sqlite3.connect with the wrapped/traced one exported by modules.utils.common
@@ -492,7 +494,8 @@ except Exception as e:
 app.extensions.setdefault('distances', {})   # hex/flight→km
 app.extensions.setdefault('recv_loc', {'lat':None,'lon':None})
 
-_fmt_airport = lru_cache(maxsize=250)(format_airport)
+# Use the shared cached formatter from modules.utils.common
+_fmt_airport = fmt_airport
 
 # ──────────────────────────────────────────────────────────────────────────────
 # DB init / migrations / data seeds
