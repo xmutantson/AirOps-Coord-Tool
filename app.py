@@ -464,13 +464,24 @@ for _name in (
     "wargame_start_radio_outbound",
     "wargame_finish_radio_outbound",
     "wargame_start_ramp_inbound",
-    "get_wargame_role_epoch",   # if defined in your services
+    "get_wargame_role_epoch",
+    "configure_netops_feeders",
 ):
     if hasattr(_jobs, _name):
         setattr(_sys.modules[__name__], _name, getattr(_jobs, _name))
 
 import atexit
 atexit.register(_shutdown_scheduler)
+
+# Configure NetOps feeder on startup (best-effort; no-op if disabled)
+try:
+    if hasattr(_jobs, "configure_netops_feeders"):
+        _jobs.configure_netops_feeders()
+except Exception as e:
+    try:
+        logger.warning("NetOps feeder not configured: %s", e)
+    except Exception:
+        pass
 
 # ──────────────────────────────────────────────────────────────────────────────
 # App state & constants

@@ -7,6 +7,7 @@ import subprocess
 import glob
 from apscheduler.schedulers.base import STATE_RUNNING
 from apscheduler.jobstores.base import JobLookupError
+from modules.utils.http import http_post_json
 
 from modules.services.winlink.core import (
     pat_config_exists,
@@ -765,3 +766,172 @@ def process_unparsed_winlink_messages():
                 "UPDATE winlink_messages SET parsed=1 WHERE id=?",
                 (m['id'],)
             )
+
+# ───────────────────────────── NetOps Feeder (login + periodic push) ─────────────────────────────
+_NETOPS_TOKEN = None
+_NETOPS_TOKEN_TS = None
+
+def _netops_enabled_cfg():
+    base = (get_preference('netops_url') or '').strip()
+    enabled = (get_preference('netops_enabled') or 'no').strip().lower() == 'yes'
+    station = (get_preference('netops_station') or '').strip().upper()
+    pwd  = (get_preference('netops_password') or '').strip()
+    try:
+        interval = int(float(get_preference('netops_push_interval_sec') or 60))
+    except Exception:
+        interval = 60
+    try:
+        hours = int(float(get_preference('netops_window_hours') or 24))
+    except Exception:
+        hours = 24
+    return enabled and bool(base and station and pwd), base, station, pwd, max(30, interval), max(1, hours)
+
+def _netops_login(base, station, pwd):
+    global _NETOPS_TOKEN, _NETOPS_TOKEN_TS
+    url = f"{base.rstrip('/')}/api/login"
+    code, body = http_post_json(url, {"station": station, "password": pwd})
+    if code == 200 and isinstance(body, dict) and body.get("token"):
+        _NETOPS_TOKEN = str(body["token"])
+        _NETOPS_TOKEN_TS = time.time()
+        return True
+    _NETOPS_TOKEN = None
+    return False
+
+def _ensure_token(base, station, pwd):
+    # refresh roughly every 50 minutes
+    if _NETOPS_TOKEN and _NETOPS_TOKEN_TS and (time.time() - _NETOPS_TOKEN_TS < 3000):
+        return True
+    return _netops_login(base, station, pwd)
+
+def _parse_lbs(row):
+    try:
+        val = float(row.get('cargo_weight_real') or 0.0)
+        if val > 0:
+            return val
+    except Exception:
+        pass
+    w = (row.get('cargo_weight') or '').strip()
+    if not w:
+        return 0.0
+    s = w.lower()
+    import re as _re
+    nums = _re.findall(r"[\d.]+", s)
+    if not nums:
+        return 0.0
+    num = float(nums[0])
+    if 'kg' in s:
+        return num * 2.20462
+    return num
+
+def _collect_flows(window_hours: int):
+    since_iso = (datetime.utcnow() - timedelta(hours=window_hours)).isoformat()
+    rows = dict_rows("""
+        SELECT id, tail_number, direction, airfield_takeoff, airfield_landing,
+               cargo_type, cargo_weight, cargo_weight_real, remarks, timestamp, eta, takeoff_time
+          FROM flights
+         WHERE timestamp >= ?
+    """, (since_iso,))
+    flows = {}
+    for r in rows:
+        o = (r.get('airfield_takeoff') or '').strip().upper()
+        d = (r.get('airfield_landing') or '').strip().upper()
+        dirn = (r.get('direction') or '').strip().lower() or 'inbound'
+        key = (o, d, dirn)
+        node = flows.setdefault(key, {"origin": o, "dest": d, "direction": dirn, "legs": 0, "weight_lbs": 0.0})
+        node["legs"] += 1
+        node["weight_lbs"] += _parse_lbs(r)
+    for v in flows.values():
+        v["weight_lbs"] = round(v["weight_lbs"], 1)
+    return sorted(flows.values(), key=lambda x: (x["origin"], x["dest"], x["direction"]))
+
+def _collect_manifests(window_hours: int):
+    since_iso = (datetime.utcnow() - timedelta(hours=window_hours)).isoformat()
+    rows = dict_rows("""
+        SELECT id, tail_number, direction, airfield_takeoff, airfield_landing,
+               cargo_type, cargo_weight, cargo_weight_real, remarks, timestamp, eta, takeoff_time, is_ramp_entry, complete
+          FROM flights
+         WHERE timestamp >= ?
+         ORDER BY id DESC
+    """, (since_iso,))
+    out = []
+    for r in rows:
+        out.append({
+            "flight_id": r["id"],
+            "tail": (r.get("tail_number") or "").strip().upper(),
+            "direction": (r.get("direction") or "").strip().lower() or "inbound",
+            "origin": (r.get("airfield_takeoff") or "").strip().upper(),
+            "dest": (r.get("airfield_landing") or "").strip().upper(),
+            "cargo_type": (r.get("cargo_type") or "").strip(),
+            "cargo_weight_lbs": round(_parse_lbs(r), 1),
+            "remarks": (r.get("remarks") or "").strip(),
+            "takeoff_hhmm": (r.get("takeoff_time") or "").strip(),
+            "eta_hhmm": (r.get("eta") or "").strip(),
+            "is_ramp_entry": int(r.get("is_ramp_entry") or 0),
+            "complete": int(r.get("complete") or 0),
+            "updated_at": (r.get("timestamp") or ""),
+        })
+    return out
+
+def _collect_station_meta():
+    default_origin = (get_preference('default_origin') or '').strip().upper()
+    try:
+        lat = float(get_preference('origin_lat') or '')
+        lon = float(get_preference('origin_lon') or '')
+        coords = {"lat": lat, "lon": lon}
+    except Exception:
+        coords = None
+    try:
+        from app import last_inventory_update
+        inv_tick = last_inventory_update
+    except Exception:
+        inv_tick = None
+    return default_origin, coords, inv_tick
+
+def netops_push_job():
+    ok, base, station, pwd, interval, hours = _netops_enabled_cfg()
+    if not ok:
+        return
+    if not _ensure_token(base, station, pwd):
+        try: app.logger.warning("NetOps: login failed for station %s", station)
+        except Exception: pass
+        return
+    default_origin, coords, inv_tick = _collect_station_meta()
+    payload = {
+        "station": station,
+        "generated_at": iso8601_ceil_utc(),
+        "default_origin": default_origin,
+        "origin_coords": coords,
+        "inventory_last_update": inv_tick,
+        "window_hours": hours,
+        "flows": _collect_flows(hours),
+        "manifests": _collect_manifests(hours),
+    }
+    url = f"{base.rstrip('/')}/api/ingest"
+    headers = {"Authorization": f"Bearer {_NETOPS_TOKEN}"} if _NETOPS_TOKEN else {}
+    code, body = http_post_json(url, payload, headers=headers)
+    if code == 401:
+        if _netops_login(base, station, pwd):
+            headers = {"Authorization": f"Bearer {_NETOPS_TOKEN}"}
+            code, body = http_post_json(url, payload, headers=headers)
+    if code and code >= 400:
+        try: app.logger.warning("NetOps ingest error %s: %s", code, body)
+        except Exception: pass
+
+def configure_netops_feeders():
+    """Install/refresh the periodic push job based on preferences."""
+    enabled, base, station, pwd, interval, hours = _netops_enabled_cfg()
+    try:
+        scheduler.remove_job('netops_push')
+    except Exception:
+        pass
+    if not enabled:
+        return
+    scheduler.add_job(
+        id='netops_push',
+        func=netops_push_job,
+        trigger='interval',
+        seconds=interval,
+        replace_existing=True
+    )
+    if scheduler.state != STATE_RUNNING:
+        scheduler.start()

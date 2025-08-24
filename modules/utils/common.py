@@ -1228,6 +1228,15 @@ def set_preference(name: str, value: str) -> None:
                         scheduler.remove_job(jid)
                     except Exception:
                         pass
+
+        # NetOps feeder settings should (re)configure the job immediately
+        if name.startswith('netops_') or name in ('origin_lat','origin_lon'):
+            try:
+                from modules.services.jobs import configure_netops_feeders
+                configure_netops_feeders()
+            except Exception:
+                pass
+
     except Exception:
         # Never hard-fail a preference write if scheduling errors occur
         pass

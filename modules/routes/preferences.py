@@ -26,6 +26,39 @@ def preferences():
 
         if 'distance_unit' in request.form:
             set_preference('distance_unit', request.form.get('distance_unit','nm'))
+
+        # ── NetOps Feeder settings (remote push) ───────────────────────
+        if ('netops_enabled' in request.form or
+            'netops_url' in request.form or
+            'netops_station' in request.form or
+            'netops_password' in request.form or
+            'netops_push_interval_sec' in request.form or
+            'netops_window_hours' in request.form or
+            'origin_lat' in request.form or
+            'origin_lon' in request.form):
+            set_preference('netops_enabled', request.form.get('netops_enabled','no'))
+            set_preference('netops_url',     request.form.get('netops_url','').strip())
+            set_preference('netops_station', request.form.get('netops_station','').strip().upper())
+            if 'netops_password' in request.form:
+                set_preference('netops_password', request.form.get('netops_password',''))
+            if 'netops_push_interval_sec' in request.form:
+                set_preference('netops_push_interval_sec', request.form.get('netops_push_interval_sec','60').strip())
+            if 'netops_window_hours' in request.form:
+                set_preference('netops_window_hours', request.form.get('netops_window_hours','24').strip())
+            # optional origin coordinates (from geolocation button)
+            if request.form.get('origin_lat','').strip():
+                set_preference('origin_lat', request.form.get('origin_lat').strip())
+            if request.form.get('origin_lon','').strip():
+                set_preference('origin_lon', request.form.get('origin_lon').strip())
+            try:
+                # refresh feeders immediately when settings change
+                from modules.services.jobs import configure_netops_feeders
+                configure_netops_feeders()
+            except Exception:
+                pass
+            flash("NetOps feeder settings saved.", "success")
+            return redirect(url_for('preferences.preferences'))
+
         # ── WinLink Airport→Callsign mappings & CC addrs ─────────
         if 'airport_codes[]' in request.form or 'winlink_cc_1' in request.form:
             # save airport→WinLink mappings
@@ -212,6 +245,15 @@ def preferences():
     winlink_cc_2 = get_preference('winlink_cc_2') or ''
     winlink_cc_3 = get_preference('winlink_cc_3') or ''
 
+    # NetOps feeder settings
+    netops_enabled = (get_preference('netops_enabled') or 'no')
+    netops_url     = (get_preference('netops_url') or '')
+    netops_station = (get_preference('netops_station') or '')
+    netops_push_interval_sec = (get_preference('netops_push_interval_sec') or '60')
+    netops_window_hours = (get_preference('netops_window_hours') or '24')
+    origin_lat = (get_preference('origin_lat') or '')
+    origin_lon = (get_preference('origin_lon') or '')
+
     return render_template(
         'preferences.html',
         default_origin=default_origin,
@@ -226,5 +268,13 @@ def preferences():
         airport_mappings=airport_mappings,
         winlink_cc_1=winlink_cc_1,
         winlink_cc_2=winlink_cc_2,
-        winlink_cc_3=winlink_cc_3
+        winlink_cc_3=winlink_cc_3,
+        # NetOps
+        netops_enabled=netops_enabled,
+        netops_url=netops_url,
+        netops_station=netops_station,
+        netops_push_interval_sec=netops_push_interval_sec,
+        netops_window_hours=netops_window_hours,
+        origin_lat=origin_lat,
+        origin_lon=origin_lon
     )

@@ -132,6 +132,67 @@
   </form>
   <hr>
 
+  <!-- ── NetOps Feeder (Remote Push) ───────────────────────────── -->
+  <h3>NetOps Feeder</h3>
+  <form id="netops-form" method="POST" action="{{ url_for('preferences.preferences') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>Enable NetOps Feeder:</label>
+    <select name="netops_enabled" onchange="this.form.submit()">
+      <option value="no"  {% if netops_enabled!='yes' %}selected{% endif %}>No</option>
+      <option value="yes" {% if netops_enabled=='yes' %}selected{% endif %}>Yes</option>
+    </select>
+
+    <label>NetOps URL:</label>
+    <input name="netops_url" value="{{ netops_url }}" placeholder="https://netops.example.org" onblur="this.form.submit()">
+
+    <label>Station ID (Pelican Case):</label>
+    <input name="netops_station" value="{{ netops_station }}" placeholder="STATION-01" oninput="this.value=this.value.toUpperCase()" onblur="this.form.submit()">
+
+    <label>Password:</label>
+    <input type="password" name="netops_password" placeholder="••••••••" autocomplete="new-password">
+    <small>Leave blank to keep existing.</small>
+
+    <label>Push Interval (seconds):</label>
+    <input name="netops_push_interval_sec" value="{{ netops_push_interval_sec }}" pattern="\\d+" onblur="this.form.submit()">
+
+    <label>Data Window (hours):</label>
+    <input name="netops_window_hours" value="{{ netops_window_hours }}" pattern="\\d+" onblur="this.form.submit()">
+
+    <label>Origin Coordinates (lat, lon):</label>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <input id="origin-lat" name="origin_lat" value="{{ origin_lat }}" placeholder="Latitude" style="flex:1;">
+      <input id="origin-lon" name="origin_lon" value="{{ origin_lon }}" placeholder="Longitude" style="flex:1;">
+      <button type="button" id="btn-geoloc">📍 Use current location</button>
+    </div>
+    <button type="submit" style="margin-top:12px;">💾 Save NetOps Settings</button>
+  </form>
+
+  <script>
+  (function(){
+    const btn = document.getElementById('btn-geoloc');
+    if (!btn) return;
+    btn.addEventListener('click', function(){
+      if (!navigator.geolocation) {
+        alert('Geolocation not supported in this browser.');
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (pos)=>{
+          document.getElementById('origin-lat').value = pos.coords.latitude.toFixed(6);
+          document.getElementById('origin-lon').value = pos.coords.longitude.toFixed(6);
+          document.getElementById('netops-form').submit();
+        },
+        (err)=>{
+          alert('Unable to fetch location: ' + err.message);
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      );
+    });
+  })();
+  </script>
+
+  <hr>
+
   <!-- ── Unlock Admin Mode ───────────────────────────────── -->
   <h3>Unlock Admin Mode</h3>
   <form method="POST" action="{{ url_for('preferences.preferences') }}">
