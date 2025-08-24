@@ -655,6 +655,22 @@ def init_db():
             FOREIGN KEY(category_id) REFERENCES inventory_categories(id)
           )
         """)
+        # Barcode → item dictionary (event log remains the source of truth for counts)
+        c.execute("""
+          CREATE TABLE IF NOT EXISTS inventory_barcodes (
+            barcode         TEXT    PRIMARY KEY,
+            category_id     INTEGER NOT NULL,
+            sanitized_name  TEXT    NOT NULL,
+            raw_name        TEXT,
+            weight_per_unit REAL    NOT NULL,   -- stored in lbs to match inventory_entries
+            created_at      TEXT    DEFAULT (datetime('now')),
+            updated_at      TEXT
+          )
+        """)
+        c.execute("""
+          CREATE INDEX IF NOT EXISTS idx_inv_barcodes_item
+            ON inventory_barcodes(category_id, sanitized_name, weight_per_unit)
+        """)
         c.execute("""
           CREATE TABLE IF NOT EXISTS outgoing_messages (
             id             INTEGER PRIMARY KEY AUTOINCREMENT,

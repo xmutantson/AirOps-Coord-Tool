@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Barcode Mappings{% endblock %}
+{% block content %}
+<h2>Barcode → Item</h2>
+
+<form method="POST" class="card" style="padding:12px;border:1px solid #ddd;border-radius:10px;margin-bottom:16px;max-width:840px;">
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:8px;align-items:end;">
+    <label>Barcode
+      <input name="barcode" required placeholder="scan or paste…" style="width:100%;padding:8px;">
+    </label>
+    <label>Category
+      <select name="category_id" required style="width:100%;padding:8px;">
+        <option value="">— select —</option>
+        {% for c in categories %}
+        <option value="{{ c.id }}">{{ c.display_name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Sanitized name
+      <input name="sanitized_name" placeholder="e.g., 'beans'" style="width:100%;padding:8px;">
+    </label>
+    <label>Raw name (optional)
+      <input name="raw_name" placeholder="label text" style="width:100%;padding:8px;">
+    </label>
+    <label>Unit size (lb)
+      <input name="weight_per_unit" type="number" step="0.01" min="0.01" required style="width:100%;padding:8px;">
+    </label>
+  </div>
+  <div style="margin-top:8px;">
+    <button type="submit">Save</button>
+  </div>
+</form>
+
+<table class="table" style="width:100%;max-width:1000px;">
+  <thead>
+    <tr>
+      <th>Barcode</th>
+      <th>Category</th>
+      <th>Name</th>
+      <th>Unit (lb)</th>
+      <th>Updated</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for b in barcodes %}
+    <tr>
+      <td><code>{{ b.barcode }}</code></td>
+      <td>{{ b.category }}</td>
+      <td>{{ b.sanitized_name }}{% if b.raw_name and b.raw_name != b.sanitized_name %} <small title="raw">({{ b.raw_name }})</small>{% endif %}</td>
+      <td>{{ '%.2f'|format(b.weight_per_unit) }}</td>
+      <td>{{ b.updated_at or '—' }}</td>
+      <td>
+        <form method="POST" action="{{ url_for('inventory.inventory_barcodes_delete', barcode=b.barcode) }}" onsubmit="return confirm('Delete mapping?')">
+          <button type="submit">Delete</button>
+        </form>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6">No barcode mappings yet.</td></tr>
+  {% endfor %}
+  </tbody>
+  </table>
+{% endblock %}

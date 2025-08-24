@@ -408,6 +408,8 @@ for _mod in (
     "modules.routes_inventory.categories",
     "modules.routes_inventory.detail",
     "modules.routes_inventory.stock",
+    "modules.routes_inventory.barcodes",
+    "modules.routes_inventory.scan",
 ):
     _safe_import(_mod)
 

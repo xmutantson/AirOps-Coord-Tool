@@ -451,6 +451,11 @@ input.fade-red { background-color: #ff9999; animation: fadeRed 4s ease-in-out; }
 .ramp-form-container .lookup-row input { flex: 1; }
 .ramp-form-container .lookup-row button { flex: 0 0 auto; }
 
+/* Scanner row: 80/20 split and full-width in ramp forms */
+.ramp-form-container .lookup-row.scan-row { display:flex; gap:0.5rem; align-items:center; }
+.ramp-form-container .lookup-row.scan-row input { flex: 1 1 80%; width:auto; }
+.ramp-form-container .lookup-row.scan-row button.scan-lookup { flex: 0 0 20%; width:auto; }
+
 /* Required field cues */
 .ramp-form-container input:required:invalid,
 .ramp-form-container select:required:invalid {
