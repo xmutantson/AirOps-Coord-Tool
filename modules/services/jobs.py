@@ -906,13 +906,26 @@ def netops_push_job():
         "flows": _collect_flows(hours),
         "manifests": _collect_manifests(hours),
     }
+    import requests  # ensure available at top of file; safe to keep here too
     url = f"{base.rstrip('/')}/api/ingest"
-    headers = {"Authorization": f"Bearer {_NETOPS_TOKEN}"} if _NETOPS_TOKEN else {}
-    code, body = http_post_json(url, payload, headers=headers)
+    headers = {"Accept": "application/json"}
+    if _NETOPS_TOKEN:
+        headers["Authorization"] = f"Bearer {_NETOPS_TOKEN}"
+
+    # First attempt
+    try:
+        r = requests.post(url, json=payload, headers=headers, timeout=10)
+        code = r.status_code
+        body = r.json() if r.headers.get("content-type","").startswith("application/json") else r.text
+    except Exception as e:
+        log_exception("netops_push_job POST error (first attempt)", e)
+        return
     if code == 401:
         if _netops_login(base, station, pwd):
             headers = {"Authorization": f"Bearer {_NETOPS_TOKEN}"}
-            code, body = http_post_json(url, payload, headers=headers)
+            r = requests.post(url, json=payload, headers=headers, timeout=10)
+            code = r.status_code
+            body = r.json() if r.headers.get("content-type","").startswith("application/json") else r.text
     if code and code >= 400:
         try: app.logger.warning("NetOps ingest error %s: %s", code, body)
         except Exception: pass

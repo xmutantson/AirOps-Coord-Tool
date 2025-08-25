@@ -39,8 +39,12 @@ def preferences():
             set_preference('netops_enabled', request.form.get('netops_enabled','no'))
             set_preference('netops_url',     request.form.get('netops_url','').strip())
             set_preference('netops_station', request.form.get('netops_station','').strip().upper())
+            # Only update password if a non-empty value was provided.
             if 'netops_password' in request.form:
-                set_preference('netops_password', request.form.get('netops_password',''))
+                _pwd = (request.form.get('netops_password','') or '').strip()
+                if _pwd:
+                    set_preference('netops_password', _pwd)
+                # else: keep existing password
             if 'netops_push_interval_sec' in request.form:
                 set_preference('netops_push_interval_sec', request.form.get('netops_push_interval_sec','60').strip())
             if 'netops_window_hours' in request.form:
