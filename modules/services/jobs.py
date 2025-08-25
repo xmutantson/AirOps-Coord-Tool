@@ -1,6 +1,7 @@
 import random
 
 import uuid
+import time
 import sqlite3, os, json
 from datetime import datetime, timedelta
 import subprocess
@@ -887,6 +888,52 @@ def _collect_station_meta():
         inv_tick = None
     return default_origin, coords, inv_tick
 
+def _collect_inventory():
+    """
+    Current stock-on-hand summary using the same roll-up as UI:
+      group by (category_id, sanitized_name, weight_per_unit),
+      qty = Σ(in) − Σ(out), keep only qty > 0,
+      weight_lbs = qty * weight_per_unit,
+      updated_at = MAX(timestamp).
+    """
+    rows = dict_rows("""
+      SELECT c.display_name     AS category,
+             e.sanitized_name   AS item,
+             e.weight_per_unit  AS unit_weight_lbs,
+             SUM(
+               CASE
+                 WHEN e.direction = 'in'  THEN  e.quantity
+                 WHEN e.direction = 'out' THEN -e.quantity
+               END
+             )                   AS qty,
+             MAX(e.timestamp)    AS updated_at
+        FROM inventory_entries e
+        JOIN inventory_categories c ON c.id = e.category_id
+       WHERE e.pending = 0
+       GROUP BY e.category_id, e.sanitized_name, e.weight_per_unit
+       HAVING qty > 0
+       ORDER BY c.display_name, e.sanitized_name, e.weight_per_unit
+    """)
+    out = []
+    for r in rows:
+        qty = int(r.get("qty") or 0)
+        wpu = float(r.get("unit_weight_lbs") or 0.0)
+        total = round(qty * wpu, 1)
+        ts = r.get("updated_at")
+        try:
+            upd = iso8601_ceil_utc(datetime.fromisoformat(ts)) if ts else None
+        except Exception:
+            upd = iso8601_ceil_utc()
+        out.append({
+            "category": r.get("category") or "",
+            "item": r.get("item") or "",
+            "unit_weight_lbs": wpu,
+            "qty": qty,
+            "weight_lbs": total,
+            "updated_at": upd,
+        })
+    return out
+
 def netops_push_job():
     ok, base, station, pwd, interval, hours = _netops_enabled_cfg()
     if not ok:
@@ -896,6 +943,11 @@ def netops_push_job():
         except Exception: pass
         return
     default_origin, coords, inv_tick = _collect_station_meta()
+    inventory = _collect_inventory()
+    # derive a fallback ticker from item timestamps if app-level tick is missing
+    if not inv_tick and inventory:
+        inv_times = [i.get("updated_at") for i in inventory if i.get("updated_at")]
+        inv_tick = max(inv_times) if inv_times else None
     payload = {
         "station": station,
         "generated_at": iso8601_ceil_utc(),
@@ -905,6 +957,7 @@ def netops_push_job():
         "window_hours": hours,
         "flows": _collect_flows(hours),
         "manifests": _collect_manifests(hours),
+        "inventory": inventory,
     }
     import requests  # ensure available at top of file; safe to keep here too
     url = f"{base.rstrip('/')}/api/ingest"
@@ -922,7 +975,7 @@ def netops_push_job():
         return
     if code == 401:
         if _netops_login(base, station, pwd):
-            headers = {"Authorization": f"Bearer {_NETOPS_TOKEN}"}
+            headers = {"Accept": "application/json", "Authorization": f"Bearer {_NETOPS_TOKEN}"}
             r = requests.post(url, json=payload, headers=headers, timeout=10)
             code = r.status_code
             body = r.json() if r.headers.get("content-type","").startswith("application/json") else r.text
