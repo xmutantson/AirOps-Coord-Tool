@@ -241,8 +241,13 @@ def inventory_edit(entry_id: int):
         raw         = request.form["name"]
         noun        = sanitize_name(raw)
         weight_val  = float(request.form.get("weight") or 0)
-        weight_unit = request.form.get("weight_unit", "lbs")
-        wpu         = kg_to_lbs(weight_val) if weight_unit == "kg" else weight_val
+        weight_unit = (request.form.get("weight_unit", "lbs") or "lbs").lower()
+        if weight_unit == "kg":
+            wpu = kg_to_lbs(weight_val)
+        elif weight_unit == "oz":
+            wpu = weight_val / 16.0
+        else:
+            wpu = weight_val
         qty         = int(request.form.get("qty") or 0)
         total       = wpu * qty
         dirn        = request.form["direction"]

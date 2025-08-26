@@ -3,6 +3,7 @@ from markupsafe import escape
 import sqlite3
 
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
+from modules.utils.http import http_post_json
 from app import DB_FILE
 from flask import Blueprint, current_app
 from flask import flash, make_response, redirect, render_template, request, session, url_for
@@ -23,6 +24,30 @@ def preferences():
 
     # ── update prefs ──────────────────────────────────────────────────────
     if request.method == 'POST':
+        # ── NetOps one-shot login test (no persistence) ─────────────────────────
+        if request.form.get('netops_action') == 'test':
+            base    = (request.form.get('netops_url')     or get_preference('netops_url')     or '').strip()
+            station = (request.form.get('netops_station') or get_preference('netops_station') or '').strip().upper()
+            pwd     = (request.form.get('netops_password') or get_preference('netops_password') or '').strip()
+            if not (base and station and pwd):
+                flash("Please provide NetOps URL, Station ID, and Password before testing.", "error")
+                return redirect(url_for('preferences.preferences'))
+            try:
+                code, body = http_post_json(f"{base.rstrip('/')}/api/login", {"station": station, "password": pwd})
+            except Exception as e:
+                flash(f"NetOps test failed: {e}", "error")
+                return redirect(url_for('preferences.preferences'))
+            ok = (code == 200 and isinstance(body, dict) and bool(body.get("token")))
+            if ok:
+                flash("NetOps login OK for this Station ID and password.", "success")
+            else:
+                msg = ""
+                if isinstance(body, dict):
+                    msg = body.get("message") or body.get("error") or ""
+                elif isinstance(body, str):
+                    msg = body[:200]
+                flash(f"NetOps login failed (HTTP {code}) {('- ' + msg) if msg else ''}", "error")
+            return redirect(url_for('preferences.preferences'))
 
         if 'distance_unit' in request.form:
             set_preference('distance_unit', request.form.get('distance_unit','nm'))

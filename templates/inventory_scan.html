@@ -42,15 +42,18 @@
         <input id="u_barcode" type="text" readonly style="padding:8px;width:100%;background:#f7f7f7;">
       </label>
       <label>Category
-        <select id="u_cat" style="padding:8px;width:100%;"></select>
+        <select id="u_cat" required style="padding:8px;width:100%;">
+          <option value="" disabled selected>— choose category —</option>
+        </select>
       </label>
       <label>Item name (will be sanitized)
-        <input id="u_name" type="text" style="padding:8px;width:100%;" placeholder="e.g. water">
+        <input id="u_name" type="text" required style="padding:8px;width:100%;" placeholder="e.g. water">
       </label>
       <label>Unit size
         <div class="lookup-row" style="gap:8px;">
-          <input id="u_wpu" type="number" step="any" min="0" placeholder="e.g. 12">
-          <select id="u_unit" style="max-width:8ch;">
+          <input id="u_wpu" type="number" step="any" min="0" required placeholder="e.g. 12">
+          <select id="u_unit" required style="max-width:8ch;">
+            <option value="" disabled selected>unit</option>
             <option value="lbs">lb</option>
             <option value="oz">oz</option>
           </select>

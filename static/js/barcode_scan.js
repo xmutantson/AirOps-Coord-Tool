@@ -167,14 +167,18 @@
   }
 
   function showKnown(item, code, ai) {
-    const qtyDefault = ai?.count || 1;
+    const qtyDefault = ai?.count; // suggest only; do not preselect
     if (resultEl) resultEl.innerHTML = `
       <div class="card" style="border:1px solid #ddd;border-radius:10px;padding:12px;">
         <div><strong>${item.sanitized_name}</strong></div>
         <div>Category ID: ${item.category_id}</div>
         <div>Unit size: ${item.weight_per_unit} lb</div>
         <label>Quantity
-          <input id="qty" type="number" min="1" step="1" value="${qtyDefault}" style="padding:6px;">
+          <select id="qty" required style="padding:6px;">
+            <option value="" disabled selected>Qty…</option>
+            ${Array.from({length:20}, (_,i)=>`<option value="${i+1}">${i+1}</option>`).join('')}
+          </select>
+          ${Number.isFinite(qtyDefault) ? `<small style="margin-left:6px;">Suggested: ${qtyDefault}</small>` : ``}
         </label>
         <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">
           <button id="postTx">Post ${getScanDir()}</button>
@@ -190,7 +194,9 @@
     const postBtn = $('#postTx');
     if (postBtn) {
       postBtn.onclick = async () => {
-        const qty = parseInt($('#qty')?.value || '1', 10);
+        const qtyVal = $('#qty')?.value || '';
+        if (!qtyVal) { setStatus('Choose a quantity','err'); $('#qty')?.focus(); return; }
+        const qty = parseInt(qtyVal, 10);
         const dirWord = getScanDir() === 'IN' ? 'inbound' : 'outbound';
         const body = { barcode: code, qty, direction: dirWord, commit_now: true, manifest_id: MANIFEST_ID || undefined };
         const resp = await fetch(URLS.scanPost, { method:'POST', headers: jsonHeaders(), body: JSON.stringify(body) });
@@ -208,30 +214,73 @@
 
   // Build or reveal the inline "unknown barcode" form.
   async function showUnknownForm(code) {
-    setStatus('Unknown','warn');
+    // If we were in OUTBOUND, force back to INBOUND before adding a new item.
+    (function forceInbound() {
+      const rIn  = document.getElementById('dir-in');
+      const rOut = document.getElementById('dir-out');
+      if (rIn && rOut) {
+        if (!rIn.checked) {
+          rIn.checked = true;
+          rOut.checked = false;
+          rIn.dispatchEvent(new Event('change'));
+        }
+      } else {
+        // /inventory/scan radios (name="dir", values IN/OUT)
+        const radios = document.querySelectorAll('input[name="dir"]');
+        if (radios && radios.length) {
+          for (const r of radios) r.checked = (String(r.value).toUpperCase() === 'IN');
+          const inRadio = Array.from(radios).find(r => String(r.value).toUpperCase() === 'IN');
+          if (inRadio) inRadio.dispatchEvent(new Event('change'));
+        }
+      }
+    })();
+    setStatus('Unknown → switched to Inbound','warn');
+    // Hide the legacy inventory form while the unknown-item card is up
+    hideLegacyForm(true);
     if (!createEl) return;
-    // If the category <select> is empty, populate it. Prefer cloning from the page's main category,
-    // otherwise fetch a lightweight list.
+    // Populate the Category <select> if it has no real options (i.e., only the placeholder).
+    // Prefer cloning from the page's main category; otherwise fetch a lightweight list.
     const catSelect = createEl.querySelector('#u_cat');
-    if (catSelect && !catSelect.options.length) {
+    if (catSelect) {
+      const hasRealOptions = Array.from(catSelect.options)
+        .some(o => !o.disabled && String(o.value).trim() !== '');
+      if (!hasRealOptions) {
       const mainCat = document.getElementById('category');
       if (mainCat && mainCat.options.length) {
-        catSelect.innerHTML = mainCat.innerHTML;
-        // Drop the disabled placeholder if present
-        const first = catSelect.querySelector('option[disabled]');
-        if (first) catSelect.removeChild(first);
+        // Build a cleaned list (skip disabled placeholders) and prepend our own placeholder
+        const opts = Array.from(mainCat.options)
+                          .filter(o => !o.disabled && String(o.value).trim() !== '');
+        catSelect.innerHTML =
+          '<option value="" disabled selected>— choose category —</option>' +
+          opts.map(o => `<option value="${o.value}">${o.text}</option>`).join('');
       } else {
         try {
           const cats = await fetch(URLS.cats, { headers: {'X-Requested-With':'XMLHttpRequest'} }).then(r => r.json());
-          catSelect.innerHTML = cats.categories.map(c => `<option value="${c.id}">${c.display_name}</option>`).join('');
-        } catch {}
+          catSelect.innerHTML =
+            '<option value="" disabled selected>— choose category —</option>' +
+            cats.categories.map(c => `<option value="${c.id}">${c.display_name}</option>`).join('');
+          } catch {}
+        }
       }
+    }
+    // Enforce required fields visually too
+    if (catSelect) catSelect.required = true;
+    const nameEl = createEl.querySelector('#u_name'); if (nameEl) nameEl.required = true;
+    const wpuEl  = createEl.querySelector('#u_wpu');  if (wpuEl)  wpuEl.required  = true;
+    const unitSel= createEl.querySelector('#u_unit');
+    if (unitSel) {
+      unitSel.required = true;
+      // Ensure a placeholder exists and is selected
+      if (!unitSel.querySelector('option[value=""]')) {
+        unitSel.insertAdjacentHTML('afterbegin','<option value="" disabled selected>unit</option>');
+      }
+      unitSel.value = '';
     }
     createEl.hidden = false;
     createEl.querySelector('#u_barcode').value = code;
     createEl.querySelector('#u_name').value = '';
     createEl.querySelector('#u_wpu').value  = '';
-    const unitSel = createEl.querySelector('#u_unit'); if (unitSel) unitSel.value = 'lbs';
+    const unitSel2 = createEl.querySelector('#u_unit'); if (unitSel2) unitSel2.value = '';
   }
 
   async function handleCode(raw, sym='unknown') {
@@ -495,7 +544,8 @@
     const saveBtn = createEl.querySelector('#u_save');
     const cancelBtn = createEl.querySelector('#u_cancel');
     if (saveBtn) saveBtn.onclick = async () => {
-      const unit = (createEl.querySelector('#u_unit')?.value || 'lbs').toLowerCase();
+      const unitEl = createEl.querySelector('#u_unit');
+      const unit   = (unitEl && unitEl.value ? unitEl.value : '').toLowerCase();
       const payload = {
         barcode:        createEl.querySelector('#u_barcode').value.trim(),
         category_id:    createEl.querySelector('#u_cat').value,
@@ -504,11 +554,17 @@
         weight_per_unit: (() => {
           const v = parseFloat(createEl.querySelector('#u_wpu').value);
           if (!isFinite(v) || v <= 0) return NaN;
+          if (!unit) return NaN;
           return unit === 'oz' ? (v / 16.0) : v;
         })()
       };
+      if (!unit) { setStatus('Please choose a unit.','err'); unitEl && unitEl.focus(); return; }
       if (!payload.barcode || !payload.category_id || !payload.name || !isFinite(payload.weight_per_unit) || payload.weight_per_unit <= 0) {
-        setStatus('Please complete all required fields.','err'); return;
+        setStatus('Please complete all required fields.','err');
+        if (!payload.category_id) createEl.querySelector('#u_cat')?.focus();
+        else if (!payload.name)   createEl.querySelector('#u_name')?.focus();
+        else if (!(payload.weight_per_unit>0)) createEl.querySelector('#u_wpu')?.focus();
+        return;
       }
       setStatus('Saving…');
       const r = await fetch(URLS.saveMap, { method:'POST', headers: jsonHeaders(), body: JSON.stringify(payload) });
