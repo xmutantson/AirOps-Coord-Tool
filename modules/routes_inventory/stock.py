@@ -45,6 +45,11 @@ def inventory_stock():
             for ent in items:
                 ent['size']  = round(ent['size']  / 2.20462, 1)
                 ent['total'] = round(ent['total'] / 2.20462, 1)
+    else:
+        for items in stock.values():
+            for ent in items:
+                ent['size']  = round(float(ent['size']  or 0), 1)
+                ent['total'] = round(float(ent['total'] or 0), 1)
 
     return render_template(
         'inventory_stock.html',

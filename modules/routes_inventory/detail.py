@@ -216,8 +216,9 @@ def inventory_detail():
             e["weight_view"] = round_half_kg(e["weight_per_unit"] / 2.20462)
             e["total_view"]  = round_half_kg(e["total_weight"]    / 2.20462)
         else:
-            e["weight_view"] = e["weight_per_unit"]
-            e["total_view"]  = e["total_weight"]
+            # lbs: normalize precision to one decimal to keep columns tight
+            e["weight_view"] = round(float(e["weight_per_unit"] or 0), 1)
+            e["total_view"]  = round(float(e["total_weight"]    or 0), 1)
 
     return render_template(
         "inventory_detail.html",

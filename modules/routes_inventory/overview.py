@@ -11,6 +11,16 @@ from app import inventory_bp as bp  # reuse existing blueprint
 # Logger for this module
 logger = logging.getLogger(__name__)
 
+# --- local helper: round overview rows to one decimal everywhere ----------
+def _round_overview_rows(rows: list[dict]) -> list[dict]:
+    for r in rows:
+        for k in ("total_in", "total_out", "net", "rate_in", "rate_out"):
+            try:
+                r[k] = round(float(r.get(k, 0) or 0.0), 1)
+            except Exception:
+                r[k] = 0.0
+    return rows
+
 # Optional Wargame reconciler: import with a no-op fallback so
 # /inventory commits never 500 if the service isn't available.
 try:
@@ -291,11 +301,13 @@ def inventory_overview():
     if mass_pref == 'kg':
         for item in overview:
             # stored totals are in pounds → convert to kg
-            item['total_in']  = round(item['total_in']  / 2.20462, 1)
-            item['total_out'] = round(item['total_out'] / 2.20462, 1)
-            item['net']       = round(item['net']       / 2.20462, 1)
-            item['rate_in']   = round(item['rate_in']   / 2.20462, 1)
-            item['rate_out']  = round(item['rate_out']  / 2.20462, 1)
+            item['total_in']  = item['total_in']  / 2.20462
+            item['total_out'] = item['total_out'] / 2.20462
+            item['net']       = item['net']       / 2.20462
+            item['rate_in']   = item['rate_in']   / 2.20462
+            item['rate_out']  = item['rate_out']  / 2.20462
+    # enforce one-decimal everywhere (lbs or kg)
+    overview = _round_overview_rows(overview)
     # pass skeleton page only; table will come from AJAX
     return render_template(
         'inventory_overview.html',
@@ -330,8 +342,13 @@ def inventory_overview_table():
     mass_pref = request.cookies.get('mass_unit','lbs')
     if mass_pref == 'kg':
         for row in overview:
-            for key in ('total_in','total_out','net','rate_in','rate_out'):
-                row[key] = round(row[key] / 2.20462, 1)
+            row['total_in']  = row['total_in']  / 2.20462
+            row['total_out'] = row['total_out'] / 2.20462
+            row['net']       = row['net']       / 2.20462
+            row['rate_in']   = row['rate_in']   / 2.20462
+            row['rate_out']  = row['rate_out']  / 2.20462
+    # enforce one-decimal everywhere (lbs or kg)
+    overview = _round_overview_rows(overview)
 
     return render_template(
         'partials/_inventory_overview_table.html',
