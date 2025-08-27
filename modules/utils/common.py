@@ -1764,7 +1764,7 @@ def refresh_user_cookies(response):
     pref_cookies = [
         'code_format', 'mass_unit', 'operator_call',
         'include_test', 'radio_show_unsent_only', 'show_debug_logs',
-        'hide_tbd', 'distance_unit']
+        'hide_tbd', 'distance_unit', 'scanner_mode']
     for name in pref_cookies:
         val = request.cookies.get(name)
         if val is not None:

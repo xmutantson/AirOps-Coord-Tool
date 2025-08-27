@@ -10,8 +10,9 @@
   </button>
 
   <!-- Direction (ALWAYS visible; lives above scanner; submits with inventory-form via form=) -->
-  <div class="ramp-form-container" id="scan-dir-wrap">
-    <div>
+  <div class="ramp-form-container" id="scan-dir-wrap"
+       style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
+    <div style="min-width:220px;">
       <label style="display:block; font-weight:600; margin:0 0 .25rem 0;">Direction</label>
       <div class="radio-toggle">
         <input type="radio"
@@ -30,6 +31,23 @@
         <label for="dir-out">Outbound</label>
       </div>
     </div>
+    <div>
+      <label style="display:block; font-weight:600; margin:0 0 .25rem 0;">Scan mode</label>
+      <div class="radio-toggle">
+        <input type="radio"
+               id="scan-mode-prompt"
+               name="scanner_mode_toggle"
+               value="prompt"
+               {% if scanner_mode != 'auto1' %}checked{% endif %}>
+        <label for="scan-mode-prompt">Prompt qty</label>
+        <input type="radio"
+               id="scan-mode-auto1"
+               name="scanner_mode_toggle"
+               value="auto1"
+               {% if scanner_mode == 'auto1' %}checked{% endif %}>
+        <label for="scan-mode-auto1">Single</label>
+      </div>
+    </div>
   </div>
 
   <!-- Inline scanner controls (USB-first; camera-deferred) -->
@@ -40,6 +58,7 @@
        data-url-save-map="{{ url_for('inventory.api_save_barcode_mapping') }}"
        data-url-categories="{{ url_for('inventory.api_inventory_categories') }}"
        data-zxing-url="{{ url_for('static', filename='js/zxing.min.js') }}"
+       data-scanner-mode="{{ scanner_mode or request.cookies.get('scanner_mode','prompt') }}"
        class="ramp-form-container"
        style="margin: 0 0 1rem 0;">
     <div class="row" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
@@ -53,7 +72,7 @@
              style="display:none;">
     </div>
     <div class="lookup-row scan-row" style="margin-top:8px;">
-      <input id="scan-kbd" type="text" placeholder="Focus here and scan (Enter)…">
+      <input id="scan-kbd" type="text" placeholder="Focus here and scan (Enter)…" autofocus>
       <button id="scan-kbd-submit" type="button" class="scan-lookup">Lookup</button>
     </div>
     <small>Scans pre-fill this form. Unknown barcodes can be added inline.</small>
@@ -365,6 +384,33 @@
     });
 
   </script>
+
+<script>
+(function () {
+  const url = '{{ url_for("inventory.set_scan_mode") }}';
+  const radios = document.querySelectorAll('input[name="scanner_mode_toggle"]');
+  const qty = document.querySelector('input[name="qty"]');
+  const scanApp = document.getElementById('scan-app');
+  function hint() {
+    const single = document.getElementById('scan-mode-auto1')?.checked;
+    if (!qty) return;
+    if (single) {
+      // Scanner path defaults to 1 on the server; don’t set manual form value.
+      qty.placeholder = '1 (auto)';
+    } else if (qty.placeholder === '1 (auto)') {
+      qty.placeholder = '';
+    }
+  }
+  radios.forEach(r => r.addEventListener('change', e => {
+    if (scanApp) scanApp.dataset.scannerMode = e.target.value; // reflect immediately
+    fetch(url + '?mode=' + encodeURIComponent(e.target.value),
+      { headers: {'X-Requested-With':'XMLHttpRequest'}, credentials: 'same-origin' }
+    ).then(hint).catch(()=>{});
+  }));
+  hint();
+})();
+</script>
+
 
   <!-- CSRF for JSON + shared scanner JS -->
   <meta name="csrf-token" content="{{ csrf_token() }}">

@@ -11,8 +11,24 @@
      data-url-admin="{{ url_for('inventory.inventory_barcodes_admin') }}"
      data-zxing-url="{{ url_for('static', filename='js/zxing.min.js') }}"
      data-manifest-id="{{ request.args.get('mid','') }}"
+     data-scanner-mode="{{ (scanner_mode or request.cookies.get('scanner_mode','prompt')) }}"
      class="ramp-form-container">
   <h2>Scan Items</h2>
+
+  {# Flash area (page-level messages) #}
+  {% with msgs = get_flashed_messages(with_categories=true) %}
+    {% if msgs %}
+      <div id="flash-box" style="display:grid;gap:8px;margin:8px 0;">
+        {% for cat, msg in msgs %}
+          <div class="alert alert-{{ cat }}" style="padding:.5rem .75rem;border-radius:8px;border:1px solid #ddd;">
+            {{ msg }}
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div id="flash-box" style="display:none;gap:8px;margin:8px 0;"></div>
+    {% endif %}
+  {% endwith %}
 
   <div class="row" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
     <label><input type="radio" name="dir" value="IN" checked> Inbound</label>
@@ -26,10 +42,22 @@
            style="display:none;">
   </div>
   <div class="lookup-row scan-row" style="margin-top:12px;">
-    <input id="scan-kbd" type="text" placeholder="Focus here and scan (Enter)…">
+    <input id="scan-kbd" type="text" placeholder="Focus here and scan (Enter)…" autofocus>
     <button id="scan-kbd-submit" type="button" class="scan-lookup">Lookup</button>
   </div>
   <small>USB scanners act like keyboards; they usually send Enter.</small>
+
+  <!-- Single-qty toggle (cookie-backed; uses same GET /scan_mode as Inventory Detail) -->
+  <div style="margin-top:10px;">
+    <div class="radio-toggle">
+      <input type="radio" id="scan-mode-prompt" name="scanner_mode_toggle" value="prompt"
+             {% if (scanner_mode or request.cookies.get('scanner_mode','prompt')) != 'auto1' %}checked{% endif %}>
+      <label for="scan-mode-prompt">Prompt qty</label>
+      <input type="radio" id="scan-mode-auto1" name="scanner_mode_toggle" value="auto1"
+             {% if (scanner_mode or request.cookies.get('scanner_mode','prompt')) == 'auto1' %}checked{% endif %}>
+      <label for="scan-mode-auto1">Single</label>
+    </div>
+  </div>
 
   <div id="scan-result" style="display:grid;gap:10px;margin-top:16px;"></div>
 
@@ -75,4 +103,34 @@
 
 <link rel="stylesheet" href="{{ url_for('static', filename='scan.css') if false else '' }}">
 <script defer src="{{ url_for('static', filename='js/barcode_scan.js') }}"></script>
+<script>
+// Optional tiny helper that your existing JS can call to surface a
+// “what was logged” message without a full page refresh.
+window.showFlash = function (msg, level) {
+  var box = document.getElementById('flash-box');
+  if (!box) return;
+  box.style.display = 'grid';
+  var div = document.createElement('div');
+  div.className = 'alert alert-' + (level || 'success');
+  div.style.cssText = 'padding:.5rem .75rem;border-radius:8px;border:1px solid #ddd;';
+  div.textContent = msg;
+  box.prepend(div);
+  // auto-fade after ~4s
+  setTimeout(function(){ if(div && div.parentNode){ div.parentNode.removeChild(div); } }, 4000);
+};
+// If you emit a CustomEvent('scan:logged', {detail: '...'}), we’ll show it.
+window.addEventListener('scan:logged', function(e){ window.showFlash(e.detail, 'success'); });
+// Persist scanner mode via GET /scan_mode (same as Inventory Detail)
+(function () {
+  const url = '{{ url_for("inventory.set_scan_mode") }}';
+  const radios = document.querySelectorAll('input[name="scanner_mode_toggle"]');
+  const scanApp = document.getElementById('scan-app');
+  radios.forEach(r => r.addEventListener('change', e => {
+    if (scanApp) scanApp.dataset.scannerMode = e.target.value; // reflect immediately
+    fetch(url + '?mode=' + encodeURIComponent(e.target.value),
+      { headers: {'X-Requested-With':'XMLHttpRequest'}, credentials: 'same-origin' }
+    ).catch(()=>{});
+  }));
+})();
+</script>
 {% endblock %}

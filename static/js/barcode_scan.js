@@ -46,6 +46,16 @@
   const photoBtn  = $('#scan-photo-btn');    // native camera via file capture
   const photoInput= $('#scan-photo-input');
   const beep = () => document.getElementById('beep').play().catch(()=>{});
+  const RESET_FLAG = 'scan_reset_cleared';
+  const clearScanBox = () => { if (kbd) { kbd.value = ''; try { kbd.setAttribute('value',''); } catch(_) {} } };
+
+  // Default focus for “Focus here and scan” field (helps operators land + scan)
+  if (kbd) {
+    try { kbd.focus({ preventScroll: true }); } catch(_) { kbd.focus(); }
+    // If we just came from a Reset-triggered reload, ensure the field is blank
+    try { if (sessionStorage.getItem(RESET_FLAG)) { sessionStorage.removeItem(RESET_FLAG); clearScanBox(); } } catch(_){}
+  }
+
   // ── one-shot sticky direction (persists ONLY across our JS reloads) ─────────
   const DIR_STICKY_KEY = 'scan_dir_once';
   const DIR_STICKY_MS  = 90 * 1000; // 90s TTL
@@ -74,7 +84,13 @@
     if (rIn && rOut) { rIn.checked = wantIn; rOut.checked = !wantIn; }
   })();
   // one-shot reset (looks like closing the scan UI) — preserve direction for the reload
-  const resetAll = () => { saveDirOnce(getScanDir()); window.location.reload(); };
+  const resetAll = () => {
+    // Clear the input so browsers don’t restore stale digits on reload
+    clearScanBox();
+    try { sessionStorage.setItem(RESET_FLAG, '1'); } catch(_){}
+    saveDirOnce(getScanDir());
+    window.location.reload();
+  };
 
   let lastCode = '', lastTs = 0;            // debounce for repeated reads
   let burstTimer = 0, burstChars = 0;       // USB burst detection
@@ -88,6 +104,88 @@
   };
   const setStatus = (msg, cls) => { statusEl.textContent = msg; statusEl.className = 'badge ' + (cls||''); };
   const norm = s => (s||'').toString().trim().replace(/\s+/g,'');
+
+  // Read scanner mode: prefer cookie (updated live), else data-scanner-mode
+  function getScanMode(){
+    // 1) Source of truth: the checked radio on the page (live toggle)
+    const rb = document.querySelector('input[name="scanner_mode_toggle"]:checked');
+    if (rb) {
+      const v = String(rb.value || '').toLowerCase().trim();
+      return (v === 'auto1') ? 'auto1' : 'prompt';
+    }
+    // 2) Fallbacks for initial/default state (no radio present)
+    // Match start or "; " then scanner_mode=...
+    const mCookie = (document.cookie.match(/(?:^|;\s*)scanner_mode=([^;]+)/) || [])[1];
+    const fromCookie = mCookie ? decodeURIComponent(mCookie) : '';
+    const fromData   = (app && app.dataset ? app.dataset.scannerMode : '') || '';
+    const v = (fromCookie || fromData || 'prompt').toLowerCase().trim();
+    return (v === 'auto1') ? 'auto1' : 'prompt';
+  }
+
+  // --- Global redirect of scanner keystrokes when nothing is focused -----------
+  function isTypingElement(el){
+    if (!el) return false;
+    if (el.isContentEditable) return true;
+    const tag = el.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+  }
+  document.addEventListener('keydown', (e) => {
+    if (!kbd) return;
+    // If user is already typing in any field/button/etc → don't hijack.
+    const ae = document.activeElement;
+    if (isTypingElement(ae)) return;
+    // Ignore modifiers / navigation keys.
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const key = e.key || '';
+    const printable = key.length === 1; // digits/letters/symbols
+    const isEnter   = (key === 'Enter' || key === 'NumpadEnter');
+    if (!printable && !isEnter) return;
+
+    // Redirect: focus the scan box and ensure first char is captured.
+    kbd.focus();
+    if (isEnter) {
+      e.preventDefault();
+      return handleCode(kbd.value);
+    }
+    // Swallow this first key and inject it so the burst continues in the field.
+    e.preventDefault();
+    const start = kbd.selectionStart ?? kbd.value.length;
+    const end   = kbd.selectionEnd   ?? kbd.value.length;
+    kbd.value = kbd.value.slice(0,start) + key + kbd.value.slice(end);
+    kbd.setSelectionRange(start+1, start+1);
+    // Kick the existing burst-detection so “idle ≥120ms” triggers lookup.
+    burstChars++; clearTimeout(burstTimer);
+    burstTimer = setTimeout(() => { if (burstChars >= 5) handleCode(kbd.value); burstChars = 0; }, 120);
+  });
+
+  async function postKnownAuto1(code, item){
+    const dirWord = (getScanDir() === 'IN') ? 'inbound' : 'outbound';
+    const payload = {
+      barcode: code,
+      qty: 1,
+      direction: dirWord,
+      commit_now: true,
+      manifest_id: MANIFEST_ID || undefined
+    };
+    const r = await fetch(URLS.scanPost, { method:'POST', headers: jsonHeaders(), body: JSON.stringify(payload) });
+    let j = null; try { j = await r.json(); } catch(_){}
+    if (!r.ok || !j || j.status !== 'ok') {
+      const msg = (j && (j.message || j.error)) || 'Scan failed';
+      if (window.showToast) window.showToast(msg, 'error', 3800); else setStatus(msg, 'err');
+      return false;
+    }
+    // success: toast, clear UI, keep focus for the next scan, refresh table if present
+    const wpu = Number(j.weight_per_unit ?? item?.weight_per_unit ?? 0).toFixed(1);
+    const nm  = j.sanitized_name || item?.sanitized_name || 'item';
+    const msg = `Logged ${j.direction} 1 × ${nm} (${wpu} lb)`;
+    if (window.showToast) window.showToast(msg, 'success', 3200); else setStatus('Posted ✓','ok');
+    if (resultEl) resultEl.innerHTML = '';
+    hideLegacyForm(false);
+    if (kbd) { kbd.value = ''; kbd.focus(); }
+    try { document.getElementById('beep')?.play?.(); } catch(_){}
+    if (typeof window.loadInventoryDetail === 'function') { try { window.loadInventoryDetail(); } catch(_){} }
+    return true;
+  }
 
   // Add a small “Reset” button into the header row next to the status pill
   (function injectHeaderReset(){
@@ -297,8 +395,19 @@
     const resp = await fetch(URLS.lookup, { method:'POST', headers: jsonHeaders(), body: JSON.stringify({ code }) });
     if (resp.ok) {
       const data = await resp.json();
-      if (data.item) { setStatus('Known ✓','ok'); beep(); showKnown(data.item, code, ai); }  // beep only on scan success
-      else { await showUnknownForm(code); }
+      if (data.item) {
+        setStatus('Known ✓','ok');
+        beep(); // acknowledge a successful read
+        // In single-qty mode, auto-post qty=1 and skip the card entirely.
+        if (getScanMode() === 'auto1') {
+          const done = await postKnownAuto1(code, data.item);
+          if (done) return; // short-circuit; stay in scanning flow
+        }
+        // Otherwise fall back to the quick-post card (prompt for qty)
+        showKnown(data.item, code, ai);
+      } else {
+        await showUnknownForm(code);
+      }
     } else setStatus('Lookup failed','err');
   }
 

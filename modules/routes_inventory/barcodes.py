@@ -152,7 +152,9 @@ def api_scan_barcode():
     """
     Body: JSON or form
       barcode      (str, required)
-      qty          (int, default 1)
+      qty          (int, optional)
+                    - if cookie scanner_mode=auto1 and qty omitted/blank → defaults to 1
+                    - if cookie scanner_mode=prompt and qty omitted/blank → 400 (required)
       direction    ('inbound'|'outbound'|'in'|'out', default 'inbound')
       manifest_id  (str, optional) → to group as a session
       commit_now   (bool, default False) → pending=1 unless True
@@ -163,10 +165,21 @@ def api_scan_barcode():
     if not barcode:
         return jsonify({"status": "error", "message": "Missing barcode"}), 400
 
+    # qty handling respects scanner_mode cookie
+    raw_qty = data.get("qty")
+    qty = None
     try:
-        qty = int(data.get("qty") or 1)
+        # allow "0" or whitespace to be handled below; only set if truly an int was provided
+        if raw_qty is not None and str(raw_qty).strip() != "":
+            qty = int(raw_qty)
     except Exception:
-        qty = 1
+        qty = None
+    if qty is None:
+        mode = (request.cookies.get("scanner_mode") or "prompt").strip().lower()
+        if mode == "auto1":
+            qty = 1
+        else:
+            return jsonify({"status": "error", "message": "qty is required in prompt mode"}), 400
     if qty <= 0:
         return jsonify({"status": "error", "message": "qty must be > 0"}), 400
 

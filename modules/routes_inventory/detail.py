@@ -4,8 +4,21 @@ from datetime import datetime
 
 from modules.utils.common import *  # dict_rows, prefs, units, sanitize_name, etc.
 from app import DB_FILE, publish_inventory_event
-from flask import flash, jsonify, redirect, render_template, request, session, url_for
+from flask import flash, jsonify, redirect, render_template, request, session, url_for, make_response
 from app import inventory_bp as bp  # blueprint
+
+# --- Scanner mode cookie (prompt | auto1) ------------------------------
+@bp.route("/scan_mode", methods=["GET"])
+def set_scan_mode():
+    """
+    Persist scanner mode as a cookie. Accepts ?mode=prompt|auto1.
+    Kept GET to avoid CSRF fuss; used by a tiny JS change-handler on the page.
+    """
+    val = "auto1" if request.args.get("mode") == "auto1" else "prompt"
+    resp = jsonify({"ok": True, "mode": val})
+    ONE_YEAR = 31_536_000
+    resp.set_cookie("scanner_mode", val, max_age=ONE_YEAR, samesite="Lax")
+    return resp
 
 @bp.route("/detail", methods=["GET", "POST"])
 def inventory_detail():
@@ -111,6 +124,7 @@ def inventory_detail():
                     inv_weight_unit=session.get(
                         "inv_weight_unit", request.cookies.get("mass_unit", "lbs")
                     ),
+                    scanner_mode=request.cookies.get("scanner_mode", "prompt"),
                     active="inventory",
                     advanced_data=advanced_data,
                     form_data=request.form,
@@ -129,6 +143,12 @@ def inventory_detail():
                 (cat_id, raw, noun, wpu_lbs, qty, total, dirn, ts),
             )
             eid = cur.lastrowid
+
+        # Success flash (tiny and useful for scanner workflows)
+        try:
+            flash(f"Logged {dirn} {qty} × {noun} ({wpu_lbs:.1f} lb)", "success")
+        except Exception:
+            pass
 
         # ---- Wargame reconciliation (lazy import; non-blocking) ----
         try:
@@ -220,13 +240,18 @@ def inventory_detail():
             e["weight_view"] = round(float(e["weight_per_unit"] or 0), 1)
             e["total_view"]  = round(float(e["total_weight"]    or 0), 1)
 
-    return render_template(
+    resp = make_response(render_template(
         "inventory_detail.html",
         categories=categories,
         inv_weight_unit=session.get("inv_weight_unit", request.cookies.get("mass_unit", "lbs")),
+        scanner_mode=request.cookies.get("scanner_mode", "prompt"),
         active="inventory",
         advanced_data=advanced_data,
-    )
+    ))
+    # Keep the scanner_mode cookie fresh so the page and cookie don’t drift
+    sm = (request.cookies.get("scanner_mode") or "prompt")
+    resp.set_cookie("scanner_mode", sm, max_age=31_536_000, samesite="Lax")
+    return resp
 
 
 @bp.route("/edit/<int:entry_id>", methods=["GET", "POST"])
