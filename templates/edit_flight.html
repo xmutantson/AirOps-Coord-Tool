@@ -56,4 +56,69 @@
       <button type="submit" class="danger">Delete Flight</button>
     </form>
   </div>
+
+<script>
+// Prev-max cargo hint (Edit Flight)
+(function(){
+  function findTailInput(){
+    return document.querySelector('#tail_number')
+        || document.querySelector('#tail')
+        || document.querySelector('input[name="tail_number"]')
+        || document.querySelector('input[name="tail"]');
+  }
+  function findCargoLabel(){
+    let lab = document.querySelector('label[for="cargo_weight"]')
+           || document.querySelector('label[for="cargo_weight_real"]');
+    if (!lab) {
+      const inp = document.querySelector('#cargo_weight')
+               || document.querySelector('[name="cargo_weight"]')
+               || document.querySelector('[name="cargo_weight_real"]');
+      if (inp && inp.id) lab = document.querySelector(`label[for="${inp.id}"]`);
+    }
+    return lab;
+  }
+  function ensureHintNode(lab){
+    let hint = document.getElementById('prev-max-cargo-hint');
+    if (!hint) {
+      hint = document.createElement('span');
+      hint.id = 'prev-max-cargo-hint';
+      hint.style.marginLeft = '.5rem';
+      hint.style.fontSize = '.9em';
+      hint.style.opacity = '0.8';
+      lab.appendChild(hint);
+    }
+    return hint;
+  }
+  async function updatePrevMax(){
+    const tailInp = findTailInput();
+    const lab = findCargoLabel();
+    if (!tailInp || !lab) return;
+    const hint = ensureHintNode(lab);
+    const tail = (tailInp.value || '').trim().toUpperCase();
+    if (!tail) { hint.textContent = ''; return; }
+    try {
+      const res = await fetch(`/api/aircraft/prev_max_cargo?tail=${encodeURIComponent(tail)}`, {
+        headers: {'X-Requested-With':'XMLHttpRequest'}
+      });
+      if (!res.ok) return;
+      const j = await res.json();
+      if (j && j.prev_max_lbs) {
+        const lbs = Number(j.prev_max_lbs).toLocaleString();
+        hint.textContent = `Prev max: ${lbs} lb`;
+      } else {
+        hint.textContent = '';
+      }
+    } catch (e) { /* no-op */ }
+  }
+  document.addEventListener('DOMContentLoaded', function(){
+    const tail = findTailInput();
+    if (!tail) return;
+    tail.addEventListener('input',  updatePrevMax);
+    tail.addEventListener('change', updatePrevMax);
+    tail.addEventListener('blur', updatePrevMax);
+    updatePrevMax();
+  });
+})();
+</script>
+
 {% endblock %}
