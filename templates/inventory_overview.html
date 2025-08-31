@@ -23,8 +23,11 @@
             onclick="location.href='{{ url_for('inventory.inventory_categories') }}'">
       Add Category
     </button>
+    <button type="button"
+            onclick="location.href='{{ url_for('inventory.inventory_barcodes_admin') }}'">
+      Edit Barcode DB
+    </button>
   </div>
-
   <script>
     async function loadInventoryOverview() {
       const resp = await fetch("{{ url_for('inventory.inventory_overview_table') }}");

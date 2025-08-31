@@ -186,14 +186,174 @@
   <div id="inventory-detail-table"><!-- AJAX detail table loads here --></div>
 
   <script>
-    // Load the list of past entries via AJAX
-    async function loadInventoryDetail() {
-      try {
-        const resp = await fetch("{{ url_for('inventory.inventory_detail_table') }}");
-        document.getElementById("inventory-detail-table").innerHTML = await resp.text();
-      } catch (_) {}
+    // ───────── Scroll persistence (window + table container) ─────────
+    const INV_SCROLL_KEY = `inv-detail-scroll:${location.pathname}${location.search}`;
+    const NAV = (performance.getEntriesByType && performance.getEntriesByType('navigation')[0]) || null;
+    const JUST_RELOADED = NAV ? (NAV.type === 'reload') :
+                       (performance && performance.navigation && performance.navigation.type === 1);
+
+    function saveScrollState(){
+      try{
+        const container = document.getElementById('inventory-detail-table');
+        const state = {
+          win:  (window.scrollY || window.pageYOffset || 0),
+          cont: (container ? container.scrollTop : 0)
+        };
+        sessionStorage.setItem(INV_SCROLL_KEY, JSON.stringify(state));
+      }catch(_){}
     }
-    loadInventoryDetail();
+    function restoreScrollState(){
+      let state = null;
+      try { state = JSON.parse(sessionStorage.getItem(INV_SCROLL_KEY)||'null'); } catch(_){}
+      if (!state) return;
+      // Restore after layout has settled
+      requestAnimationFrame(() => {
+        try {
+          const container = document.getElementById('inventory-detail-table');
+          if (container && typeof state.cont === 'number') {
+            container.scrollTop = Math.max(0, state.cont);
+          }
+          if (typeof state.win === 'number') {
+            const max = Math.max(0, (document.documentElement.scrollHeight || 0) - window.innerHeight);
+            const y = Math.min(max, Math.max(0, state.win));
+            window.scrollTo(0, y);
+          }
+        } catch(_){}
+      });
+    }
+    // Save scroll when the page is about to reload (e.g., delete → resequence)
+    window.addEventListener('beforeunload', saveScrollState, { capture:true });
+    // ───────────────── Inventory Detail: live reload + scroll-preserve + AJAX delete ─────────────────
+    (function(){
+      const TABLE_URL = "{{ url_for('inventory.inventory_detail_table') }}";
+      const TABLE_EL  = document.getElementById("inventory-detail-table");
+      const CSRF_META = document.querySelector('meta[name="csrf-token"]');
+      let   refreshBusy = false;
+      let   intervalId  = null;
+
+      function getCsrf(){
+        return (CSRF_META?.content)
+            || (document.querySelector('input[name="csrf_token"]')?.value)
+            || "";
+      }
+      function xhrHeaders(extra){
+        const h = { 'X-Requested-With':'XMLHttpRequest' };
+        const t = getCsrf();
+        if (t) { h['X-CSRFToken'] = t; h['X-CSRF-Token'] = t; }
+        return Object.assign(h, extra||{});
+      }
+      function preserveScrollRun(renderFn){
+        const winY  = window.scrollY || window.pageYOffset || 0;
+        const boxY  = TABLE_EL ? TABLE_EL.scrollTop : 0;
+        return Promise.resolve(renderFn()).finally(()=>{
+          requestAnimationFrame(()=>{
+            try { if (TABLE_EL) TABLE_EL.scrollTop = boxY; } catch(_){}
+            try {
+              const max = Math.max(0, (document.documentElement.scrollHeight||0) - window.innerHeight);
+              window.scrollTo(0, Math.min(max, Math.max(0, winY)));
+            } catch(_){}
+          });
+        });
+      }
+
+      async function loadInventoryDetail({preserve=true} = {}) {
+        if (refreshBusy) return;
+        refreshBusy = true;
+        const doFetch = async () => {
+          const resp = await fetch(TABLE_URL + "?_=" + Date.now(), { headers: xhrHeaders() });
+          if (!resp.ok) { refreshBusy = false; return; }
+          const html = await resp.text();
+          TABLE_EL.innerHTML = html;
+        };
+        try {
+          if (preserve) { await preserveScrollRun(doFetch); }
+          else          { await doFetch(); }
+        } finally {
+          refreshBusy = false;
+        }
+      }
+
+      // Expose for other script blocks (e.g., form save handler below)
+      window.loadInventoryDetail = (opts) => loadInventoryDetail(opts);
+
+      // Event delegation for Delete buttons/links inside the table.
+      // Works with:
+      //  • <a data-delete-url="…">, <button data-delete-url="…">
+      //  • anything with [data-action="delete"]
+      //  • fallback heuristic: <a href="…delete…">
+      TABLE_EL.addEventListener('click', async (e) => {
+        const sel = '[data-delete-url],[data-action="delete"],a[href*="delete"]';
+        const btn = e.target.closest(sel);
+        if (!btn) return;
+        // Only treat likely delete controls; avoid pagination etc.
+        const label = (btn.getAttribute('data-action') || btn.textContent || '').toLowerCase();
+        const looksDelete = label.includes('delete') || label.includes('remove') || /\/delete\b/i.test(String(btn.getAttribute('href')||''));
+        if (!looksDelete) return;
+        e.preventDefault();
+
+        // Allow the template to specify exact endpoint; otherwise use href.
+        const href = btn.getAttribute('data-delete-url') || btn.getAttribute('href');
+        if (!href) return;
+
+        // Optional confirm — keep it gentle; table reload is cheap.
+        if (!confirm('Delete this entry?')) return;
+
+        // Try POST with CSRF; if 405, fall back to GET (for legacy routes).
+        try {
+          let res = await fetch(href, {
+            method: 'POST',
+            headers: xhrHeaders({ 'Content-Type':'application/x-www-form-urlencoded' }),
+            body: new URLSearchParams({ csrf_token: getCsrf() })
+          });
+          if (res.status === 405) {
+            res = await fetch(href, { method: 'GET', headers: xhrHeaders() });
+          }
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          // after server confirms delete, re-pull the table without losing scroll
+          await loadInventoryDetail({ preserve: true });
+          try { showToast && showToast('Entry deleted','success'); } catch(_){}
+        } catch(err) {
+          try { showToast && showToast('Delete failed','error'); } catch(_){}
+          console.error('Delete failed:', err);
+        }
+      });
+
+      // Also intercept *form* submissions used for delete (if the partial uses forms).
+      TABLE_EL.addEventListener('submit', async (e) => {
+        const f = e.target;
+        // Heuristic: any form whose action contains "delete" or has data-action="delete"
+        const isDelete = f.matches('form[data-action="delete"], form[action*="delete"]');
+        if (!isDelete) return;
+        e.preventDefault();
+        if (!confirm('Delete this entry?')) return;
+        try{
+          const res = await fetch(f.action, {
+            method: f.method?.toUpperCase() || 'POST',
+            headers: xhrHeaders(),
+            body: new FormData(f)
+          });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          await loadInventoryDetail({ preserve: true });
+          try { showToast && showToast('Entry deleted','success'); } catch(_){}
+        } catch(err) {
+          try { showToast && showToast('Delete failed','error'); } catch(_){}
+          console.error('Delete failed:', err);
+        }
+      });
+
+      // Initial load + 30s auto-refresh
+      loadInventoryDetail({ preserve: false }).then(() => {
+        if (typeof restoreScrollState === 'function' && typeof JUST_RELOADED !== 'undefined' && JUST_RELOADED) {
+          restoreScrollState();
+        }
+      });
+      if (intervalId) clearInterval(intervalId);
+      intervalId = setInterval(() => loadInventoryDetail({ preserve: true }), 30000);
+      // Nice: refresh when the tab regains focus (stale after being backgrounded)
+      window.addEventListener('visibilitychange', () => {
+        if (!document.hidden) loadInventoryDetail({ preserve: true });
+      });
+    })();
 
     document.addEventListener('DOMContentLoaded', () => {
       // Dynamic inventory data for outbound lookups
@@ -364,7 +524,7 @@
           await fetchInventory();      // fetch new inventory after save
           updateMode();
           fixFieldEnabling();
-          await loadInventoryDetail();
+          await (window.loadInventoryDetail?.({ preserve: true }));
           // after saving, return focus to the first input
           if (prevDir === 'in') nameTxt.focus(); else qtyFld.focus();
 

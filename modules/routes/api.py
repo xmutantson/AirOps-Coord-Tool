@@ -1,9 +1,9 @@
-
-
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
 from flask import Blueprint, current_app
 from flask import jsonify, make_response, session, request
 import re
+import sqlite3
+from app import DB_FILE
 bp = Blueprint(__name__.rsplit('.', 1)[-1], __name__)
 app = current_app  # legacy shim if route body references 'app'
 
@@ -132,3 +132,185 @@ def api_prev_max_cargo():
         'prev_max_lbs': prev_max,
         'sample_count': len(weights)
     })
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RampBoss Scan API
+#   POST /api/manifest/<mid>/scan     {barcode, mode: "add"|"remove", flight_id?:int}
+#   GET  /api/manifest/<mid>/items?flight_id=<id>
+# ─────────────────────────────────────────────────────────────────────────────
+
+@bp.post('/api/manifest/<string:mid>/scan')
+def api_manifest_scan(mid: str):
+    """
+    Apply a single scan against the pending session.
+       • Build (no baseline):       add → pending 'out' +1; remove → pending 'out' -1 (not below 0)
+       • Edit (draft_id/flight_id): add → pending 'out' +1; remove → pending 'in' +1  (baseline-aware; can go below snapshot)
+    Unknown barcode → {status:'unknown'} (client can open mapping flow).
+    """
+    data = request.get_json(silent=True) or {}
+    barcode = (data.get('barcode') or '').strip()
+    mode    = (data.get('mode') or 'add').strip().lower()
+    flight_id = data.get('flight_id')
+    draft_id  = data.get('draft_id')
+    if not barcode:
+        return jsonify({'status':'error','error':'missing_barcode'}), 400
+
+    item = lookup_barcode(barcode)
+    if not item:
+        return jsonify({'status':'unknown'}), 404
+
+    # --- Pre-check: what's the current net qty for this item? -------------
+    # Enforce spec: if toggle is Remove and item isn't on the manifest, do nothing.
+    pre_chips = aggregate_manifest_net(
+        session_id=mid,
+        flight_id=int(flight_id) if flight_id else None,
+        queued_id=int(draft_id)  if draft_id  else None
+    )
+    def _match_item(ch):
+        return (int(ch['category_id']) == int(item['category_id']) and
+                ch['sanitized_name'].lower().strip() == item['sanitized_name'].lower().strip() and
+                float(ch['weight_per_unit']) == float(item['weight_per_unit']))
+    pre_qty = 0
+    for ch in pre_chips:
+        if _match_item(ch):
+            pre_qty = int(ch['qty'])
+            break
+
+    # --- NOOP guard: prevent reverse rows when there are no chips left -------
+    # In Edit (baseline-aware) mode, a 'remove' previously spawned reverse rows
+    # even at/below zero. If the effective qty is <= 0, do nothing.
+    is_edit = bool(flight_id or draft_id)
+    if (mode == 'remove') and is_edit and pre_qty <= 0:
+        return jsonify({
+            'status': 'ok',
+            'item': {
+                'category_id': item['category_id'],
+                'sanitized_name': item['sanitized_name'],
+                'weight_per_unit': item['weight_per_unit']
+            },
+            'qty': 0,            # unchanged
+            'removed': False,
+            'noop': True,
+            'reason': 'no_chips_to_remove'
+        })
+
+    # --- Baseline direction for this session (outbound vs inbound) --------
+    def _row_dir_for_scan(session_id: str, qid, fid) -> str:
+        with sqlite3.connect(DB_FILE) as c:
+            c.row_factory = sqlite3.Row
+            row = c.execute("""
+                SELECT direction
+                  FROM flight_cargo
+                 WHERE (
+                        session_id = ?
+                     OR (queued_id = ? AND ? IS NOT NULL)
+                     OR (flight_id = ? AND ? IS NOT NULL)
+                       )
+                   AND (queued_id IS NOT NULL OR flight_id IS NOT NULL)
+                 ORDER BY id DESC
+                 LIMIT 1
+            """, (session_id, qid, qid, fid, fid)).fetchone()
+        return (row['direction'] if row and row['direction'] in ('in','out') else 'out')
+
+    baseline_dir = _row_dir_for_scan(mid, draft_id, flight_id)  # 'out' or 'in'
+
+    # --- Stock gate: ONLY for outbound ADDs; subtract only this session's PENDING OUTS
+    def _committed_avail():
+        row = dict_rows("""
+          SELECT COALESCE(SUM(CASE direction WHEN 'in' THEN quantity ELSE -quantity END),0) AS net
+            FROM inventory_entries
+           WHERE pending=0 AND category_id=? AND LOWER(sanitized_name)=LOWER(?) AND CAST(weight_per_unit AS REAL)=CAST(? AS REAL)
+        """, (item['category_id'], item['sanitized_name'], item['weight_per_unit']))[0]
+        return int(row['net'] or 0)
+    def _session_pending_out():
+        row = dict_rows("""
+          SELECT COALESCE(SUM(quantity),0) AS q
+            FROM inventory_entries
+           WHERE session_id=? AND category_id=? AND LOWER(sanitized_name)=LOWER(?) AND CAST(weight_per_unit AS REAL)=CAST(? AS REAL)
+             AND direction='out' AND pending=1
+        """, (mid, item['category_id'], item['sanitized_name'], item['weight_per_unit']))[0]
+        return int(row['q'] or 0)
+
+    # Decide direction + delta per rules
+    if mode not in ('add','remove'):
+        mode = 'add'
+    # Determine the session's baseline direction (outbound vs inbound edit)
+    row_hint = dict_rows("""
+        SELECT direction FROM flight_cargo
+         WHERE (
+                session_id = ? OR
+                (queued_id = ? AND ? IS NOT NULL) OR
+                (flight_id = ? AND ? IS NOT NULL)
+               )
+           AND (queued_id IS NOT NULL OR flight_id IS NOT NULL)
+         ORDER BY id DESC LIMIT 1
+    """, (mid, draft_id, draft_id, flight_id, flight_id))
+    row_dir = row_hint[0]['direction'] if (row_hint and row_hint[0].get('direction') in ('in','out')) else 'out'
+
+    if mode == 'add':
+        # Apply add in the snapshot's direction:
+        #  - outbound edit → 'out'
+        #  - inbound edit  → 'in'
+        direction = 'out' if row_dir == 'out' else 'in'
+        delta = +1
+        # Enforce stock cap only when we're consuming stock (outbound)
+        if row_dir == 'out':
+            avail = _committed_avail()
+            sess  = _session_pending_out()
+            if (avail - sess) < 1:
+                return jsonify({'status':'out_of_stock'}), 409
+    else:
+        if (flight_id or draft_id):
+            # Edit semantics (baseline-aware): remove applies the REVERSE of baseline
+            direction = ('in' if baseline_dir == 'out' else 'out')
+            delta = +1
+        else:
+            # Build semantics: decrement pending in the baseline direction (floored at 0 by upsert)
+            direction = baseline_dir
+            delta = -1
+
+    qty = upsert_scan_pending(
+        session_id=mid,
+        category_id=item['category_id'],
+        sanitized_name=item['sanitized_name'],
+        weight_per_unit=item['weight_per_unit'],
+        direction=direction,
+        delta_qty=delta
+    )
+
+    # Compute net qty for the chip after this scan
+    chips = aggregate_manifest_net(
+        session_id=mid,
+        flight_id=int(flight_id) if flight_id else None,
+        queued_id=int(draft_id)  if draft_id  else None
+    )
+    net = 0
+    for ch in chips:
+        if _match_item(ch):
+            net = int(ch['qty'])
+            break
+
+    # Only report "removed" when there was something to remove and it hit zero
+    removed = (mode == 'remove' and not flight_id and not draft_id and pre_qty > 0 and net == 0)
+    return jsonify({
+        'status': 'ok',
+        'item': {
+            'category_id': item['category_id'],
+            'sanitized_name': item['sanitized_name'],
+            'weight_per_unit': item['weight_per_unit']
+        },
+        'qty': net,
+        'removed': bool(removed)
+    })
+
+@bp.get('/api/manifest/<string:mid>/items')
+def api_manifest_items(mid: str):
+    """Return net chips for this session (optionally including an existing flight baseline)."""
+    flight_id = request.args.get('flight_id', type=int, default=None)
+    draft_id  = request.args.get('draft_id',  type=int, default=None)
+    chips = aggregate_manifest_net(
+        session_id=mid,
+        flight_id=flight_id,
+        queued_id=draft_id
+    )
+    return jsonify({'items': chips})

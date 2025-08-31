@@ -1,0 +1,46 @@
+<!-- templates/partials/_inventory_barcodes_table.html -->
+<table class="data-table" style="width:100%;">
+  <thead>
+    <tr>
+      <th style="width:2.5rem;"><input type="checkbox" id="chk-all"></th>
+      <th>Barcode</th>
+      <th>Item (sanitized)</th>
+      <th>Raw</th>
+      <th>Category</th>
+      <th style="text-align:right;">Wt/Unit (lb)</th>
+      <th>Alias of</th>
+      <th>Last seen</th>
+      <th style="text-align:right;">Seen</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% if rows %}
+    {% for r in rows %}
+      <tr data-barcode="{{ r.barcode }}" data-cat="{{ r.category_id }}" data-name="{{ r.sanitized_name }}"
+          data-raw="{{ r.raw_name or '' }}" data-wpu="{{ r.weight_per_unit }}"
+          data-alias="{{ r.alias_of or '' }}" class="{{ 'is-deleted' if r.deleted else '' }}">
+        <td><input type="checkbox" class="row-check" value="{{ r.barcode }}"></td>
+        <td><code>{{ r.barcode }}</code>{% if r.deleted %} <span class="badge">deleted</span>{% endif %}</td>
+        <td>{{ r.sanitized_name }}</td>
+        <td>{{ r.raw_name or '' }}</td>
+        <td>{{ r.category }}</td>
+        <td style="text-align:right;">{{ '%.2f'|format(r.weight_per_unit) }}</td>
+        <td>{{ r.alias_of or '' }}</td>
+        <td>{{ r.last_seen or '' }}</td>
+        <td style="text-align:right;">{{ r.seen_count }}</td>
+        <td>
+          <a href="#" data-action="edit">Edit</a>
+          {% if r.deleted %}
+            · <a href="#" data-action="restore">Restore</a>
+          {% else %}
+            · <a href="#" data-action="delete">Delete</a>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+  {% else %}
+    <tr><td colspan="10" style="text-align:center;color:#666;">No rows</td></tr>
+  {% endif %}
+  </tbody>
+</table>

@@ -1,64 +1,220 @@
 {% extends "base.html" %}
-{% block title %}Barcode Mappings{% endblock %}
+{% block title %}Barcode Database – Aircraft Ops{% endblock %}
+
 {% block content %}
-<h2>Barcode → Item</h2>
+<h2>Barcode Database</h2>
 
-<form method="POST" class="card" style="padding:12px;border:1px solid #ddd;border-radius:10px;margin-bottom:16px;max-width:840px;">
-  <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:8px;align-items:end;">
-    <label>Barcode
-      <input name="barcode" required placeholder="scan or paste…" style="width:100%;padding:8px;">
-    </label>
-    <label>Category
-      <select name="category_id" required style="width:100%;padding:8px;">
-        <option value="">— select —</option>
-        {% for c in categories %}
+<div class="ramp-form-container" style="margin-bottom: .75rem;">
+  <div class="lookup-row" style="gap:8px; flex-wrap:wrap;">
+    <input id="q" type="search" placeholder="Search barcode or name…" style="min-width:28ch;">
+    <select id="cat" style="min-width:20ch;">
+      <option value="">All categories</option>
+      {% for c in categories %}
         <option value="{{ c.id }}">{{ c.display_name }}</option>
-        {% endfor %}
-      </select>
+      {% endfor %}
+    </select>
+    <label style="display:flex;align-items:center;gap:.5rem;">
+      <input id="show-deleted" type="checkbox"> Show deleted
     </label>
-    <label>Sanitized name
-      <input name="sanitized_name" placeholder="e.g., 'beans'" style="width:100%;padding:8px;">
-    </label>
-    <label>Raw name (optional)
-      <input name="raw_name" placeholder="label text" style="width:100%;padding:8px;">
-    </label>
-    <label>Unit size (lb)
-      <input name="weight_per_unit" type="number" step="0.01" min="0.01" required style="width:100%;padding:8px;">
-    </label>
-  </div>
-  <div style="margin-top:8px;">
-    <button type="submit">Save</button>
-  </div>
-</form>
 
-<table class="table" style="width:100%;max-width:1000px;">
-  <thead>
-    <tr>
-      <th>Barcode</th>
-      <th>Category</th>
-      <th>Name</th>
-      <th>Unit (lb)</th>
-      <th>Updated</th>
-      <th></th>
-    </tr>
-  </thead>
-  <tbody>
-  {% for b in barcodes %}
-    <tr>
-      <td><code>{{ b.barcode }}</code></td>
-      <td>{{ b.category }}</td>
-      <td>{{ b.sanitized_name }}{% if b.raw_name and b.raw_name != b.sanitized_name %} <small title="raw">({{ b.raw_name }})</small>{% endif %}</td>
-      <td>{{ '%.2f'|format(b.weight_per_unit) }}</td>
-      <td>{{ b.updated_at or '—' }}</td>
-      <td>
-        <form method="POST" action="{{ url_for('inventory.inventory_barcodes_delete', barcode=b.barcode) }}" onsubmit="return confirm('Delete mapping?')">
-          <button type="submit">Delete</button>
-        </form>
-      </td>
-    </tr>
-  {% else %}
-    <tr><td colspan="6">No barcode mappings yet.</td></tr>
-  {% endfor %}
-  </tbody>
-  </table>
+    <span style="flex:1"></span>
+
+    <button id="export-btn" type="button">Export CSV</button>
+    <label class="button" for="csv-file" style="cursor:pointer;">Import CSV</label>
+    <input id="csv-file" type="file" accept=".csv,text/csv" style="display:none">
+  </div>
+</div>
+
+<div class="ramp-form-container" style="margin-bottom:.5rem;">
+  <div class="lookup-row" style="gap:8px; flex-wrap:wrap;">
+    <button id="bulk-delete" type="button">Soft delete</button>
+    <button id="bulk-restore" type="button">Restore</button>
+
+    <select id="bulk-cat" style="min-width:18ch;">
+      <option value="">Reassign category…</option>
+      {% for c in categories %}
+        <option value="{{ c.id }}">{{ c.display_name }}</option>
+      {% endfor %}
+    </select>
+    <button id="bulk-cat-apply" type="button">Apply</button>
+
+    <input id="merge-primary" type="text" placeholder="Primary barcode for merge…" style="min-width:22ch;">
+    <button id="bulk-merge" type="button">Merge (first=primary if blank)</button>
+  </div>
+</div>
+
+<div id="barcode-table"><!-- AJAX table here --></div>
+
+<!-- CSRF for JSON -->
+<meta name="csrf-token" content="{{ csrf_token() }}">
+
+<script>
+(function () {
+  const TABLE = document.getElementById('barcode-table');
+  const Q  = document.getElementById('q');
+  const CAT= document.getElementById('cat');
+  const DEL= document.getElementById('show-deleted');
+
+  const CSRF = document.querySelector('meta[name="csrf-token"]')?.content || '';
+
+  function hdr(extra) {
+    const h = { 'X-Requested-With':'XMLHttpRequest' };
+    if (CSRF) { h['X-CSRFToken']=CSRF; h['X-CSRF-Token']=CSRF; }
+    return Object.assign(h, extra||{});
+  }
+
+  async function loadTable() {
+    const params = new URLSearchParams();
+    if (Q.value.trim()) params.set('q', Q.value.trim());
+    if (CAT.value) params.set('category', CAT.value);
+    if (DEL.checked) params.set('deleted','1');
+    const url = "{{ url_for('inventory.inventory_barcodes_table') }}" + '?' + params.toString();
+    const html = await fetch(url, { headers: hdr() }).then(r => r.text());
+    TABLE.innerHTML = html;
+  }
+
+  // search/filter
+  [Q, CAT, DEL].forEach(el => {
+    el.addEventListener('input', () => { clearTimeout(el._t); el._t=setTimeout(loadTable, 250); });
+    el.addEventListener('change', loadTable);
+  });
+
+  // Export
+  document.getElementById('export-btn').addEventListener('click', () => {
+    const params = new URLSearchParams();
+    if (DEL.checked) params.set('deleted','1');
+    location.href = "{{ url_for('inventory.inventory_barcodes_export_csv') }}" + '?' + params.toString();
+  });
+
+  // Import
+  document.getElementById('csv-file').addEventListener('change', () => {
+    const f = document.getElementById('csv-file').files[0];
+    if (!f) return;
+    const form = new FormData();
+    form.append('file', f, f.name);
+    fetch("{{ url_for('inventory.inventory_barcodes_import_csv') }}", {
+      method: 'POST',
+      headers: hdr(),
+      body: form
+    }).then(() => loadTable()).catch(()=>{});
+  });
+
+  // Bulk helpers
+  function selected() {
+    return Array.from(TABLE.querySelectorAll('.row-check:checked')).map(x => x.value);
+  }
+  async function post(url, data) {
+    const body = new URLSearchParams(data);
+    const resp = await fetch(url, { method:'POST', headers: hdr({'Content-Type':'application/x-www-form-urlencoded'}), body });
+    if (!resp.ok) throw new Error('HTTP '+resp.status);
+    return resp.json();
+  }
+  document.getElementById('bulk-delete').addEventListener('click', async () => {
+    const ids = selected(); if (!ids.length) return;
+    if (!confirm(`Soft delete ${ids.length} barcode(s)?`)) return;
+    await post("{{ url_for('inventory.inventory_barcodes_soft_delete') }}", Object.fromEntries(ids.map(b=>['barcodes',b])));
+    loadTable();
+  });
+  document.getElementById('bulk-restore').addEventListener('click', async () => {
+    const ids = selected(); if (!ids.length) return;
+    await post("{{ url_for('inventory.inventory_barcodes_restore') }}", Object.fromEntries(ids.map(b=>['barcodes',b])));
+    loadTable();
+  });
+  document.getElementById('bulk-cat-apply').addEventListener('click', async () => {
+    const ids = selected(); const cid = document.getElementById('bulk-cat').value;
+    if (!ids.length || !cid) return;
+    await post("{{ url_for('inventory.inventory_barcodes_bulk_category') }}",
+               Object.assign(Object.fromEntries(ids.map(b=>['barcodes',b])), { category_id: cid }));
+    loadTable();
+  });
+  document.getElementById('bulk-merge').addEventListener('click', async () => {
+    const ids = selected(); if (ids.length < 2) return alert('Select 2+ rows to merge');
+    const prim = document.getElementById('merge-primary').value.trim() || ids[0];
+    if (!ids.includes(prim)) ids.unshift(prim);
+    await post("{{ url_for('inventory.inventory_barcodes_merge') }}",
+               Object.assign(Object.fromEntries(ids.map(b=>['barcodes',b])), { primary: prim }));
+    loadTable();
+  });
+
+  // Row actions: edit/delete/restore
+  TABLE.addEventListener('click', async (e) => {
+    const a = e.target.closest('a[data-action]');
+    if (!a) return;
+    e.preventDefault();
+    const tr = a.closest('tr');
+    const code = tr?.dataset?.barcode;
+
+    if (a.dataset.action === 'delete') {
+      if (!confirm('Soft delete this barcode?')) return;
+      await post("{{ url_for('inventory.inventory_barcodes_soft_delete') }}", { 'barcodes': code });
+      loadTable();
+    } else if (a.dataset.action === 'restore') {
+      await post("{{ url_for('inventory.inventory_barcodes_restore') }}", { 'barcodes': code });
+      loadTable();
+    } else if (a.dataset.action === 'edit') {
+      // Toggle into inline edit
+      if (tr.classList.contains('editing')) return; // already editing
+      tr.classList.add('editing');
+      const cats = Array.from(document.querySelectorAll('#cat option')).map(o => ({id:o.value, name:o.textContent})).filter(x=>x.id);
+      const tds = tr.querySelectorAll('td');
+      const current = {
+        sanitized: tr.dataset.name || '',
+        raw: tr.dataset.raw || '',
+        cat: tr.dataset.cat || '',
+        wpu: tr.dataset.wpu || '',
+        alias: tr.dataset.alias || ''
+      };
+      // sanitized
+      tds[2].innerHTML = `<input class="ed-name" value="${current.sanitized}">`;
+      // raw
+      tds[3].innerHTML = `<input class="ed-raw" value="${current.raw}">`;
+      // category
+      tds[4].innerHTML = `<select class="ed-cat">${
+        cats.map(c=>`<option value="${c.id}" ${c.id===current.cat?'selected':''}>${c.name}</option>`).join('')
+      }</select>`;
+      // wpu
+      tds[5].innerHTML = `<input class="ed-wpu" type="number" step="any" min="0" value="${current.wpu}">`;
+      // alias_of
+      tds[6].innerHTML = `<input class="ed-alias" placeholder="alias_of (optional)" value="${current.alias}">`;
+      // actions
+      tds[9].innerHTML = `<a href="#" data-action="save">Save</a> · <a href="#" data-action="cancel">Cancel</a>`;
+    } else if (a.dataset.action === 'cancel') {
+      loadTable();
+    } else if (a.dataset.action === 'save') {
+      const tr = a.closest('tr');
+      const code = tr.dataset.barcode;
+      const body = {
+        barcode: code,
+        sanitized_name: tr.querySelector('.ed-name').value.trim(),
+        raw_name: tr.querySelector('.ed-raw').value.trim(),
+        category_id: tr.querySelector('.ed-cat').value,
+        weight_per_unit: tr.querySelector('.ed-wpu').value,
+        alias_of: tr.querySelector('.ed-alias').value.trim()
+      };
+      const resp = await fetch("{{ url_for('inventory.inventory_barcodes_admin') }}", {
+        method: 'POST',
+        headers: Object.assign(hdr(), {'Content-Type':'application/x-www-form-urlencoded'}),
+        body: new URLSearchParams(body)
+      });
+      if (!resp.ok) {
+        alert('Save failed');
+        return;
+      }
+      loadTable();
+    }
+  });
+
+  // "select all" in the partial
+  TABLE.addEventListener('change', (e) => {
+    if (e.target.id === 'chk-all') {
+      const on = e.target.checked;
+      TABLE.querySelectorAll('.row-check').forEach(cb => cb.checked = on);
+    }
+  });
+
+  // first load + refresh on focus (cheap)
+  loadTable();
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) loadTable(); });
+})();
+</script>
 {% endblock %}
