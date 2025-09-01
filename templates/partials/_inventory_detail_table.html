@@ -14,10 +14,15 @@
   </thead>
   <tbody>
     {% for e in entries %}
-      <tr>
+      <tr
+        data-name="{{ e.sanitized_name }}"
+        data-wpu-lbs="{{ '%.6f' % (e.wpu_lbs if e.wpu_lbs is not none else 0) }}"
+      >
         <td>
           <!-- Edit -->
           <a href="{{ url_for('inventory.inventory_edit', entry_id=e.id) }}">Edit</a>
+          <span aria-hidden="true">·</span>
+          <a href="#" class="propagate-link" title="Propagate edits">Fix/Propagate…</a>
           <!-- Delete -->
           <form method="POST"
                 action="{{ url_for('inventory.inventory_delete', entry_id=e.id) }}"

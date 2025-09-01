@@ -33,6 +33,7 @@ def inventory_stock():
         entry = {
           'noun' : r['noun'],
           'size' : r['wpu'],
+          'wpu_lbs': r['wpu'],
           'qty'  : r['qty'],
           'total': r['wpu'] * r['qty']
         }

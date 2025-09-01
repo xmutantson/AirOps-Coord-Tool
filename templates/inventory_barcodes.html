@@ -183,6 +183,14 @@
     } else if (a.dataset.action === 'save') {
       const tr = a.closest('tr');
       const code = tr.dataset.barcode;
+      // capture "before" from row data-* attributes (set by partial)
+      const before = {
+        sanitized: tr.dataset.name || '',
+        raw: tr.dataset.raw || '',
+        cat: tr.dataset.cat || '',
+        wpu: tr.dataset.wpu || '',
+        alias: tr.dataset.alias || ''
+      };
       const body = {
         barcode: code,
         sanitized_name: tr.querySelector('.ed-name').value.trim(),
@@ -200,6 +208,12 @@
         alert('Save failed');
         return;
       }
+      // After a successful save, offer smart propagation (category → name → weight)
+      try {
+        if (window.Propagate) {
+          await window.Propagate.maybeOfferAfterBarcodeEdit(tr, before, body, ()=>loadTable());
+        }
+      } catch(_){}
       loadTable();
     }
   });
@@ -217,4 +231,5 @@
   document.addEventListener('visibilitychange', () => { if (!document.hidden) loadTable(); });
 })();
 </script>
+<script defer src="{{ url_for('static', filename='js/propagate.js') }}"></script>
 {% endblock %}

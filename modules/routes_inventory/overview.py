@@ -296,7 +296,7 @@ def inventory_overview():
             'rate_in':   in2h  / 2,
             'rate_out':  out2h / 2
         })
-    # apply user’s mass‐unit preference (cookie from /preferences)
+
     mass_pref = request.cookies.get('mass_unit','lbs')
     if mass_pref == 'kg':
         for item in overview:
@@ -369,6 +369,14 @@ def inventory_detail_table():
         JOIN inventory_categories c ON c.id=e.category_id
        ORDER BY e.timestamp DESC
     """)
+
+    # Preserve raw lbs for client-side propagation UI *before* any unit conversion
+    for e in entries:
+        try:
+            e['wpu_lbs'] = float(e.get('weight_per_unit') or 0.0)
+        except Exception:
+            e['wpu_lbs'] = 0.0
+
     mass_pref = request.cookies.get('mass_unit','lbs')
     if mass_pref=='kg':
         for e in entries:

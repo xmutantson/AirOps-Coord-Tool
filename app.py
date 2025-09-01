@@ -410,6 +410,7 @@ for _mod in (
     "modules.routes_inventory.stock",
     "modules.routes_inventory.barcodes",
     "modules.routes_inventory.scan",
+    "modules.routes_inventory.propagate",
 ):
     _safe_import(_mod)
 

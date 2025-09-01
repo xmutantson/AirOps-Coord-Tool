@@ -11,7 +11,11 @@
 
   <div class="ramp-form-container">
     <form method="POST"
-          action="{{ url_for('inventory.inventory_edit', entry_id=entry.id) }}">
+          action="{{ url_for('inventory.inventory_edit', entry_id=entry.id) }}"
+          data-original-cat="{{ entry.category_id }}"
+          data-original-name="{{ entry.sanitized_name }}"
+          data-original-wpu-lbs="{{ '%.6f' % (entry.weight_per_unit or 0) }}"
+    >
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
       <label for="category">Category</label>
@@ -68,4 +72,62 @@
       </button>
     </form>
   </div>
+<script defer src="{{ url_for('static', filename='js/propagate.js') }}"></script>
+<script>
+(function(){
+  const form = document.querySelector('form[action*="/inventory/edit/"]');
+  if (!form) return;
+  let submitting = false;
+  function sanitize(s){
+    return String(s||'')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g,' ')
+      .replace(/\s+/g,' ')
+      .trim();
+  }
+  function toLbs(val, unit){
+    const v = parseFloat(val||'0')||0;
+    if (!unit) return v;
+    switch(String(unit).toLowerCase()){
+      case 'kg': return v * 2.20462;
+      case 'oz': return v / 16.0;
+      default:   return v;
+    }
+  }
+  form.addEventListener('submit', async (e)=>{
+    if (submitting) return; // allow natural submit second time
+    e.preventDefault();
+    const origCat  = parseInt(form.dataset.originalCat||'0',10) || 0;
+    const origName = (form.dataset.originalName||'').trim();
+    const origWpu  = parseFloat(form.dataset.originalWpuLbs||'0')||0;
+
+    const newCat   = parseInt(document.getElementById('category').value||'0',10) || 0;
+    const newName  = sanitize(document.getElementById('name').value);
+    const newUnit  = (document.getElementById('weight_unit').value||'lbs');
+    const newWpu   = toLbs(document.getElementById('weight').value, newUnit);
+
+    // Queue up propagation offers in order: category → name → weight
+    try {
+      if (window.Propagate) {
+        if (origCat && newCat && newCat !== origCat && origName) {
+          await window.Propagate.previewBulk('category', [origName], {new_category_id: newCat}, null);
+        }
+        if (origName && newName && newName !== origName) {
+          await window.Propagate.previewBulk('name', [origName], {new_name: newName}, null);
+        }
+        if (origWpu && newWpu && Math.abs(origWpu - newWpu) > 1e-9 && origName) {
+          await window.Propagate.previewBulk('weight',
+            [origName],
+            {new_weight_per_unit: newWpu},
+            origWpu
+          );
+        }
+      }
+    } catch(_) {}
+
+    submitting = true;
+    form.submit();
+  });
+})();
+</script>
 {% endblock %}

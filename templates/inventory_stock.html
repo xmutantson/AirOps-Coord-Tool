@@ -9,6 +9,17 @@
         class="print-button"
         onclick="window.print()" style="margin-bottom:1rem;">🖨️ Print</button>
 
+ 
+<!-- Bulk actions toolbar -->
+<div class="ramp-form-container" style="margin:.25rem 0 1rem 0;">
+  <div class="lookup-row" style="gap:8px; flex-wrap:wrap;">
+    <button id="stk-bulk-cat"    type="button">Change category…</button>
+    <button id="stk-bulk-rename" type="button">Rename…</button>
+    <button id="stk-bulk-weight" type="button" title="Requires one size across selection">Change weight…</button>
+    <span class="muted" id="stk-selected-hint" style="margin-left:.5rem;">No items selected</span>
+  </div>
+</div>
+
 {% for cat, items in stock.items() %}
 <details style="margin:1rem 0;">
   <summary style="cursor:pointer; font-weight:bold;">
@@ -20,6 +31,7 @@
   <table class="full-bleed" style="margin-top:0.5rem;">
     <thead>
       <tr>
+        <th>Select</th>
         <th>Item</th>
         <th>Size ({{ mass_pref }})</th>
         <th>Avail</th>
@@ -28,7 +40,13 @@
     </thead>
     <tbody>
       {% for it in items %}
-      <tr>
+      <tr data-name="{{ it.noun }}" data-size-lbs="{{ '%.6f' % (it.wpu_lbs if it.wpu_lbs is not none else 0) }}">
+        <td>
+          <input type="checkbox"
+                 class="stock-check"
+                 data-name="{{ it.noun }}"
+                 data-size-lbs="{{ '%.6f' % (it.wpu_lbs if it.wpu_lbs is not none else 0) }}">
+        </td>
         <td>{{ it.noun }}</td>
         <td>{{ it.size }}</td>
         <td>{{ it.qty }}</td>
@@ -39,4 +57,81 @@
   </table>
 </details>
 {% endfor %}
+<script defer src="{{ url_for('static', filename='js/propagate.js') }}"></script>
+<script>
+(function(){
+  const hint = document.getElementById('stk-selected-hint');
+  function selectedRows(){
+    return Array.from(document.querySelectorAll('.stock-check:checked'));
+  }
+  function selectedNames(){
+    return Array.from(new Set(selectedRows().map(cb => cb.dataset.name))).filter(Boolean);
+  }
+  function selectedUniqueSizeLbs(){
+    const sizes = Array.from(new Set(selectedRows().map(cb => cb.dataset.sizeLbs).filter(Boolean)));
+    return sizes.length === 1 ? parseFloat(sizes[0]) : null;
+  }
+  function updateHint(){
+    const n = selectedNames();
+    if (!n.length) { hint.textContent = 'No items selected'; return; }
+    hint.textContent = `${n.length} item name${n.length>1?'s':''} selected`;
+  }
+  document.addEventListener('change', e=>{
+    if (e.target.classList.contains('stock-check')) updateHint();
+  });
+
+  async function chooseCategoryId(){
+    try {
+      const r = await fetch("{{ url_for('inventory.api_inventory_categories') }}");
+      const j = await r.json();
+      const cats = (j.categories||[]);
+      return new Promise(resolve=>{
+        const wrap = document.createElement('div');
+        Object.assign(wrap.style,{position:'fixed',inset:0,display:'flex',alignItems:'center',justifyContent:'center',background:'rgba(0,0,0,.35)',zIndex:9999});
+        wrap.innerHTML = `
+          <div style="background:#fff;padding:16px 16px 12px;border-radius:12px;min-width:320px;">
+            <h3 style="margin:.25rem 0 0 0;">Choose category</h3>
+            <select id="stk-cat-sel" style="margin-top:.5rem;min-width:280px;">
+              ${cats.map(c=>`<option value="${c.id}">${c.display_name}</option>`).join('')}
+            </select>
+            <div style="display:flex;gap:.5rem;justify-content:flex-end;margin-top:1rem;">
+              <button type="button" id="stk-cat-cancel">Cancel</button>
+              <button type="button" id="stk-cat-apply">Apply</button>
+            </div>
+          </div>`;
+        document.body.appendChild(wrap);
+        wrap.querySelector('#stk-cat-cancel').onclick = ()=>{ wrap.remove(); resolve(null); };
+        wrap.querySelector('#stk-cat-apply').onclick  = ()=>{ const v = wrap.querySelector('#stk-cat-sel').value; wrap.remove(); resolve(v); };
+      });
+    } catch { return null; }
+  }
+
+  document.getElementById('stk-bulk-cat').addEventListener('click', async ()=>{
+    const names = selectedNames(); if (!names.length) return alert('Select one or more item names first.');
+    const cid = await chooseCategoryId(); if (!cid) return;
+    try {
+      await window.Propagate.previewBulk('category', names, {new_category_id: cid}, null, ()=>location.reload());
+    } catch(_){}
+  });
+
+  document.getElementById('stk-bulk-rename').addEventListener('click', async ()=>{
+    const names = selectedNames(); if (!names.length) return alert('Select one or more item names first.');
+    const newn = prompt('New sanitized name for selected items:'); if (!newn) return;
+    try {
+      await window.Propagate.previewBulk('name', names, {new_name: newn}, null, ()=>location.reload());
+    } catch(_){}
+  });
+
+  document.getElementById('stk-bulk-weight').addEventListener('click', async ()=>{
+    const names = selectedNames(); if (!names.length) return alert('Select rows first.');
+    const oldw = selectedUniqueSizeLbs();
+    if (!oldw) return alert('To change weight, select rows that share a single size.');
+    const neww = parseFloat(prompt(`New weight (lbs). Current selected size: ${oldw} lbs`)||'0');
+    if (!neww || neww<=0) return;
+    try {
+      await window.Propagate.previewBulk('weight', names, {new_weight_per_unit: neww}, oldw, ()=>location.reload());
+    } catch(_){}
+  });
+})();
+</script>
 {% endblock %}
