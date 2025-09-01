@@ -1,0 +1,55 @@
+{# Partial: queued flights table. Expects `queued` list. #}
+{% if queued %}
+  <table class="full-bleed">
+    <thead>
+      <tr>
+        <th>ID / ✏️ / 🗑</th>
+        <th>Dir</th>
+        <th>Tail</th>
+        <th>To</th>
+        <th>Travel Time</th>
+        <th>Type</th>
+        <th>Remarks</th>
+        <th>Queued At</th>
+        <th>Send</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for q in queued %}
+      <tr>
+        <td>
+          {{ q.id }}
+          <a href="{{ url_for('ramp.edit_queued_flight', qid=q.id) }}"
+             class="icon-btn" title="Edit">✏️</a>
+          <a href="{{ url_for('ramp.delete_queued_flight', qid=q.id) }}"
+             class="icon-btn"
+             onclick="return confirm('Delete draft {{ q.id }} ?')"
+             title="Delete">🗑</a>
+        </td>
+        <td>{{ q.direction }}</td>
+        <td>{{ q.tail_number }}</td>
+        <td>{{ q['airfield_landing'] or '—' }}</td>
+        <td>
+          {% if q.travel_time %}
+            {{ q.travel_time[:2] }}:{{ q.travel_time[2:] }}
+          {% endif %}
+        </td>
+        <td>{{ q.cargo_type }}</td>
+        <td>{{ q.remarks }}</td>
+        <td>{{ q.created_at }}</td>
+        <td>
+          <form method="post"
+                class="q-send-form"
+                data-tt="{{ q.travel_time or '' }}"
+                action="{{ url_for('ramp.send_queued_flight', qid=q.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit">Send</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <p>No flights are currently queued.</p>
+{% endif %}

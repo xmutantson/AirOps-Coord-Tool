@@ -758,16 +758,117 @@ def queue_flight():
 
 @bp.route('/queued_flights')
 def queued_flights():
-    rows = dict_rows("""
+    # Filters from querystring
+    tail_filter = (request.args.get('tail_filter') or '').strip().upper()
+    airport_filter = (request.args.get('airport_filter') or '').strip().upper()
+
+    # Normalize comma-separated lists (dedup while preserving order)
+    def _csv_list(val: str) -> list[str]:
+        seen = set()
+        out: list[str] = []
+        for tok in (val or '').split(','):
+            t = tok.strip().upper()
+            if not t or t in seen:
+                continue
+            seen.add(t)
+            out.append(t)
+        return out
+
+    tails = _csv_list(tail_filter)
+    airports_input = _csv_list(airport_filter)
+
+    # Expand airport tokens via aliases (ident, ICAO, IATA, GPS, local)
+    airport_idents: list[str] = []
+    if airports_input:
+        acc = []
+        for code in airports_input:
+            try:
+                acc.extend(airport_aliases(code))
+            except Exception:
+                acc.append(code)
+        # dedupe while preserving order
+        airport_idents = list(dict.fromkeys([a.strip().upper() for a in acc if a and a.strip()]))
+
+    # Build query
+    base_sql = """
       SELECT id, direction, tail_number,
-             airfield_takeoff, airfield_landing,   -- ▼ add landing
+             airfield_takeoff, airfield_landing,
              travel_time, cargo_type, remarks, created_at
         FROM queued_flights
-       ORDER BY created_at DESC
-    """)
-    return render_template('queued_flights.html',
-                           queued=rows,
-                           active='queued_flights')
+       WHERE 1=1
+    """
+    where = []
+    params: list = []
+    if tails:
+        ph = ",".join(["?"] * len(tails))
+        where.append(f"AND tail_number IN ({ph})")
+        params.extend(tails)
+    if airport_idents:
+        ph = ",".join(["?"] * len(airport_idents))
+        where.append(f"AND airfield_landing IN ({ph})")
+        params.extend(airport_idents)
+    sql = " ".join([base_sql, *where, "ORDER BY created_at DESC"])
+    rows = dict_rows(sql, tuple(params))
+
+    return render_template(
+        'queued_flights.html',
+        queued=rows,
+        active='queued_flights',
+        tail_filter=tail_filter,
+        airport_filter=airport_filter
+    )
+
+@bp.get('/queued_flights/_table')
+def queued_flights_table_partial():
+    """Partial table for AJAX refresh (same filters as /queued_flights)."""
+    tail_filter = (request.args.get('tail_filter') or '').strip().upper()
+    airport_filter = (request.args.get('airport_filter') or '').strip().upper()
+
+    def _csv_list(val: str) -> list[str]:
+        seen = set()
+        out: list[str] = []
+        for tok in (val or '').split(','):
+            t = tok.strip().upper()
+            if not t or t in seen:
+                continue
+            seen.add(t)
+            out.append(t)
+        return out
+
+    tails = _csv_list(tail_filter)
+    airports_input = _csv_list(airport_filter)
+
+    airport_idents: list[str] = []
+    if airports_input:
+        acc = []
+        for code in airports_input:
+            try:
+                acc.extend(airport_aliases(code))
+            except Exception:
+                acc.append(code)
+        airport_idents = list(dict.fromkeys([a.strip().upper() for a in acc if a and a.strip()]))
+
+    base_sql = """
+      SELECT id, direction, tail_number,
+             airfield_takeoff, airfield_landing,
+             travel_time, cargo_type, remarks, created_at
+        FROM queued_flights
+       WHERE 1=1
+    """
+    where = []
+    params: list = []
+    if tails:
+        ph = ",".join(["?"] * len(tails))
+        where.append(f"AND tail_number IN ({ph})")
+        params.extend(tails)
+    if airport_idents:
+        ph = ",".join(["?"] * len(airport_idents))
+        where.append(f"AND airfield_landing IN ({ph})")
+        params.extend(airport_idents)
+    sql = " ".join([base_sql, *where, "ORDER BY created_at DESC"])
+    rows = dict_rows(sql, tuple(params))
+
+    return render_template('partials/_queued_flights_table.html', queued=rows)
 
 @bp.route('/send_queued_flight/<int:qid>', methods=['POST','GET'])
 def send_queued_flight(qid):

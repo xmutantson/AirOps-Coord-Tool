@@ -2,89 +2,144 @@
 {% block title %}Queued Flights – Aircraft Ops{% endblock %}
 
 {% block content %}
-  <h2>Queued Flights</h2>
-  {% if queued %}
-    <table class="full-bleed">
-      <thead>
-        <tr>
-          <th>ID / ✏️ / 🗑</th><th>Dir</th><th>Tail</th><th>To</th>
-          <th>Travel Time</th><th>Type</th><th>Remarks</th><th>Queued At</th><th>Send</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for q in queued %}
-        <tr>
-          <td>
-            {{ q.id }}
-            <a href="{{ url_for('ramp.edit_queued_flight', qid=q.id) }}"
-               class="icon-btn" title="Edit">✏️</a>
-            <a href="{{ url_for('ramp.delete_queued_flight', qid=q.id) }}"
-               class="icon-btn"
-               onclick="return confirm('Delete draft {{q.id}} ?')"
-               title="Delete">🗑</a>
-          </td>
-          <td>{{ q.direction }}</td>
-          <td>{{ q.tail_number }}</td>
-          <td>{{ q['airfield_landing'] or '—' }}</td>
-          <td>
-            {% if q.travel_time %}
-              {{ q.travel_time[:2] }}:{{ q.travel_time[2:] }}
-            {% endif %}
-          </td>
-          <td>{{ q.cargo_type }}</td>
-          <td>{{ q.remarks }}</td>
-          <td>{{ q.created_at }}</td>
-          <td>
-            {# Send-Now form gets travel-time so JS can compute ETA locally #}
-            <form method="post"
-                  class="q-send-form"
-                  data-tt="{{ q.travel_time or '' }}"
-                  action="{{ url_for('ramp.send_queued_flight', qid=q.id) }}">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <button type="submit">Send</button>
-            </form>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  {% else %}
-    <p>No flights are currently queued.</p>
-  {% endif %}
+  <div class="page-header-bar">
+    <span class="page-title">Queued Flights</span>
+    <form id="filter-form"
+          style="display:flex; gap:0.5rem; margin-top:0.5rem; width:100%;">
+      <input
+        id="tail-filter"
+        name="tail_filter"
+        class="force-upper"
+        type="text"
+        placeholder="Filter tail (comma-separated)…"
+        value="{{ tail_filter or '' }}"
+        style="flex:1; padding:0.4em; border-radius:4px; border:1px solid #ccc;"
+        autocomplete="off">
+      <input
+        id="airport-filter"
+        name="airport_filter"
+        class="force-upper"
+        type="text"
+        placeholder="Filter destination (comma-separated… accepts ICAO/IATA/FAA)"
+        value="{{ airport_filter or '' }}"
+        style="flex:1; padding:0.4em; border-radius:4px; border:1px solid #ccc;"
+        autocomplete="off">
+      <button type="submit"
+              class="btn-secondary"
+              style="flex:0 0 auto; padding:0.5em 1em; align-self:stretch;">
+        Apply filters
+      </button>
+      <button type="button"
+              id="clear-filters"
+              class="danger"
+              style="flex:0 0 auto; padding:0.5em 1em; align-self:stretch;">
+        Clear filters
+      </button>
+    </form>
+  </div>
+
+  <div id="queued-container" class="{% if tail_filter or airport_filter %}filtered{% endif %}">
+    {% if tail_filter or airport_filter %}
+      <div id="filter-banner" class="filter-banner">
+        <strong>⚠️ Filtered view:</strong>
+        {% if tail_filter %}
+          <span class="filter-tag">Tail: {{ tail_filter }}</span>
+        {% endif %}
+        {% if airport_filter %}
+          <span class="filter-tag">Airport: {{ airport_filter }}</span>
+        {% endif %}
+      </div>
+    {% endif %}
+    <div id="queued-table"></div>
+  </div>
 
   <script>
-    // helper utilities (same math used in Ramp-Boss)
+    // ---------- helpers (same math used in Ramp-Boss) ----------
     function nowHHMM () {
       const d = new Date();
       return d.getHours().toString().padStart(2,'0') +
              d.getMinutes().toString().padStart(2,'0');
     }
-    function addHHMM (start, delta){          // “1425” + “0135” => “1600”
-      const sh = +start.slice(0,2), sm=+start.slice(2);
-      const dh = +delta.slice(0,2), dm=+delta.slice(2);
-      const tot = (sh*60+sm + dh*60+dm) % 1440;
-      return String(Math.floor(tot/60)).padStart(2,'0') +
-             String(tot%60).padStart(2,'0');
+    function addHHMM (start, delta) {  // “1425” + “0135” => “1600”
+      const sh = +start.slice(0, 2), sm = +start.slice(2);
+      const dh = +delta.slice(0, 2), dm = +delta.slice(2);
+      const tot = (sh * 60 + sm + dh * 60 + dm) % 1440;
+      return String(Math.floor(tot / 60)).padStart(2, '0') +
+             String(tot % 60).padStart(2, '0');
     }
 
-    // attach once DOM is ready
-    document.addEventListener('DOMContentLoaded',()=>{
-      document.querySelectorAll('form.q-send-form').forEach(f=>{
-        f.addEventListener('submit', e=>{
-          // browser-local take-off
-          const dep   = nowHHMM();
-          const tt    = f.dataset.tt || '';
-          const eta   = tt.length===4 ? addHHMM(dep, tt) : '';
-          // inject hidden fields
-          ['takeoff_time', 'eta'].forEach((n,i)=>{
-            const v = i===0?dep:eta;
-            if(!v) return;
+    // Re-attach send-form handlers after each refresh
+    function attachSendFormHandlers(root) {
+      (root || document).querySelectorAll('form.q-send-form').forEach(f => {
+        // Avoid stacking multiple listeners across refreshes
+        if (f._aoctBound) return;
+        f._aoctBound = true;
+        f.addEventListener('submit', () => {
+          const dep = nowHHMM();
+          const tt  = f.dataset.tt || '';
+          const eta = tt.length === 4 ? addHHMM(dep, tt) : '';
+          [['takeoff_time', dep], ['eta', eta]].forEach(([n, v]) => {
+            if (!v) return;
             const inp = document.createElement('input');
-            inp.type='hidden'; inp.name=n; inp.value=v;
+            inp.type = 'hidden'; inp.name = n; inp.value = v;
             f.appendChild(inp);
           });
-        }, {once:true});   // run only on first click
+        });
       });
+    }
+
+    async function refreshQueued() {
+      try {
+        const resp = await fetch(
+          '{{ url_for("ramp.queued_flights_table_partial") }}' + window.location.search
+        );
+        if (!resp.ok) throw new Error(resp.status);
+        const html = await resp.text();
+        const container = document.getElementById('queued-table');
+        container.innerHTML = html;
+        attachSendFormHandlers(container);
+      } catch (err) {
+        console.error('Queued refresh failed:', err);
+      }
+    }
+
+    // initial + periodic refresh
+    refreshQueued();
+    setInterval(refreshQueued, 30000);
+
+    // Filter form behavior (dashboard-style normalization)
+    document.getElementById('filter-form').addEventListener('submit', e => {
+      e.preventDefault();
+      const form = e.target;
+      const qs = new URLSearchParams(window.location.search);
+      const norm = name => Array.from(
+        form[name].value.split(',')
+          .map(s => s.trim().toUpperCase())
+          .filter(Boolean)
+      ).join(',');
+      const tails = norm('tail_filter');
+      if (tails) qs.set('tail_filter', tails); else qs.delete('tail_filter');
+      const aps = norm('airport_filter');
+      if (aps) qs.set('airport_filter', aps); else qs.delete('airport_filter');
+      window.location.search = qs.toString();
     });
+
+    document.getElementById('clear-filters').addEventListener('click', () => {
+      document.getElementById('tail-filter').value = '';
+      document.getElementById('airport-filter').value = '';
+      const qs = new URLSearchParams(window.location.search);
+      qs.delete('tail_filter');
+      qs.delete('airport_filter');
+      window.location.search = qs.toString();
+    });
+
+    // Optional: wiggle banner like dashboard
+    const banner = document.getElementById('filter-banner');
+    if (banner) {
+      setInterval(() => {
+        banner.classList.add('wiggle');
+        setTimeout(() => banner.classList.remove('wiggle'), 500);
+      }, 10000);
+    }
   </script>
 {% endblock %}
