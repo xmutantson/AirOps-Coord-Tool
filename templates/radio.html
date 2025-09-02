@@ -69,12 +69,48 @@
 
 <div id="incoming-feedback-container"></div>
 
+<!-- AOCT Reply modal (hidden by default) -->
+<div id="aoct-modal" class="modal" style="display:none;">
+  <div class="modal-window">
+    <button type="button" class="close-modal" id="aoct-close" title="Close">×</button>
+    <h3 style="margin:0 0 .5rem;">AOCT reply ready</h3>
+    <div class="radio-content-box" style="margin-top:.5rem;">
+      <label class="muted">Subject</label>
+      <textarea id="aoct-subj" rows="2" style="width:100%;"></textarea>
+    </div>
+    <button type="button" id="aoct-copy-subj">Copy Subject</button>
+    <span id="aoct-fb-subj" class="copy-feedback"></span>
+
+    <div class="radio-content-box" style="margin-top:1rem;">
+      <label class="muted">Body</label>
+      <textarea id="aoct-body" rows="10" style="width:100%;"></textarea>
+    </div>
+    <button type="button" id="aoct-copy-body">Copy Body</button>
+    <span id="aoct-fb-body" class="copy-feedback"></span>
+
+    <div class="lookup-row" style="gap:.5rem; align-items:center; margin-top:1rem;">
+      <label for="aoct-to" style="min-width:2rem;">To:</label>
+      <input id="aoct-to" type="text"
+             placeholder="W7WEK, K7ABC; N0CALL"
+             title="Separate multiple with commas, spaces, or semicolons"
+             style="flex:1;"
+             oninput="this.value=this.value.toUpperCase()">
+      <button id="aoct-send" class="btn btn-secondary" title="Send via PAT">Send via PAT</button>
+    </div>
+  </div>
+</div>
+
 <script>
 function normalizeHHMM(t){
   if (!t) return '';
   const digits = String(t).replace(/[^0-9]/g, '');
   return digits ? digits.padStart(4,'0').slice(-4) : 'TBD';
 }
+</script>
+
+<script>
+  // Base URL for Remote Airports page (WinLink route renders the same template)
+  const REMOTE_AIRPORTS_BASE = "{{ url_for('inventory.remote_airports') }}";
 </script>
 
 <script>
@@ -101,6 +137,118 @@ function normalizeHHMM(t){
     });
     if (!resp.ok) return alert('Failed to log incoming.');
     const srvJson = await resp.json();          // contains .action and .id
+
+    // AOCT: if server prepared a reply for a QUERY, show copy-ready fields (and optional PAT send)
+    if (srvJson?.action === 'aoct_query_reply') {
+      // Populate modal fields
+      const subj = srvJson.subject || 'AOCT cargo reply';
+      const body = srvJson.body || '';
+      const toHint = (srvJson.to_hint || '').toUpperCase();
+      const canSend = !!srvJson.can_send;
+      document.getElementById('aoct-subj').value = subj;
+      document.getElementById('aoct-body').value = body;
+      document.getElementById('aoct-to').value   = toHint;
+      const sendBtn = document.getElementById('aoct-send');
+      sendBtn.disabled = !canSend;
+      if (!canSend) sendBtn.title = 'PAT not configured';
+
+      // Open modal
+      const modal = document.getElementById('aoct-modal');
+      modal.style.display = 'flex';
+
+      // Wire close actions (X, ESC, backdrop)
+      const close = ()=>{ modal.style.display='none'; };
+      document.getElementById('aoct-close').onclick = close;
+      modal.addEventListener('click', (ev)=>{ if (ev.target === modal) close(); });
+      document.addEventListener('keydown', function onEsc(ev){
+        if (ev.key === 'Escape'){ close(); document.removeEventListener('keydown', onEsc); }
+      });
+
+      // Harmonized copy behavior (same UX as Send Flight page)
+      function copyFrom(elId, fbId){
+        const el = document.getElementById(elId);
+        const text = (el?.value ?? el?.innerText ?? el?.textContent ?? '').toString();
+        const fb = document.getElementById(fbId);
+        const showCheck = () => {
+          fb.textContent = '✔ Copied!';
+          fb.classList.add('visible');
+          setTimeout(()=> fb.classList.remove('visible'), 1200);
+        };
+        // Guard: navigator.clipboard may be undefined on non-secure origins
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          navigator.clipboard.writeText(text).then(showCheck).catch(()=> fallbackCopy(text, showCheck));
+        } else {
+          fallbackCopy(text, showCheck);
+        }
+      }
+      function fallbackCopy(text, cb){
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus(); ta.select();
+        try { document.execCommand('copy'); } catch(_){}
+        document.body.removeChild(ta);
+        cb();
+      }
+      document.getElementById('aoct-copy-subj').onclick = ()=> copyFrom('aoct-subj','aoct-fb-subj');
+      document.getElementById('aoct-copy-body').onclick = ()=> copyFrom('aoct-body','aoct-fb-body');
+
+      // Send via PAT (ad-hoc)
+      sendBtn.onclick = async ()=>{
+        const to = document.getElementById('aoct-to').value.trim().toUpperCase();
+        if (!to){ alert('Enter a destination callsign.'); return; }
+        const fd = new URLSearchParams({
+          to,
+          subject: document.getElementById('aoct-subj').value,
+          body:    document.getElementById('aoct-body').value
+        });
+        const r = await fetch('{{ url_for("radio.aoct_send") }}', {
+          method: 'POST',
+          headers: {'Content-Type':'application/x-www-form-urlencoded'},
+          body: fd
+        });
+        const j = await r.json().catch(()=>({ok:false}));
+        if (!r.ok || !j.ok){
+          alert(j.message || 'PAT send failed.');
+        } else {
+          alert('AOCT reply sent via PAT.');
+          close();
+        }
+      };
+
+      incomingForm.reset();
+      return;
+    }
+
+    // AOCT: if server ingested a remote snapshot, show a compact banner and stop.
+    if (srvJson && typeof srvJson.action === 'string' && srvJson.action.startsWith('aoct_')) {
+      if (srvJson.action === 'aoct_ingested') {
+        const ap   = srvJson.airport || '';
+        const rows = srvJson.rows ?? 0;
+        const tot  = srvJson.total_lb ?? 0;
+        feedbackBox.innerHTML = `
+          <div class="radio-content-box">
+            <strong>AOCT snapshot ingested</strong><br>
+            Airport: ${ap || '(unknown)'} • Rows: ${rows} • Total: ${tot} lb<br>
+            <a class="btn btn-secondary" href="${REMOTE_AIRPORTS_BASE}?airport=${encodeURIComponent(ap)}">
+              Open Remote Airports
+            </a>
+          </div>`;
+        setTimeout(() => { feedbackBox.innerHTML = ''; }, 15000);
+      } else if (srvJson.action === 'aoct_query_ignored') {
+        feedbackBox.innerHTML = `
+          <div class="radio-content-box">
+            AOCT query received. Paste the <em>AOCT cargo reply</em> or <em>AOCT cargo status</em> to ingest.
+          </div>`;
+        setTimeout(() => { feedbackBox.innerHTML = ''; }, 8000);
+      } else {
+        alert('AOCT message could not be ingested.');
+      }
+      incomingForm.reset();
+      return; // don’t run the Air Ops parsing/feedback UI
+    }
 
     // --- locally parse subject/body -----------------------------------
     /*--------------------------------------------------------------

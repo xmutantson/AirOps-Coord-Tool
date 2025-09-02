@@ -17,19 +17,14 @@ CREATE TABLE IF NOT EXISTS remote_inventory_rows (
 
 INDEXES = [
   "CREATE INDEX IF NOT EXISTS idx_remote_airport ON remote_inventory_rows(airport)",
-  "CREATE INDEX IF NOT EXISTS idx_remote_airport_time ON remote_inventory_rows(airport, generated_at)"
+  "CREATE INDEX IF NOT EXISTS idx_remote_airport_time ON remote_inventory_rows(airport, generated_at)",
+  "CREATE INDEX IF NOT EXISTS idx_remote_airport_cat_time ON remote_inventory_rows(airport, category, generated_at)"
 ]
-
-def ensure_remote_inventory_tables():
-    with sqlite3.connect(DB_FILE) as c:
-        c.executescript(DDL)
-        for stmt in INDEXES:
-            c.execute(stmt)
-        c.commit()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 1: Snapshot builder (server-local)
 # ─────────────────────────────────────────────────────────────────────────────
+import logging
 from typing import List, Dict, Tuple, Optional
 from modules.utils.common import dict_rows, iso8601_ceil_utc, get_preference
 from datetime import datetime
@@ -38,6 +33,7 @@ import io
 import re
 
 _tok_re = re.compile(r"[^a-z0-9]+")
+log = logging.getLogger(__name__)
 
 def _sanitize_token(s: str) -> str:
     """Lowercase, strip, collapse non-alphanumerics → single hyphens."""
@@ -97,6 +93,23 @@ def build_inventory_snapshot(category_tokens: Optional[List[str]] = None) -> Tup
             "total_weight_lb": tw,
         })
 
+    # If specific categories were requested, include empty categories with qty 0 (spec §2)
+    if want:
+        # Map sanitized token -> canonical category display name
+        cat_rows = dict_rows("SELECT display_name FROM inventory_categories")
+        tok2cat = { _sanitize_token(cr['display_name']): (cr['display_name'] or "") for cr in cat_rows }
+        requested_cats = [tok2cat[t] for t in want if t in tok2cat]
+        present_cats = { dr["category"] for dr in data_rows }
+        for cat in requested_cats:
+            if cat not in present_cats:
+                data_rows.append({
+                    "category": cat,
+                    "item": "-",
+                    "unit_weight_lb": 0.0,
+                    "quantity": 0,
+                    "total_weight_lb": 0.0,
+                })
+
     # Python struct
     snapshot = {
         "generated_at": _now_iso(),
@@ -112,26 +125,44 @@ def build_inventory_snapshot(category_tokens: Optional[List[str]] = None) -> Tup
         }
     }
 
-    # Human summary string
+    # Human summary (spec format)
     lines: List[str] = []
     airport = snapshot["airport"] or "UNKNOWN"
-    lines.append(f"AOCT cargo snapshot for {airport} @ {snapshot['generated_at']}")
-    if want:
-        lines.append("Categories: " + ", ".join(sorted(want)))
-    lines.append(f"Lines: {len(data_rows)}   Total weight: {round(total_weight,1)} lb")
-    if per_cat:
-        lines.append("By category:")
-        for cat, w in sorted(per_cat.items(), key=lambda kv: (-kv[1], kv[0])):
-            lines.append(f"  • {cat}: {round(w,1)} lb")
+    lines.append(f"AOCT inventory @ {airport} (as of {snapshot['generated_at']})")
+    lines.append("Units: pounds")
+    lines.append("")  # blank line before category sections
+    # group items by category
+    by_cat: Dict[str, List[Dict]] = {}
+    for r in data_rows:
+        by_cat.setdefault(r["category"], []).append(r)
+    for cat in sorted(by_cat.keys()):
+        lines.append(f"{cat}")
+        for r in by_cat[cat]:
+            name = r["item"]
+            wpu  = float(r["unit_weight_lb"])
+            qty  = int(r["quantity"])
+            tot  = float(r["total_weight_lb"])
+            lines.append(f"  • {name} — {wpu:.1f} lb × {qty} = {tot:.1f} lb")
+        lines.append("")  # blank line after each category block
+    # trim potential trailing blank
+    while lines and not lines[-1].strip():
+        lines.pop()
     human = "\n".join(lines)
 
-    # CSV string (category,item,unit_weight_lb,quantity,total_weight_lb)
-    buf = io.StringIO()
-    w = csv.writer(buf)
-    w.writerow(["category", "item", "unit_weight_lb", "quantity", "total_weight_lb"])
+    # CSV block (spec format) including airport column, and prefixed with literal "CSV" line
+    csv_buf = io.StringIO()
+    csv_w   = csv.writer(csv_buf)
+    csv_w.writerow(["airport","category","sanitized_name","weight_per_unit_lb","quantity","total_lb"])
     for r in data_rows:
-        w.writerow([r["category"], r["item"], r["unit_weight_lb"], r["quantity"], r["total_weight_lb"]])
-    csv_text = buf.getvalue().strip()
+        csv_w.writerow([
+            airport,
+            r["category"],
+            r["item"],
+            r["unit_weight_lb"],
+            r["quantity"],
+            r["total_weight_lb"],
+        ])
+    csv_text = "CSV\n" + csv_buf.getvalue().strip()
 
     return snapshot, human, csv_text
 
@@ -161,37 +192,49 @@ def ensure_remote_inventory_tables():
 
 def _extract_csv_block(body: str) -> str | None:
     """
-    Find the CSV block. Prefer lines after a 'CSV:' marker; otherwise accept
-    a body that already starts at the CSV header.
+    Pull the CSV portion out of an AOCT reply/status body.
+    Strategy:
+      1) If a line equals 'CSV' or 'CSV:', take everything after it.
+      2) Else, locate the first known header anywhere and take from there.
+    Accepts Rev-B and legacy headers. Returns None if no header found.
     """
     if not body:
         return None
-    lines = body.splitlines()
-    # 1) Look for an explicit CSV: marker
+    # normalize newlines and strip common leading/trailing junk
+    text = body.replace("\r\n", "\n").replace("\r", "\n")
+    lines = text.splitlines()
+    # 1) look for explicit CSV marker
     for i, ln in enumerate(lines):
-        if ln.strip().lower().startswith("csv:"):
-            block = "\n".join(lines[i+1:]).strip()
-            if "category,item,unit_weight_lb,quantity,total_weight_lb" in block.lower():
-                return block
-            # If marker exists but header isn't on the next line, try to locate header below
-            for j in range(i+1, len(lines)):
-                hdr = lines[j].strip().lower()
-                if hdr.startswith("category,item,unit_weight_lb,quantity,total_weight_lb"):
-                    return "\n".join(lines[j:]).strip()
+        if ln.strip().lower() in ("csv", "csv:"):
+            after = "\n".join(lines[i+1:]).strip()
+            # possibly there are blank lines before the header; find the header inside
+            lower = after.lower()
+            for hdr in (
+                "airport,category,sanitized_name,weight_per_unit_lb,quantity,total_lb",
+                "category,item,unit_weight_lb,quantity,total_weight_lb",
+            ):
+                j = lower.find(hdr)
+                if j >= 0:
+                    log.debug("AOCT parse: CSV marker found; header starts with %s", hdr.split(",")[0])
+                    return after[j:].strip()
+            # no header below marker → treat as no CSV
+            log.debug("AOCT parse: CSV marker present but no known header below it")
             return None
-    # 2) No marker → accept if body itself looks like CSV
-    body_l = body.strip().lower()
-    if body_l.startswith("category,item,unit_weight_lb,quantity,total_weight_lb"):
-        return body.strip()
-    # 3) Fallback: find header anywhere inside
-    idx = body_l.find("category,item,unit_weight_lb,quantity,total_weight_lb")
-    if idx >= 0:
-        return body[idx:].strip()
+    # 2) no marker: try to find a header anywhere in the body
+    lower_body = text.lower()
+    for hdr in (
+        "airport,category,sanitized_name,weight_per_unit_lb,quantity,total_lb",
+        "category,item,unit_weight_lb,quantity,total_weight_lb",
+    ):
+        k = lower_body.find(hdr)
+        if k >= 0:
+            log.debug("AOCT parse: CSV header found without marker; header starts with %s", hdr.split(",")[0])
+            return text[k:].strip()
     return None
 
-_human_hdr_re = re.compile(
-    r"(?im)^\s*AOCT\s+cargo\s+snapshot\s+for\s+([A-Z0-9\-]{3,6})\s*@\s*([0-9TZ:\-\.+ ]+)"
-)
+_human_hdr_re  = re.compile(r"(?im)^\s*AOCT\s+cargo\s+snapshot\s+for\s+([A-Z0-9\-]{3,6})\s*@\s*([0-9TZ:\-\.+ ]+)")
+# spec header: "AOCT inventory @ <AP> (as of <ISO>Z)"
+_human_hdr_re2 = re.compile(r"(?im)^\s*AOCT\s+inventory\s*@\s*([A-Z0-9\-]{3,6})\s*\(\s*as\s+of\s+([0-9TZ:\-\.+ ]+)\s*\)")
 
 def _parse_human_snapshot(body: str) -> tuple[str | None, str | None, dict]:
     """
@@ -202,7 +245,7 @@ def _parse_human_snapshot(body: str) -> tuple[str | None, str | None, dict]:
         return None, None, {}
     airport = None
     generated_at = None
-    m = _human_hdr_re.search(body or "")
+    m = _human_hdr_re.search(body or "") or _human_hdr_re2.search(body or "")
     if m:
         airport = (m.group(1) or "").strip().upper()
         generated_at = (m.group(2) or "").strip()
@@ -243,10 +286,19 @@ def _parse_csv_snapshot(csv_text: str) -> list[dict]:
     if not csv_text:
         return []
     rows: list[dict] = []
-    rdr = csv.DictReader(io.StringIO(csv_text))
+    # tolerate stray BOMs/ZWSPs
+    cleaned = csv_text.replace("\ufeff", "").replace("\u200b", "")
+    rdr = csv.DictReader(io.StringIO(cleaned))
     for r in rdr:
+        # normalize field names across legacy/spec
+        name = (r.get("item") or r.get("sanitized_name") or "").strip()
         try:
-            unit = float(r.get("unit_weight_lb") or r.get("unit_weight_lbs") or 0.0)
+            unit = float(
+                r.get("unit_weight_lb")
+                or r.get("weight_per_unit_lb")
+                or r.get("unit_weight_lbs")
+                or 0.0
+            )
         except Exception:
             unit = 0.0
         try:
@@ -254,12 +306,12 @@ def _parse_csv_snapshot(csv_text: str) -> list[dict]:
         except Exception:
             qty = 0
         try:
-            tw = float(r.get("total_weight_lb") or 0.0)
+            tw = float(r.get("total_weight_lb") or r.get("total_lb") or 0.0)
         except Exception:
             tw = round(unit * qty, 1)
         rows.append({
             "category": (r.get("category") or "").strip(),
-            "item": (r.get("item") or "").strip(),
+            "item": name,
             "unit_weight_lb": unit,
             "quantity": qty,
             "total_weight_lb": round(tw, 1),
@@ -294,8 +346,13 @@ def parse_remote_snapshot(subject: str, body: str, sender_call: str | None = Non
     """
     body = body or ""
     csv_text = _extract_csv_block(body) or ""
-    # summary is everything before 'CSV:' if present; otherwise the whole body
-    summary_text = body.split("\nCSV:", 1)[0].strip() if "CSV:" in body else (body or "")
+    # summary is everything before a CSV marker line (CSV or CSV:)
+    summary_text = body
+    for splitter in ("\nCSV:\n", "\nCSV\n"):
+        if splitter in body:
+            summary_text = body.split(splitter, 1)[0]
+            break
+    summary_text = summary_text.strip()
 
     # Human header is where airport/timestamp live
     ap_from_human, generated_at, totals_human = _parse_human_snapshot(body)
@@ -332,18 +389,69 @@ def parse_remote_snapshot(subject: str, body: str, sender_call: str | None = Non
         "totals": totals or {},
     }
     canon = canonical_airport_code(airport) if airport else None
+    # Fallback: if we have an airport string but couldn't canonicalize it, accept it as-is
+    if not canon and airport:
+        canon = airport
+
+    try:
+        log.debug(
+            "AOCT parse: airport=%s canon=%s rows=%d has_csv=%s",
+            airport, canon, len(rows), bool(csv_text)
+        )
+    except Exception:
+        pass
     return canon, snapshot, summary_text, csv_text
 
-def upsert_remote_inventory(airport_canon: str | None, snapshot: dict, received_at_iso: str,
-                            summary_text: str = "", csv_text: str = "", source_callsign: str | None = None) -> None:
+def upsert_remote_inventory(
+    airport_canon: str | None,
+    snapshot: dict,
+    received_at_iso: str,
+    summary_text: str = "",
+    csv_text: str = "",
+    source_callsign: str | None = None,
+    *,
+    mode: str | None = None,
+    coverage_categories: Optional[List[str]] = None,
+    is_full: Optional[bool] = None,
+) -> None:
     """
-    Store latest snapshot for an airport (remote_inventory) and expand per-item
-    rows into remote_inventory_rows for analytics/UI.
+    Store latest snapshot for an airport (remote_inventory) and expand per-item rows.
+
+    Optional kwargs (ignored safely if callers don’t provide them):
+      • mode: 'status' (full) or 'reply' (partial). Defaults to 'reply'.
+      • coverage_categories: list of category names covered by this snapshot (strings).
+      • is_full: explicit boolean full-snapshot flag. If True, overrides mode to full.
+    Partial updates delete only covered categories for that airport; full updates
+    replace all rows for the airport.
     """
     if not airport_canon:
         return
     ensure_remote_inventory_tables()
     snap_at = (snapshot.get("generated_at") or _now_iso()).strip()
+
+    # Normalize update intent
+    m = (mode or "").strip().lower()
+    if m not in ("status", "reply"):
+        m = "reply"
+    full = bool(is_full) or (m == "status")
+    cov = sorted({
+        (c or "").strip().upper()
+        for c in (coverage_categories or [])
+        if (c or "").strip()
+    })
+
+    # If this is a partial reply but caller didn't pass coverage categories,
+    # derive them from the snapshot rows so we only replace what we cover.
+    if not full and not cov:
+        try:
+            cov = sorted({
+                (r.get("category") or "").strip().upper()
+                for r in (snapshot.get("rows") or [])
+                if (r.get("category") or "").strip()
+            })
+        except Exception:
+            cov = []
+
     with sqlite3.connect(DB_FILE) as c:
         # Keep the "last snapshot per airport" table up to date
         c.execute("""
@@ -356,24 +464,128 @@ def upsert_remote_inventory(airport_canon: str | None, snapshot: dict, received_
             csv_text    = excluded.csv_text
         """, (airport_canon, snap_at, received_at_iso, summary_text or "", csv_text or ""))
 
-        # If we have rows, refresh the detailed table for this (airport, generated_at)
+        # Retention for per-item rows
+        if full:
+            # Full replacement (status): clear everything for this airport
+            c.execute("DELETE FROM remote_inventory_rows WHERE airport=?", (airport_canon,))
+        elif cov:
+            # Partial/layered: delete only rows for covered categories
+            placeholders = ",".join("?" for _ in cov)
+            params = [airport_canon] + cov
+            c.execute(
+                f"DELETE FROM remote_inventory_rows WHERE airport=? AND UPPER(category) IN ({placeholders})",
+                params
+            )
         rows = snapshot.get("rows") or []
-        if rows:
-            c.execute("DELETE FROM remote_inventory_rows WHERE airport=? AND generated_at=?", (airport_canon, snap_at))
-            for r in rows:
-                c.execute("""
-                  INSERT INTO remote_inventory_rows(
-                    airport, generated_at, received_at,
-                    category, sanitized_name, weight_per_unit_lb, quantity, total_weight_lb,
-                    source_callsign
-                  ) VALUES (?,?,?,?,?,?,?,?,?)
-                """, (
-                  airport_canon, snap_at, received_at_iso,
-                  r.get("category") or "",
-                  r.get("item") or "",
-                  float(r.get("unit_weight_lb") or 0.0),
-                  int(r.get("quantity") or 0),
-                  float(r.get("total_weight_lb") or 0.0),
-                  (source_callsign or None)
-                ))
+        for r in rows:
+            # Skip empty/placeholder lines so they don't render as blank rows
+            try:
+                qty = int(r.get("quantity") or 0)
+                tot = float(r.get("total_weight_lb") or 0.0)
+                if qty <= 0 and tot <= 0:
+                    continue
+            except Exception:
+                pass
+            c.execute("""
+              INSERT INTO remote_inventory_rows(
+                airport, generated_at, received_at,
+                category, sanitized_name, weight_per_unit_lb, quantity, total_weight_lb,
+                source_callsign
+              ) VALUES (?,?,?,?,?,?,?,?,?)
+            """, (
+              airport_canon, snap_at, received_at_iso,
+              r.get("category") or "",
+              r.get("item") or "",
+              float(r.get("unit_weight_lb") or 0.0),
+              int(r.get("quantity") or 0),
+              float(r.get("total_weight_lb") or 0.0),
+              (source_callsign or None)
+            ))
         c.commit()
+
+def get_layered_remote_rows(airport_canon: str) -> tuple[list[dict], dict]:
+    """
+    Build a merged, per-category-latest view for a remote airport.
+    Returns (rows, meta) where:
+      - rows: item rows at the newest generated_at *per category*
+              (so partial replies layer on top of older/full snapshots)
+              Each row includes 'updated_at' (that category's timestamp).
+      - meta: {
+          'last_full_at': best-effort time of the most recent 'full' snapshot
+                          (heuristic: the newest generated_at that has rows
+                          for *all* currently-known categories),
+          'per_category': {CategoryName: ISO-ish timestamp}
+        }
+    """
+    ensure_remote_inventory_tables()
+    if not airport_canon:
+        return [], {}
+    with sqlite3.connect(DB_FILE) as c:
+        c.row_factory = sqlite3.Row
+        # Per-category latest timestamp
+        per_cat = dict_rows("""
+          WITH last_per_cat AS (
+            SELECT UPPER(category) AS ucat, MAX(generated_at) AS g
+              FROM remote_inventory_rows
+             WHERE airport = ?
+             GROUP BY UPPER(category)
+          )
+          SELECT r.category, l.g AS updated_at
+            FROM last_per_cat l
+            JOIN remote_inventory_rows r
+              ON r.airport = ?
+             AND UPPER(r.category) = l.ucat
+             AND r.generated_at = l.g
+           GROUP BY r.category
+           ORDER BY r.category
+        """, (airport_canon, airport_canon))
+        # Materialize a map Category -> updated_at
+        cat_ts: dict[str, str] = {r['category']: r['updated_at'] for r in per_cat}
+
+        # Pull all item rows at those category timestamps
+        rows = dict_rows("""
+          WITH last_per_cat AS (
+            SELECT UPPER(category) AS ucat, MAX(generated_at) AS g
+              FROM remote_inventory_rows
+             WHERE airport = ?
+             GROUP BY UPPER(category)
+          )
+          SELECT r.airport,
+                 r.generated_at,
+                 r.category,
+                 r.sanitized_name,
+                 r.weight_per_unit_lb AS wpu,
+                 r.quantity           AS qty,
+                 r.total_weight_lb    AS total
+            FROM remote_inventory_rows r
+            JOIN last_per_cat l
+              ON UPPER(r.category) = l.ucat
+             AND r.generated_at    = l.g
+           WHERE r.airport = ?
+           ORDER BY r.category, r.sanitized_name, r.weight_per_unit_lb
+        """, (airport_canon, airport_canon))
+        # Attach per-category updated_at to each row
+        for r in rows:
+            r['updated_at'] = cat_ts.get(r['category'], r.get('generated_at', ''))
+
+        # Heuristic "last full" time: newest timestamp that has rows for
+        # all categories we currently know about (from per_cat).
+        last_full_at = ""
+        try:
+            want_cats = len(cat_ts) or 0
+            if want_cats:
+                cur = c.execute("""
+                  WITH stamp_counts AS (
+                    SELECT generated_at, COUNT(DISTINCT UPPER(category)) AS cats
+                      FROM remote_inventory_rows
+                     WHERE airport = ?
+                     GROUP BY generated_at
+                  )
+                  SELECT MAX(generated_at) FROM stamp_counts WHERE cats >= ?
+                """, (airport_canon, want_cats)).fetchone()
+                last_full_at = (cur[0] or "") if cur else ""
+        except Exception:
+            last_full_at = ""
+
+    meta = {"last_full_at": last_full_at, "per_category": cat_ts}
+    return rows, meta

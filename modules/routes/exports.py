@@ -204,6 +204,53 @@ def export_remote_inventory_csv():
         flash(f"Snapshot for {canon} has no CSV.", "error")
         return redirect(url_for('preferences.preferences'))
 
-    buf = io.BytesIO(csv_text.encode('utf-8'))
+    # ── Normalize to spec CSV header:
+    # airport,category,sanitized_name,weight_per_unit_lb,quantity,total_lb
+    # Accept legacy headers and rewrite.
+    text = csv_text.strip()
+    # Drop any leading "CSV" marker line if present
+    first_line = (text.splitlines()[0] if text else "").strip().lower()
+    if first_line in ("csv", "csv:"):
+        text = "\n".join(text.splitlines()[1:])
+
+    rdr = csv.DictReader(io.StringIO(text))
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(["airport","category","sanitized_name","weight_per_unit_lb","quantity","total_lb"])
+
+    def _to_float(x, default=0.0):
+        try:
+            return float(x)
+        except Exception:
+            return default
+    def _to_int(x, default=0):
+        try:
+            return int(float(x))
+        except Exception:
+            return default
+
+    for r in rdr:
+        ap   = (r.get("airport") or canon or "").strip().upper()
+        cat  = (r.get("category") or "").strip()
+        name = (r.get("sanitized_name") or r.get("item") or "").strip()
+        wpu  = (
+            r.get("weight_per_unit_lb") or
+            r.get("unit_weight_lb") or
+            r.get("unit_weight_lbs") or
+            ""
+        )
+        qty  = r.get("quantity") or ""
+        tot  = r.get("total_lb") or r.get("total_weight_lb") or ""
+
+        wpu_f = _to_float(wpu, 0.0)
+        qty_i = _to_int(qty, 0)
+        tot_f = _to_float(tot, 0.0)
+        if not tot and (wpu_f and qty_i):
+            tot_f = round(wpu_f * qty_i, 1)
+
+        w.writerow([ap, cat, name, wpu_f, qty_i, round(tot_f, 1)])
+
+    out.seek(0)
+    buf = io.BytesIO(out.getvalue().encode('utf-8'))
     fname = f"remote_inventory_{canon}.csv"
     return send_file(buf, mimetype='text/csv', as_attachment=True, download_name=fname)

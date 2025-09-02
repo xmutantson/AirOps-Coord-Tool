@@ -1,4 +1,6 @@
 import random
+import re
+import logging
 
 import uuid
 import time
@@ -29,6 +31,99 @@ from modules.utils.remote_inventory import (
 from app import DB_FILE, scheduler
 from flask import current_app
 app = current_app  # legacy shim for helpers
+# ── Logging bootstrap: prefer Flask's app.logger; fall back to a stdout handler ──
+def _get_logger():
+    try:
+        return app.logger  # inherits Flask/Waitress handlers/level
+    except Exception:
+        l = logging.getLogger("aoct.jobs")
+        if not l.handlers:
+            h = logging.StreamHandler()
+            h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+            l.addHandler(h)
+        if l.level == logging.NOTSET:
+            l.setLevel(logging.INFO)
+        return l
+LOG = _get_logger()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Alias helpers
+# ─────────────────────────────────────────────────────────────────────────────
+def _self_alias_canons() -> set:
+    """
+    Return the set of canonical airport codes (ICAO-preferred) that represent
+    our own station's airport, including all known aliases (ICAO/IATA/FAA/GPS/local).
+    """
+    raw = (get_preference('default_origin') or '').strip().upper()
+    if not raw:
+        return set()
+    try:
+        aliases = set(airport_aliases(raw) or [])
+    except Exception:
+        aliases = set()
+    aliases.add(raw)
+    out = set()
+    for a in aliases:
+        try:
+            c = canonical_airport_code(a)
+        except Exception:
+            c = None
+        if c:
+            out.add(c)
+    return out
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Winlink helpers (CC fan-out compatible with older core)
+# ─────────────────────────────────────────────────────────────────────────────
+def _winlink_ccs() -> list[str]:
+    out = []
+    try:
+        for i in (1, 2, 3):
+            v = (get_preference(f"winlink_cc_{i}") or "").strip().upper()
+            if v:
+                out.append(v)
+    except Exception:
+        pass
+    return out
+
+def _send_with_optional_cc(to_addr: str, subject: str, body: str, include_cc: bool=False) -> bool:
+    """
+    Try to use send_winlink_message(..., cc=[...]) if available; otherwise
+    send primary then best-effort fan-out to CC recipients. Mirrors radio.py behavior.
+    """
+    cc_list = _winlink_ccs() if include_cc else []
+    try:
+        if cc_list:
+            ok = send_winlink_message(to_addr, subject, body, cc=cc_list)  # type: ignore
+        else:
+            ok = send_winlink_message(to_addr, subject, body)
+        return bool(ok)
+    except TypeError:
+        # Core lacks cc kwarg → send primary + fan-out
+        primary_ok = False
+        try:
+            primary_ok = bool(send_winlink_message(to_addr, subject, body))
+        except Exception:
+            primary_ok = False
+        if primary_ok and cc_list:
+            for cc in cc_list:
+                try:
+                    send_winlink_message(cc, subject, body)
+                except Exception:
+                    pass
+        return primary_ok
+
+# Only for Winlink email bodies: make human-readable sections ASCII-safe.
+def _wl_ascii(s):
+    if not s:
+        return s
+    # Narrow replacements: keep CSV untouched elsewhere.
+    return (
+        s.replace('•', '*')
+         .replace('—', '-')
+         .replace('–', '-')
+         .replace('×', 'x')
+    )
 
 def _shutdown_scheduler():
     try:
@@ -158,7 +253,7 @@ def process_inbound_schedule():
     if remaining <= 0:
         return
 
-    default_dest = (get_preference('default_origin') or '').strip().upper()
+    self_alias_canons = _self_alias_canons()
     with sqlite3.connect(DB_FILE) as c:
         c.row_factory = sqlite3.Row
         candidates = c.execute("""
@@ -171,9 +266,11 @@ def process_inbound_schedule():
 
     created = 0
     for f in candidates:
-        # Filter to default origin when configured
-        if default_dest and (f['airfield_landing'] or '').strip().upper() != default_dest:
-            continue
+        # Filter to default origin when configured — match ANY alias (canonicalized)
+        if self_alias_canons:
+            dest_canon = canonical_airport_code(f.get('airfield_landing') or '')
+            if not dest_canon or dest_canon not in self_alias_canons:
+                continue
         # Must be ≥ 5 minutes old
         try:
             born = datetime.fromisoformat(f['timestamp'])
@@ -404,7 +501,9 @@ def auto_winlink_send_job():
          WHERE direction='outbound' AND sent=0
     """)
     for f in flights:
-        dest = f['airfield_landing'].upper()
+        dest = (f.get('airfield_landing') or '').strip().upper()
+        dest_canon = canonical_airport_code(dest)
+
         # load mappings
         raw = get_preference('airport_call_mappings') or ''
         mapping = {}
@@ -418,7 +517,7 @@ def auto_winlink_send_job():
             mapping[canon] = addr
             seen_canon[canon] = addr
 
-        to_addr = mapping.get(dest)
+        to_addr = mapping.get(dest_canon)
         if not to_addr:
             continue
 
@@ -608,12 +707,28 @@ def process_unparsed_winlink_messages():
     """APScheduler job: parse any new inbound WinLink messages."""
     # fetch all un‐parsed inbound messages
     msgs = dict_rows("""
-      SELECT id, callsign, subject, body, timestamp
+      SELECT id, callsign, sender, subject, body, timestamp
         FROM winlink_messages
        WHERE direction='in' AND parsed=0
     """)
 
+    # Always emit a heartbeat at INFO so you can see it's running
+    try:
+        LOG.info("Winlink parse tick: %d unparsed inbound message(s)", len(msgs))
+        if not msgs:
+            LOG.info("Winlink parser: nothing to do this tick.")
+    except Exception:
+        pass
+
     for m in msgs:
+        try:
+            LOG.info("WL inbound[%s]: subj=%r from=%r ts=%r",
+                     m.get('id'),
+                     m.get('subject'),
+                     (m.get('sender') or m.get('callsign') or ''),
+                     m.get('timestamp'))
+        except Exception:
+            pass
         # normalize receive time once
         raw_ts = m.get('timestamp')
         try:
@@ -641,8 +756,16 @@ def process_unparsed_winlink_messages():
                 conn.execute("UPDATE winlink_messages SET parsed=1 WHERE id=?", (m['id'],))
             continue
 
+        # normalize subject once for routing
+        subj_norm = (m.get('subject') or '').strip().lower()
+
         # ── Phase 3: Remote inventory replies/status ───────────────────────────
         if subj_norm in ('aoct cargo reply', 'aoct cargo status'):
+            try:
+                LOG.info("AOCT snapshot ingest path: subject=%r", m.get('subject'))
+            except Exception:
+                pass
+            # NOTE: broadcasts are treated as "full" snapshots; replies as "partial"
             # Mirror raw mail for audit
             with sqlite3.connect(DB_FILE) as conn:
                 conn.execute("""
@@ -661,17 +784,47 @@ def process_unparsed_winlink_messages():
                 m.get('subject') or '', m.get('body') or '', m.get('sender') or ''
             )
 
-            # Ignore if neither CSV nor human header could be parsed
+            # ── Guard: do NOT ingest snapshots that target our own station (alias-aware) ──
+            try:
+                self_alias_canons = _self_alias_canons()
+            except Exception:
+                self_alias_canons = set()
+            if ap_canon and (ap_canon in self_alias_canons):
+                try: app.logger.info("AOCT ingest skipped for our own station: %s", ap_canon)
+                except Exception: pass
+                with sqlite3.connect(DB_FILE) as conn:
+                    conn.execute("UPDATE winlink_messages SET parsed=1 WHERE id=?", (m['id'],))
+                continue
+
             has_rows = bool(snapshot.get('rows'))
-            has_header = bool(snapshot.get('airport') or snapshot.get('generated_at'))
-            if ap_canon and (has_rows or has_header):
+            # Tighten: only overwrite when we have valid CSV rows
+            if ap_canon and has_rows:
+                # Derive coverage + mode for layered updates
+                mode = ('status' if subj_norm == 'aoct cargo status' else 'reply')
+                coverage_categories = sorted({
+                    (r.get('category') or '').strip().upper()
+                    for r in (snapshot.get('rows') or [])
+                    if (r.get('category') or '').strip()
+                })
+                is_full = (mode == 'status')
+
+                try:
+                    LOG.info("AOCT ingest: airport=%s rows=%d mode=%s",
+                             ap_canon, len(snapshot.get('rows') or []), mode)
+                except Exception:
+                    pass
+                # New args (backward compatible if util ignores extras)
                 upsert_remote_inventory(
                     ap_canon,
                     snapshot,
                     received_at_iso=ts_iso,
                     summary_text=summary_text,
                     csv_text=csv_text,
-                    source_callsign=(m.get('sender') or None)
+                    source_callsign=(m.get('sender') or None),
+                    # ─ layered ingest hints ─
+                    mode=mode,
+                    coverage_categories=coverage_categories,
+                    is_full=is_full,
                 )
 
             # Mark parsed either way (we already mirrored the inbound)
@@ -680,11 +833,15 @@ def process_unparsed_winlink_messages():
             continue
 
         # ── Phase 1: AOCT cargo query ─────────────────────────────────────────
-        subj_norm = (m.get('subject') or '').strip().lower()
         if subj_norm == 'aoct cargo query':
+            try:
+                LOG.info("AOCT query received: id=%s from=%r", m.get('id'), (m.get('sender') or m.get('callsign') or ''))
+            except Exception:
+                pass
             # Mirror inbound query to incoming_messages for audit
             with sqlite3.connect(DB_FILE) as conn:
-                conn.execute("""
+                cur = conn.cursor()
+                cur.execute("""
                     INSERT INTO incoming_messages(
                         sender, subject, body, timestamp,
                         tail_number, airfield_takeoff, airfield_landing,
@@ -694,20 +851,115 @@ def process_unparsed_winlink_messages():
                     (m.get('sender') or ''), (m.get('subject') or ''), (m.get('body') or ''), ts_iso,
                     '', '', '', '', '', '', '', ''
                 ))
+                incoming_id = cur.lastrowid
             # Parse the query body
             q = parse_aoct_cargo_query(m.get('body') or '')
+            try: LOG.info("AOCT query parsed: %s", q)
+            except Exception: pass
+            # ── Guard: reply-to airport purports to be our own station (alias-aware) ──
+            self_alias_canons = _self_alias_canons()
+            reply_ap = (q.get('airport') or '')
+            if self_alias_canons and reply_ap in self_alias_canons:
+                # Surface a clear operator note and skip auto-reply.
+                note = (
+                    "AOCT: parsing aborted — reply address airport matches our own station "
+                    f"({reply_ap}). No auto-reply sent."
+                )
+                try:
+                    with sqlite3.connect(DB_FILE) as conn:
+                        conn.execute("UPDATE incoming_messages SET remarks=? WHERE id=?", (note, incoming_id))
+                        conn.execute("UPDATE winlink_messages SET parsed=1 WHERE id=?", (m['id'],))
+                except Exception:
+                    with sqlite3.connect(DB_FILE) as conn:
+                        conn.execute("UPDATE winlink_messages SET parsed=1 WHERE id=?", (m['id'],))
+                continue
+            # If airport token did not canonicalize → politely error out
+            if not (q.get('airport') or ''):
+                reply_subject = "AOCT cargo reply"
+                reply_body = "airport not recognized"
+                auto_reply = (get_preference('auto_reply_enabled') or 'yes').strip().lower() == 'yes'
+                to_addr = (m.get('sender') or '').strip() or (m.get('callsign') or '').strip()
+                if auto_reply and pat_config_exists() and to_addr:
+                    send_winlink_message(to_addr, reply_subject, reply_body)
+                with sqlite3.connect(DB_FILE) as conn:
+                    conn.execute("UPDATE winlink_messages SET parsed=1 WHERE id=?", (m['id'],))
+                continue
             # Build the snapshot (filter by categories if provided)
-            snapshot, human, csv_text = build_inventory_snapshot(q.get('categories') or [])
+            # Sanitize category tokens so blank CATEGORIES: doesn't create "csv-yes"
+            raw_tokens = q.get('categories') or []
+            def _canon_tok(s: str) -> str:
+                return re.sub(r"[^a-z0-9]+", "-", (s or "").strip().lower()).strip("-")
+            _DROP = {"csv", "yes", "no", "csv-yes", "csv-no"}
+            requested_tokens = []
+            for t in raw_tokens:
+                ct = _canon_tok(t)
+                if not ct or ct in _DROP:
+                    continue
+                requested_tokens.append(ct)
+            try:
+                logger.debug("AOCT query tokens: raw=%r → requested=%r", raw_tokens, requested_tokens)
+            except Exception:
+                pass
+            snapshot, human, csv_text = build_inventory_snapshot(requested_tokens)
+            # Human-only notice for unknown category tokens; list live categories from DB
+            def _tok_norm_local(s: str) -> str:
+                return re.sub(r"[^a-z0-9]+", "-", (s or "").strip().lower()).strip("-")
+            rows = dict_rows("SELECT id, display_name FROM inventory_categories ORDER BY display_name ASC")
+            known_tokens = {_tok_norm_local(r.get('display_name') or '') for r in rows}
+            unknown = [t for t in requested_tokens if t not in known_tokens]
+            if unknown:
+                try: LOG.info("AOCT query unknown category token(s): %s", ", ".join(sorted(set(unknown))))
+                except Exception: pass
+                available_names = [r['display_name'] for r in rows]
+                notice_lines = [
+                    "Unknown category token(s): " + ", ".join(sorted(set(unknown))),
+                    "Categories available at this site are: " + ", ".join(available_names),
+                ]
+                human = ("\n".join(notice_lines) + ("\n\n" + (human or "")).rstrip()).strip()
             airport = q.get('airport') or (get_preference('default_origin') or '').strip().upper() or 'UNKNOWN'
-            reply_subject = f"AOCT cargo snapshot — {airport}"
-            reply_body = human
-            if q.get('wants_csv', True) and csv_text:
-                reply_body += "\n\nCSV:\n" + csv_text
+            # Subjects/bodies per spec
+            reply_subject = "AOCT cargo reply"
+            wants_csv = bool(q.get('wants_csv', True))
+            # ASCII-normalize only the human-readable portion for Winlink delivery.
+            send_human = _wl_ascii(human)
+            reply_body_to_send = send_human + (("\n\n" + csv_text) if (wants_csv and csv_text) else "")
+            # Honor auto-reply preference (spec §6.1, §9)
+            auto_reply = (get_preference('auto_reply_enabled') or 'yes').strip().lower() == 'yes'
             # Choose a reply-to (prefer real From:; fall back to callsign bucket)
             to_addr = (m.get('sender') or '').strip() or (m.get('callsign') or '').strip()
+            include_cc = (get_preference('aoct_cc_reply') or 'no').strip().lower() == 'yes'
+            try:
+                LOG.info("AOCT auto-reply decision: auto_reply=%s pat_ok=%s to=%r cc=%s wants_csv=%s airport=%s",
+                         auto_reply, pat_config_exists(), to_addr, include_cc, wants_csv, airport)
+            except Exception:
+                pass
             ok = False
-            if pat_config_exists() and to_addr:
-                ok = send_winlink_message(to_addr, reply_subject, reply_body)
+            if auto_reply and pat_config_exists() and to_addr:
+                ok = _send_with_optional_cc(to_addr, reply_subject, reply_body_to_send, include_cc=include_cc)
+                try: LOG.info("AOCT auto-reply send: ok=%s to=%r subject=%r", ok, to_addr, reply_subject)
+                except Exception: pass
+                if ok:
+                    # Mirror into winlink_messages for observability
+                    try:
+                        cs = (get_preference('winlink_callsign_1') or '').strip().upper()
+                        with sqlite3.connect(DB_FILE) as conn:
+                            conn.execute("""
+                                INSERT INTO winlink_messages(direction, callsign, sender, subject, body, timestamp)
+                                VALUES('out', ?, ?, ?, ?, ?)
+                            """, (cs, cs, reply_subject, reply_body_to_send, iso8601_ceil_utc()))
+                    except Exception as e:
+                        try: LOG.debug("AOCT auto-reply mirror failed: %s", e)
+                        except Exception: pass
+            elif not auto_reply:
+                try: LOG.info("AOCT auto-reply suppressed by preference (auto_reply_enabled=no).")
+                except Exception: pass
+            else:
+                # Either PAT not configured or no destination
+                try:
+                    LOG.warning("AOCT auto-reply skipped: pat_ok=%s to_addr=%r",
+                                   pat_config_exists(), to_addr)
+                except Exception:
+                    pass
             # Mark parsed regardless; we’ve recorded the inbound either way
             with sqlite3.connect(DB_FILE) as conn:
                 conn.execute("UPDATE winlink_messages SET parsed=1 WHERE id=?", (m['id'],))
@@ -716,6 +968,8 @@ def process_unparsed_winlink_messages():
 
         # run your existing parser
         parsed_data = parse_winlink(m['subject'], m['body'])
+        try: LOG.info("Inbound id=%s parsed as flight update (tail=%s)", m.get('id'), parsed_data.get('tail_number'))
+        except Exception: pass
 
         # ── upsert flight record and record history ─────────────────────
         with sqlite3.connect(DB_FILE) as conn:
@@ -1124,8 +1378,8 @@ def inventory_auto_broadcast_job():
             return
         # Recipients
         raw_map = (get_preference('airport_call_mappings') or '').strip()
-        self_ap = (get_preference('default_origin') or '').strip().upper()
         self_cs = (get_preference('winlink_callsign_1') or '').strip().upper()
+        self_alias_canons = _self_alias_canons()
         mapping = {}
         for ln in raw_map.splitlines():
             if ':' not in ln:
@@ -1137,7 +1391,9 @@ def inventory_auto_broadcast_job():
                 mapping[k] = v
         recipients = []
         for ap, wl in mapping.items():
-            if ap == self_ap or wl == self_cs:
+            ap_canon = canonical_airport_code(ap)
+            # Skip our own airport by ANY alias (canonicalized), and skip our own callsign
+            if (ap_canon and ap_canon in self_alias_canons) or wl == self_cs:
                 continue
             recipients.append(wl)
         seen = set()
@@ -1145,9 +1401,31 @@ def inventory_auto_broadcast_job():
         if not recipients:
             set_preference('last_auto_broadcast_tick', tick)
             return
-        subject = f"AOCT inventory broadcast — {(snapshot.get('airport') or self_ap or 'UNKNOWN')}"
-        body = human + ("\n\nCSV:\n" + csv_text if csv_text else "")
-        for to in recipients:
+        subject = "AOCT cargo status"
+        # csv_text already begins with "CSV\n"
+        # ASCII-normalize only the human-readable portion for Winlink delivery.
+        body_human_ascii = _wl_ascii(human)
+        body = body_human_ascii + (("\n\n" + csv_text) if csv_text else "")
+        # Honor Broadcast CC toggle: fan-out to CC addrs once total (not per recipient)
+        cc_enabled = (get_preference('aoct_cc_broadcast') or 'no').strip().lower() == 'yes'
+        targets = list(recipients)
+        if cc_enabled:
+            self_cs = (get_preference('winlink_callsign_1') or '').strip().upper()
+            cc_raw = [
+                (get_preference('winlink_cc_1') or '').strip().upper(),
+                (get_preference('winlink_cc_2') or '').strip().upper(),
+                (get_preference('winlink_cc_3') or '').strip().upper(),
+            ]
+            for cc in cc_raw:
+                if not cc:
+                    continue
+                if cc == self_cs:
+                    continue
+                if cc not in seen:
+                    seen.add(cc)
+                    targets.append(cc)
+
+        for to in targets:
             send_winlink_message(to, subject, body)
         set_preference('last_auto_broadcast_tick', tick)
     except Exception as e:

@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}AOCT Cargo Query – Compose{% endblock %}
+{% block content %}
+  <h2>Compose AOCT Cargo Query</h2>
+  <p class="muted">Ask a remote airport to send their current inventory snapshot. Queries are manual by design so we don’t spam remote sites.</p>
+
+  <div class="ramp-form-container" style="max-width:680px;">
+    <form id="aoct-query-form" onsubmit="return false;">
+      <label for="to">To (callsign)</label>
+      <input id="to" name="to" required placeholder="REMOTE1" autocomplete="off" {{ '' if can_send else 'disabled' }}>
+
+      <label for="airport">Airport</label>
+      <input id="airport" name="airport" required placeholder="e.g., KELN or ELN" autocomplete="off">
+
+      <label for="categories">Categories (optional, comma-separated)</label>
+      <input id="categories" name="categories" placeholder="e.g., medical,water,mre">
+
+      <label for="csv">Include CSV in reply?</label>
+      <select id="csv" name="csv">
+        <option value="yes" selected>Yes</option>
+        <option value="no">No</option>
+      </select>
+
+      <div class="form-buttons" style="margin-top:.75rem;">
+        <button id="btn-send" type="submit" {{ '' if can_send else 'disabled' }}>Send via PAT</button>
+        <a href="{{ url_for('inventory.broadcast') }}" class="btn btn-secondary">Back to Broadcast</a>
+      </div>
+      {% if not can_send %}
+        <p class="muted" style="margin-top:.5rem;">PAT isn’t configured; set your Winlink callsign/password in Preferences.</p>
+      {% endif %}
+    </form>
+  </div>
+
+  <script>
+    // simple hint map: { "KELN":"CALL1", "ELN":"CALL1", ... }
+    const MAP = {{ map_json|safe }};
+    function canon(ap){
+      ap = String(ap||'').trim().toUpperCase();
+      if (!ap) return '';
+      // 3 or 4 char → map ELN→KELN, or keep as-is if already 4
+      if (ap.length === 3) return 'K' + ap;
+      return ap;
+    }
+    const apInput = document.getElementById('airport');
+    const toInput = document.getElementById('to');
+    apInput.addEventListener('input', () => {
+      const ap = canon(apInput.value);
+      if (MAP[ap]) toInput.placeholder = MAP[ap];
+    });
+
+    document.getElementById('aoct-query-form').addEventListener('submit', async () => {
+      const to  = toInput.value.trim().toUpperCase() || toInput.placeholder.trim().toUpperCase();
+      const ap  = canon(apInput.value);
+      const cat = document.getElementById('categories').value;
+      const csv = document.getElementById('csv').value;
+      if (!to) { alert('Enter a destination callsign.'); return; }
+      if (!ap) { alert('Enter an airport code.'); return; }
+      if (!confirm(`Send AOCT cargo query to ${to} for ${ap}?`)) return;
+      const resp = await fetch('{{ url_for("inventory.aoct_query_send") }}', {
+        method: 'POST',
+        headers: {'Content-Type':'application/x-www-form-urlencoded'},
+        body: new URLSearchParams({to, airport: ap, categories: cat, csv})
+      });
+      const data = await resp.json().catch(()=>({success:false}));
+      if (!resp.ok || !data.success){
+        alert(data.message || 'Failed to send query.');
+        return;
+      }
+      alert('Query sent via PAT.');
+    });
+  </script>
+{% endblock %}

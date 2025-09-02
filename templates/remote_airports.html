@@ -3,10 +3,58 @@
 {% block content %}
   <h2>Remote Airports</h2>
 
-  {% if airports %}
-    {% include "partials/_remote_airports_table.html" %}
-  {% else %}
-    <p>No remote inventory snapshots yet.</p>
+  {# DETAIL CONTROLS (Back + Clear) #}
+  {% if detail_airport %}
+    <div style="margin:.5rem 0 1rem; display:flex; gap:.5rem; align-items:center;">
+      <a href="{{ url_for('inventory.remote_airports') }}" class="btn btn-secondary">← Back</a>
+      <form method="post"
+            action="{{ url_for('inventory.remote_airport_clear', airport=detail_airport) }}"
+            onsubmit="return confirm('Clear stored snapshot for {{ detail_airport }}?');"
+            style="margin-left:auto;">
+        {# Flask-WTF: include CSRF token when available; no-op if not defined #}
+        {% if csrf_token is defined %}
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {% endif %}
+        <button class="btn btn-danger">🗑 Clear snapshot</button>
+      </form>
+    </div>
+  {% endif %}
+
+  {# AOCT: Compose Query toolbar (overview only) #}
+  {% if not detail_airport %}
+    <div style="margin:.5rem 0 1rem; display:flex; gap:.5rem; align-items:center;">
+      <button id="btn-compose-aoct" class="btn btn-secondary">✉️ Compose AOCT Query</button>
+      <span id="aoct-flash" style="font-size:.95em;"></span>
+      <!-- Optional inputs; if not provided by server, defaults keep features graceful -->
+      <input type="hidden" id="aoct-map-json" value='{{ aoct_mapping_json|default("{}")|safe }}'>
+      <input type="hidden" id="aoct-default-origin" value='{{ aoct_default_origin|default("") }}'>
+      <input type="hidden" id="aoct-cc-query-default" value='{{ aoct_cc_query|default("no") }}'>
+    </div>
+  {% endif %}
+
+  {# Dropdown selector (overview only) #}
+  {% if not detail_airport %}
+    <div style="margin: .5rem 0 1rem;">
+      {% if airports %}
+        {% set selected_airport = (detail_airport or request.args.get('airport') or '') %}
+        {% include "partials/_remote_dropdown.html" %}
+      {% endif %}
+    </div>
+  {% endif %}
+
+  {% if detail_generated_at %}
+    <div class="muted" style="margin:.25rem 0 .75rem;">
+      Updated <strong>{{ detail_age_text }}</strong> ago ({{ detail_generated_at }} UTC)
+    </div>
+  {% endif %}
+
+  {# Overview table (overview only) #}
+  {% if not detail_airport %}
+    {% if airports %}
+      {% include "partials/_remote_airports_table.html" %}
+    {% else %}
+      <p>No remote inventory snapshots yet.</p>
+    {% endif %}
   {% endif %}
 
   {% if detail_rows %}
@@ -15,13 +63,19 @@
     <table class="full-bleed">
       <thead>
         <tr>
-          <th>Category</th><th>Name</th><th>WPU</th><th>Qty</th><th>Total (lbs)</th>
+          <th>Category</th>
+          <th>Updated (UTC)</th>
+          <th>Name</th>
+          <th>WPU</th>
+          <th>Qty</th>
+          <th>Total (lbs)</th>
         </tr>
       </thead>
       <tbody>
         {% for r in detail_rows %}
           <tr>
             <td>{{ r.category }}</td>
+            <td>{{ r.updated_at or r.generated_at or '—' }}</td>
             <td>{{ r.sanitized_name }}</td>
             <td>{{ r.wpu }}</td>
             <td>{{ r.qty }}</td>
@@ -31,4 +85,198 @@
       </tbody>
     </table>
   {% endif %}
+
+  <!-- AOCT Compose Modal -->
+  <div id="aoct-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-label="Compose AOCT Query" style="display:none;">
+    <div class="modal-card">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h3 style="margin:0;">Compose AOCT Query</h3>
+        <button type="button" id="aoct-close" class="btn btn-secondary">✖</button>
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <label for="aoct-airport" style="min-width:7rem;">Airport</label>
+        <input id="aoct-airport" placeholder="e.g. KELN or ELN" oninput="this.value=this.value.toUpperCase()" style="flex:1;">
+      </div>
+      <div class="row">
+        <label for="aoct-categories" style="min-width:7rem;">Categories</label>
+        <input id="aoct-categories" placeholder="e.g. MEDICAL SHELTER FOOD WATER" style="flex:1;">
+      </div>
+      <div class="row">
+        <label style="min-width:7rem;">Include CSV</label>
+        <select id="aoct-csv"><option value="yes" selected>Yes</option><option value="no">No</option></select>
+      </div>
+      <div class="row" title="Separate multiple addressees with commas, spaces, or semicolons.">
+        <label for="aoct-to" style="min-width:7rem;">To (callsign/s)</label>
+        <input id="aoct-to" placeholder="W7WEK, K7ABC, N0CALL" style="flex:1;" oninput="this.value=this.value.toUpperCase()">
+      </div>
+      <div class="row">
+        <label style="min-width:7rem;">Include CCs</label>
+        <input id="aoct-include-cc" type="checkbox">
+        <small id="aoct-cc-hint" class="muted"></small>
+      </div>
+      <div class="row" style="gap:.5rem;">
+        <button id="aoct-preview" class="btn btn-primary">Preview</button>
+        <button id="aoct-send" class="btn btn-success" disabled>Send via PAT</button>
+        <small id="aoct-send-hint" style="opacity:.8;">Preview first</small>
+      </div>
+
+      <div id="aoct-preview-box" style="display:none; margin-top:12px;">
+        <div class="row" style="align-items:flex-start;">
+          <label style="min-width:7rem;">Subject</label>
+          <div style="flex:1;">
+            <div class="radio-content-box"><pre id="aoct-subj" style="margin:0;"></pre></div>
+            <button type="button" class="btn btn-secondary" onclick="copyText('aoct-subj','fb-subj')">Copy Subject</button>
+            <span id="fb-subj" class="copy-feedback"></span>
+          </div>
+        </div>
+        <div class="row" style="align-items:flex-start;">
+          <label style="min-width:7rem;">Body</label>
+          <div style="flex:1;">
+            <div class="radio-content-box"><pre id="aoct-body" style="margin:0; white-space:pre-wrap;"></pre></div>
+            <button type="button" class="btn btn-secondary" onclick="copyText('aoct-body','fb-body')">Copy Body</button>
+            <span id="fb-body" class="copy-feedback"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <style>
+    .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:9999;}
+    .modal-card{background:#fff;border-radius:10px;max-width:720px;width:96%;box-shadow:0 10px 35px rgba(0,0,0,.3);padding:16px;}
+    .row{display:flex;gap:.5rem;align-items:center;margin:6px 0;}
+    .radio-content-box{border:1px solid #ddd;padding:8px;border-radius:8px;background:#fafafa;}
+    .copy-feedback{margin-left:8px;opacity:0;transition:opacity .15s;}
+    .copy-feedback.visible{opacity:1;}
+  </style>
+
+  <script>
+    (function(){
+      const sel = document.getElementById('remote-airport');
+      if (!sel) return;
+      sel.addEventListener('change', () => {
+        const ap = sel.value;
+        if (!ap) return;
+        // Navigate to detail route (server-rendered)
+        const base = "{{ url_for('inventory.remote_airport_detail', airport='__AP__') }}";
+        location.href = base.replace('__AP__', ap);
+      });
+      // If we already have a selected airport, make sure the dropdown reflects it
+      const cur = "{{ detail_airport or '' }}";
+      if (cur && sel) {
+        for (const opt of sel.options) {
+          if (opt.value === cur) { opt.selected = true; break; }
+        }
+      }
+    })();
+
+    // --- Copy helpers (fallback mirrors Radio page behavior) ---
+    function copyText(srcId, feedbackId) {
+      const txt = document.getElementById(srcId).innerText;
+      const fb  = document.getElementById(feedbackId);
+      const showCheck = ()=>{ fb.textContent='✔ Copied!'; fb.classList.add('visible'); setTimeout(()=>fb.classList.remove('visible'), 2000); };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(txt).then(showCheck).catch(()=>fallbackCopy(txt, showCheck));
+      } else {
+        fallbackCopy(txt, showCheck);
+      }
+    }
+    function fallbackCopy(text, cb){
+      const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select();
+      try{ document.execCommand('copy'); }catch(_){}
+      document.body.removeChild(ta); cb();
+    }
+
+    // --- AOCT Compose Modal wiring ---
+    (function(){
+      const overlay = document.getElementById('aoct-modal');
+      const btnOpen = document.getElementById('btn-compose-aoct');
+      const btnClose= document.getElementById('aoct-close');
+      const air     = document.getElementById('aoct-airport');
+      const cats    = document.getElementById('aoct-categories');
+      const csvSel  = document.getElementById('aoct-csv');
+      const toEl    = document.getElementById('aoct-to');
+      const prevBtn = document.getElementById('aoct-preview');
+      const sendBtn = document.getElementById('aoct-send');
+      const prevBox = document.getElementById('aoct-preview-box');
+      const subjEl  = document.getElementById('aoct-subj');
+      const bodyEl  = document.getElementById('aoct-body');
+      const flash   = document.getElementById('aoct-flash');
+      const MAP     = JSON.parse(document.getElementById('aoct-map-json')?.value || '{}');
+      const DEF_AP  = (document.getElementById('aoct-default-origin')?.value || '').toUpperCase();
+      const CC_DEF  = (document.getElementById('aoct-cc-query-default')?.value || 'no').toLowerCase()==='yes';
+      const ccBox   = document.getElementById('aoct-include-cc');
+      const ccHint  = document.getElementById('aoct-cc-hint');
+
+      function canonical(ap){
+        ap=(ap||'').trim().toUpperCase();
+        if (!ap) return '';
+        // mirror simple server canonicalization for FAA 3-letter → KXXX
+        if (/^[A-Z]{3}$/.test(ap)) return 'K' + ap;
+        return ap;
+      }
+      function selectedDropdownAirport(){
+        const sel=document.getElementById('remote-airport');
+        if (sel && sel.value) return sel.value.toUpperCase();
+        return "{{ detail_airport or '' }}".toUpperCase() || (new URLSearchParams(location.search).get('airport')||'').toUpperCase();
+      }
+      function autofillTo(){
+        const canon=canonical(air.value);
+        const mapped = MAP[canon] || MAP[(air.value||'').trim().toUpperCase()] || '';
+        if (mapped && !toEl.value.trim()) toEl.value=mapped;
+      }
+      function openModal(){
+        overlay.style.display='flex';
+        // Don’t default to our own origin; avoid accidental self-targets
+        air.value = selectedDropdownAirport() || '';
+        cats.value=''; csvSel.value='yes'; prevBox.style.display='none'; subjEl.textContent=''; bodyEl.textContent='';
+        toEl.value=''; sendBtn.disabled=true; document.getElementById('aoct-send-hint').textContent='Preview first';
+        flash.textContent='';
+        ccBox.checked = CC_DEF;
+        ccHint.textContent = CC_DEF ? '(default from Preferences: ON)' : '(default from Preferences: OFF)';
+        autofillTo();
+      }
+      function closeModal(){ overlay.style.display='none'; }
+
+      btnOpen?.addEventListener('click', openModal);
+      btnClose?.addEventListener('click', closeModal);
+      overlay?.addEventListener('click', (e)=>{ if (e.target===overlay) closeModal(); });
+      air?.addEventListener('blur', autofillTo);
+
+      prevBtn?.addEventListener('click', async ()=>{
+        const ap=air.value.trim().toUpperCase(); if (!ap){ alert('Enter an airport code.'); return; }
+        const fd=new URLSearchParams({airport:ap, wants_csv:csvSel.value, dry_run:'1'});
+        const cat=cats.value.trim(); if (cat) fd.append('categories', cat);
+        const r=await fetch('{{ url_for("radio.aoct_query") }}', {
+          method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'XMLHttpRequest'}, body:fd.toString()
+        });
+        if (!r.ok){ alert('Preview failed.'); return; }
+        const j=await r.json(); if (!j.ok){ alert(j.message || 'Preview failed.'); return; }
+        subjEl.textContent=j.subject||''; bodyEl.textContent=j.body||'';
+        prevBox.style.display='block'; sendBtn.disabled=false; document.getElementById('aoct-send-hint').textContent='';
+        autofillTo();
+      });
+
+      sendBtn?.addEventListener('click', async ()=>{
+        const ap=air.value.trim().toUpperCase(); const to=toEl.value.trim().toUpperCase();
+        if (!ap){ alert('Enter an airport code.'); return; }
+        if (!to){ alert('Enter destination callsign.'); return; }
+        const fd=new URLSearchParams({airport:ap, wants_csv:csvSel.value, to});
+        const cat=cats.value.trim(); if (cat) fd.append('categories', cat);
+        fd.append('include_cc', ccBox.checked ? '1' : '0');
+        const r=await fetch('{{ url_for("radio.aoct_query") }}', {
+          method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded','X-Requested-With':'XMLHttpRequest'}, body:fd.toString()
+        });
+        const j = r.ok ? (await r.json()) : {ok:false};
+        if (!j.ok && j.code === 'self_target') {
+          flash.textContent = `⚠ ${j.message}`;
+          return;
+        }
+        const ok = !!j.ok;
+        if (ok){ flash.textContent='✅ AOCT query sent via PAT.'; setTimeout(()=>flash.textContent='', 5000); }
+        else { alert('PAT send failed (check PAT config and recipient).'); }
+      });
+    })();
+
+  </script>
 {% endblock %}

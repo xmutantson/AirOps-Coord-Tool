@@ -11,7 +11,7 @@
     {% for r in airports %}
       <tr>
         <td>
-          <a href="{{ url_for('winlink.remote_airports', airport=r.airport) }}">{{ r.airport }}</a>
+          <a href="{{ url_for('inventory.remote_airport_detail', airport=r.airport) }}">{{ r.airport }}</a>
         </td>
         <td>{{ r.generated_at or '—' }}</td>
         <td>{{ r.rows or 0 }}</td>

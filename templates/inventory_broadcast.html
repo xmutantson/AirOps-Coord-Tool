@@ -2,5 +2,147 @@
 {% block title %}Broadcast – Inventory Snapshot{% endblock %}
 {% block content %}
   <h2>Broadcast Inventory</h2>
-  <p>This page will show a now-snapshot (human + CSV) with copy buttons and the current cadence once wired.</p>
+
+  <!-- CSRF token for AJAX posts -->
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+
+  {% if broadcast_warnings %}
+    <div style="background:#fff3cd;border:1px solid #ffe69c;color:#664d03;padding:.6rem .8rem;border-radius:.5rem;margin-bottom:.75rem;">
+      <strong>Heads up:</strong>
+      <ul style="margin:.4rem 0 0 .9rem;">
+        {% for w in broadcast_warnings %}
+          <li>{{ w }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+
+  <div class="lookup-row" style="gap:.5rem; margin:.5rem 0 1rem;">
+    <button id="btn-human"    type="button">Human</button>
+    <button id="btn-csv"      type="button">CSV</button>
+    <button id="btn-both"     type="button">Both</button>
+    <button id="btn-test"     type="button" class="btn-secondary" title="Sends a one-off preview to your configured callsign">Send test message</button>
+    <button id="btn-send-now" type="button" class="btn danger" title="Immediately sends the full snapshot to all mapped recipients">Send now to recipients</button>
+  </div>
+
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem;">
+    <div>
+      <label class="muted">Human preview</label>
+      <textarea id="preview-human" rows="16" style="width:100%;"></textarea>
+    </div>
+    <div>
+      <label class="muted">CSV preview</label>
+      <textarea id="preview-csv" rows="16" style="width:100%;"></textarea>
+    </div>
+  </div>
+
+  <hr style="margin:1.25rem 0;">
+
+  <h3>Schedule</h3>
+  <div class="lookup-row" style="gap:.5rem; align-items:center;">
+    <label for="sched-interval">Auto-broadcast every:</label>
+    <select id="sched-interval" name="interval">
+      <option value="0"  {{ 'selected' if (current_interval|int)==0  else '' }}>Off</option>
+      <option value="15" {{ 'selected' if (current_interval|int)==15 else '' }}>15 minutes</option>
+      <option value="30" {{ 'selected' if (current_interval|int)==30 else '' }}>30 minutes</option>
+      <option value="60" {{ 'selected' if (current_interval|int)==60 else '' }}>60 minutes</option>
+    </select>
+    <button id="btn-apply" type="button">Apply</button>
+    <span id="sched-status" class="muted" style="margin-left:.5rem;"></span>
+  </div>
+
+  <p class="muted" style="margin-top:.75rem;">
+    Recipients are pulled from <em>Preferences → airport_call_mappings</em> (lines like <code>AAA: CALL1</code>).
+    Your own airport/callsign are skipped automatically. The broadcast body mirrors the “Both” preview.
+  </p>
+
+  <script>
+    // ---- CSRF helper ----
+    const CSRF_TOKEN = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
+    const CSRF_HEADERS = {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "X-CSRFToken": CSRF_TOKEN,
+      "X-Requested-With": "XMLHttpRequest"
+    };
+    function postForm(url, params) {
+      return fetch(url, {
+        method: "POST",
+        headers: CSRF_HEADERS,
+        credentials: "same-origin",
+        body: new URLSearchParams(params || {})
+      });
+    }
+
+    async function fetchPreview(kind) {
+      const resp = await postForm("{{ url_for('inventory.broadcast_preview') }}", { kind });
+      if (!resp.ok) throw new Error("Preview failed");
+      return await resp.json();
+    }
+    function setPreviews(human, csv) {
+      document.getElementById('preview-human').value = human || "";
+      document.getElementById('preview-csv').value   = csv   || "";
+    }
+    async function load(kind) {
+      try {
+        const data = await fetchPreview(kind);
+        if (kind === 'human') setPreviews(data.human, "");
+        else if (kind === 'csv') setPreviews("", data.csv);
+        else setPreviews(data.human, data.csv);
+      } catch { /* no-op */ }
+    }
+    document.getElementById('btn-human').addEventListener('click', () => load('human'));
+    document.getElementById('btn-csv').addEventListener('click',   () => load('csv'));
+    document.getElementById('btn-both').addEventListener('click',  () => load('both'));
+    // Initial load shows Both
+    load('both');
+
+    // Schedule apply
+    document.getElementById('btn-apply').addEventListener('click', async () => {
+      const iv = document.getElementById('sched-interval').value;
+      const resp = await postForm("{{ url_for('inventory.broadcast_schedule') }}", { interval: iv });
+      const msg = document.getElementById('sched-status');
+      if (resp.ok) {
+        msg.textContent = "Saved.";
+        setTimeout(() => msg.textContent = "", 2000);
+      } else {
+        msg.textContent = "Failed to save.";
+      }
+    });
+
+    // Test button: actually send via PAT (requires WinLink polling running)
+    document.getElementById('btn-test').addEventListener('click', async () => {
+      try {
+        const resp = await postForm("{{ url_for('inventory.broadcast_test_send') }}");
+        const data = await resp.json().catch(()=>({}));
+        if (!resp.ok || !data.success) {
+          alert(data.message || "Failed to send test message.");
+          return;
+        }
+        alert(`Test message sent via PAT to ${data.to || 'your callsign'}.`);
+      } catch (e) {
+        console.error(e);
+        alert("Failed to send test message.");
+      }
+    });
+
+    // Send-now button: confirmation then full broadcast
+    document.getElementById('btn-send-now').addEventListener('click', async () => {
+      const n = {{ recipient_count or 0 }};
+      if (n <= 0) { alert("No recipients configured."); return; }
+      if (!confirm(`This will send the current snapshot to ${n} recipient${n===1?'':'s'}. Continue?`)) return;
+      try {
+        const resp = await postForm("{{ url_for('inventory.broadcast_send_now') }}");
+        const data = await resp.json().catch(()=>({}));
+        if (!resp.ok || !data.success) {
+          alert(data.message || "Send failed.");
+          return;
+        }
+        const failed = (data.failed || []);
+        alert(`Sent to ${data.sent} of ${data.total} recipients.` + (failed.length ? `\nFailures: ${failed.join(', ')}` : ''));
+      } catch (e) {
+        console.error(e);
+        alert("Send failed.");
+      }
+    });
+  </script>
 {% endblock %}

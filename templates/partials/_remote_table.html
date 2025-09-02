@@ -1,0 +1,41 @@
+{% if rows and rows|length %}
+  <div class="muted small" style="margin-bottom:6px;">
+    Latest snapshot for <strong>{{ airport or rows[0].airport }}</strong>
+    at <code>{{ generated_at or rows[0].generated_at }}</code> (UTC)
+  </div>
+  <table class="full-bleed">
+    <thead>
+      <tr>
+        <th>Updated (UTC)</th>
+        <th>Category</th>
+        <th>Item</th>
+        <th>Unit (lb)</th>
+        <th>Qty</th>
+        <th>Total (lb)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+        <tr>
+          <td>{{ r.updated_at or r.generated_at }}</td>
+          <td>{{ r.category }}</td>
+          <td>{{ r.sanitized_name }}</td>
+          <td>{{ '%.1f'|format(r.wpu or 0) }}</td>
+          <td>{{ r.qty }}</td>
+          <td>{{ '%.1f'|format(r.total or 0) }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      {% set grand = rows|sum(attribute='total') %}
+      <tr>
+        <td colspan="5" class="right"><strong>Total</strong></td>
+        <td><strong>{{ '%.1f'|format(grand or 0) }}</strong></td>
+      </tr>
+    </tfoot>
+  </table>
+{% else %}
+  <p class="muted">
+    No snapshot available{% if airport %} for {{ airport }}{% endif %}.
+  </p>
+{% endif %}

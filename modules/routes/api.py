@@ -326,17 +326,33 @@ def _parse_remote_csv_for_api(csv_text: str):
         return rows, 0, 0.0
     rdr = _csv.reader(_StringIO(csv_text))
     header = next(rdr, [])
-    cols = {name: idx for idx, name in enumerate(header)}
-    need = ['category','item','unit_weight_lb','quantity','total_weight_lb']
-    if not all(n in cols for n in need):
+    header_l = [h.strip().lower() for h in header]
+    cols = {name: idx for idx, name in enumerate(header_l)}
+    # Try legacy header first
+    legacy_need = ['category','item','unit_weight_lb','quantity','total_weight_lb']
+    spec_need   = ['airport','category','sanitized_name','weight_per_unit_lb','quantity','total_lb']
+    mode = None
+    if all(n in cols for n in legacy_need):
+        mode = 'legacy'
+    elif all(n in cols for n in spec_need):
+        mode = 'spec'
+    else:
         return rows, 0, 0.0
     for r in rdr:
         try:
-            cat  = (r[cols['category']] or '').strip()
-            name = (r[cols['item']] or '').strip()
-            wpu  = float(r[cols['unit_weight_lb']] or 0.0)
-            qty  = int(float(r[cols['quantity']] or 0))
-            tot  = float(r[cols['total_weight_lb']] or 0.0)
+            if mode == 'legacy':
+                cat  = (r[cols['category']] or '').strip()
+                name = (r[cols['item']] or '').strip()
+                wpu  = float(r[cols['unit_weight_lb']] or 0.0)
+                qty  = int(float(r[cols['quantity']] or 0))
+                tot  = float(r[cols['total_weight_lb']] or 0.0)
+            else:
+                # spec
+                cat  = (r[cols['category']] or '').strip()
+                name = (r[cols['sanitized_name']] or '').strip()
+                wpu  = float(r[cols['weight_per_unit_lb']] or 0.0)
+                qty  = int(float(r[cols['quantity']] or 0))
+                tot  = float(r[cols['total_lb']] or 0.0)
         except Exception:
             continue
         rows.append({

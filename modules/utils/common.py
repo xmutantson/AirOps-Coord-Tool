@@ -2626,3 +2626,23 @@ def flip_session_pending_to_committed(session_id: str):
              SET pending=0
            WHERE session_id=? AND pending=1
         """, (session_id,))
+
+def lookup_callsign_for_airport(code: str) -> str:
+    """
+    Return mapped Winlink callsign for an airport code (ICAO/IATA/FAA).
+    Uses the 'airport_call_mappings' preference and canonical_airport_code().
+    """
+    try:
+        raw = (get_preference('airport_call_mappings') or '').strip()
+    except Exception:
+        raw = ''
+    canon = canonical_airport_code((code or '').strip())
+    if not canon:
+        return ''
+    for line in raw.splitlines():
+        if ':' not in line:
+            continue
+        ap, wl = (x.strip().upper() for x in line.split(':', 1))
+        if canonical_airport_code(ap) == canon and wl:
+            return wl
+    return ''

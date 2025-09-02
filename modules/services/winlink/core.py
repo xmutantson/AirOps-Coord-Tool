@@ -7,8 +7,7 @@ from typing import Tuple, Optional, List, Dict
 
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
 from app import DB_FILE
-from flask import current_app, has_request_context, request
-app = current_app  # legacy shim for helpers
+from flask import current_app as app, has_request_context, request
 
 # --- Winlink parsing regexes (inserted by fix_all_patches.py) ---
 air_ops_re = re.compile(r'''
@@ -90,6 +89,24 @@ def parse_winlink(subj:str, body:str):
         d['remarks'] = escape(remark_text)
 
     return d
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AOCT helpers
+# ─────────────────────────────────────────────────────────────────────────────
+_SUBJECT_PREFIX = re.compile(r'^(?:\s*(?:subject|subj|re|fw|fwd|ack)\s*:?\s*)+', re.I)
+
+def classify_aoct_subject(subject: str) -> Optional[str]:
+    """
+    Return 'query' | 'reply' | 'status' if the subject contains those AOCT tokens
+    (case/punctuation/ordering insensitive). Otherwise None.
+    """
+    s = _SUBJECT_PREFIX.sub('', subject or '').lower()
+    toks = re.findall(r'[a-z0-9]+', s)
+    st = set(toks)
+    if {'aoct','cargo','query'}.issubset(st):  return 'query'
+    if {'aoct','cargo','reply'}.issubset(st):  return 'reply'
+    if {'aoct','cargo','status'}.issubset(st): return 'status'
+    return None
 
 def _pat_candidate_paths():
     """All places we might find PAT's config.json inside the container."""
@@ -337,7 +354,9 @@ def parse_aoct_cargo_query(body: str) -> Dict:
     m = _q_cats_re.search(body)
     if m:
         raw = m.group(1)
-        cats = [ _tok_norm(x) for x in raw.split(",") if (x or "").strip() ]
+        # accept separators: comma, semicolon, slash, pipe, or multi-space
+        parts = re.split(r"[,\;/\|]+|\s{2,}", raw)
+        cats = [_tok_norm(x) for x in parts if (x or "").strip()]
 
     wants_csv = True
     m = _q_csv_re.search(body)

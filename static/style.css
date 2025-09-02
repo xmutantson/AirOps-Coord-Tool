@@ -256,6 +256,19 @@ button {
 }
 button:hover { background: #d68504; }
 
+/* Generic .btn base (works for <a> and <button>) */
+.btn,
+a.btn {
+  display: inline-block;
+  padding: 0.6em 1.2em;
+  border-radius: var(--radius);
+  text-decoration: none;
+  line-height: 1.2;
+  border: 1px solid transparent;   /* variants set their own border */
+}
+/* Ensure anchor “buttons” inherit text color from variants */
+a.btn { color: inherit; }
+
 /* Button variants: keep both names for compatibility */
 .btn-yellow,
 .btn.yellow {
@@ -779,6 +792,21 @@ table.wg-inbox tr.read .dot,
 table.wg-radio-table tr.read .dot { visibility:hidden; }
 table.wg-inbox tr.read,
 table.wg-radio-table tr.read { opacity: .8; }
+
+/* Copy feedback (used on Send Flight & AOCT modal) */
+.copy-feedback{
+  margin-left: .5rem;
+  color: #2e7d32;            /* green check */
+  opacity: 0;
+  transition: opacity .18s ease-in;
+  font-weight: bold;
+}
+.copy-feedback.visible{ opacity: 1; }
+
+/* Modal minor tweaks for AOCT */
+.modal { display:flex; align-items:center; justify-content:center; }
+.modal-window h3 { margin: 0 0 .25rem; }
+.modal-window .lookup-row label { font-weight: bold; }
 
 /* Radio modal */
 .wg-modal {

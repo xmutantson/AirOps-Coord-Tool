@@ -7,6 +7,8 @@ from modules.utils.http import http_post_json
 from app import DB_FILE
 from flask import Blueprint, current_app
 from flask import flash, make_response, redirect, render_template, request, session, url_for
+from modules.services.jobs import configure_inventory_broadcast_job
+from modules.services.winlink.core import pat_config_status
 bp = Blueprint(__name__.rsplit('.', 1)[-1], __name__)
 app = current_app  # legacy shim if route body references 'app'
 
@@ -89,7 +91,13 @@ def preferences():
             return redirect(url_for('preferences.preferences'))
 
         # ── WinLink Airport→Callsign mappings & CC addrs ─────────
-        if 'airport_codes[]' in request.form or 'winlink_cc_1' in request.form:
+        if (
+            'airport_codes[]' in request.form or
+            'winlink_cc_1' in request.form or
+            'aoct_cc_query' in request.form or
+            'aoct_cc_reply' in request.form or
+            'aoct_cc_broadcast' in request.form
+        ):
             # save airport→WinLink mappings
             if 'airport_codes[]' in request.form:
                 codes   = request.form.getlist('airport_codes[]')
@@ -137,6 +145,12 @@ def preferences():
                               SET value=excluded.value
                         """, (key, val))
 
+            # save AOCT CC toggles
+            for key in ('aoct_cc_query','aoct_cc_reply','aoct_cc_broadcast'):
+                if key in request.form:
+                    val = (request.form.get(key,'no').strip().lower() == 'yes')
+                    set_preference(key, 'yes' if val else 'no')
+
             flash("WinLink mappings and CC addresses saved.", "success")
             return redirect(url_for('preferences.preferences'))
 
@@ -175,6 +189,39 @@ def preferences():
                 raw = (request.form.get('auto_reply_enabled','') or '').strip().lower()
                 val = 'yes' if raw == 'yes' else 'no'
                 set_preference('auto_reply_enabled', val)
+            # (Re)configure the minute-tick job whenever cadence changes
+            try:
+                configure_inventory_broadcast_job()
+            except Exception:
+                pass
+            # Soft guidance: warn if inputs look incomplete
+            try:
+                iv = int(float(get_preference('auto_broadcast_interval_min') or 0))
+            except Exception:
+                iv = 0
+            if iv > 0:
+                pat_ok, pat_path, pat_reason = pat_config_status()
+                # Compute recipients (skip our own airport & callsign)
+                raw_map = (get_preference('airport_call_mappings') or '').strip()
+                self_ap = (get_preference('default_origin') or '').strip().upper()
+                self_cs = (get_preference('winlink_callsign_1') or '').strip().upper()
+                recipients = []
+                seen = set()
+                for ln in raw_map.splitlines():
+                    if ':' not in ln:
+                        continue
+                    ap, wl = (x.strip().upper() for x in ln.split(':', 1))
+                    if not ap or not wl:
+                        continue
+                    if ap == self_ap or wl == self_cs:
+                        continue
+                    if wl not in seen:
+                        seen.add(wl)
+                        recipients.append(wl)
+                if not pat_ok:
+                    flash("Auto-broadcast enabled, but PAT credentials are not configured.", "warning")
+                if not recipients:
+                    flash("Auto-broadcast enabled, but no recipients found in airport_call_mappings.", "warning")
             flash("Remote-airport broadcast/auto-reply settings saved.", "success")
             return redirect(url_for('preferences.preferences'))
 
@@ -290,6 +337,11 @@ def preferences():
     winlink_cc_2 = get_preference('winlink_cc_2') or ''
     winlink_cc_3 = get_preference('winlink_cc_3') or ''
 
+    # AOCT CC toggles
+    aoct_cc_query     = (get_preference('aoct_cc_query') or 'no')
+    aoct_cc_reply     = (get_preference('aoct_cc_reply') or 'no')
+    aoct_cc_broadcast = (get_preference('aoct_cc_broadcast') or 'no')
+
     # NetOps feeder settings
     netops_enabled = (get_preference('netops_enabled') or 'no')
     netops_url     = (get_preference('netops_url') or '')
@@ -308,6 +360,7 @@ def preferences():
         default_origin=default_origin,
         current_code=current_code,
         current_mass=current_mass,
+        distance_unit=distance_unit,
         operator_call=operator_call,
         include_test=include_test,
         current_debug=current_debug,
@@ -318,6 +371,9 @@ def preferences():
         winlink_cc_1=winlink_cc_1,
         winlink_cc_2=winlink_cc_2,
         winlink_cc_3=winlink_cc_3,
+        aoct_cc_query=aoct_cc_query,
+        aoct_cc_reply=aoct_cc_reply,
+        aoct_cc_broadcast=aoct_cc_broadcast,
         # NetOps
         netops_enabled=netops_enabled,
         netops_url=netops_url,

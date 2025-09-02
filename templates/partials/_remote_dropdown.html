@@ -1,0 +1,10 @@
+<select id="remote-airport" name="airport" class="w-100">
+  <option value="">{{ _('Select airport…') if _ else 'Select airport…' }}</option>
+  {# airports: [{airport, generated_at}] #}
+  {% for r in airports %}
+    <option value="{{ r.airport }}"
+            {% if (selected_airport or '') == r.airport %}selected{% endif %}>
+      {{ r.airport }}
+    </option>
+  {% endfor %}
+</select>

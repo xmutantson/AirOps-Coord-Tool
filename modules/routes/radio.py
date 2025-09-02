@@ -4,7 +4,16 @@ import sqlite3, re, json, logging
 from datetime import datetime
 from flask import Blueprint, current_app, flash, jsonify, redirect, render_template, request, url_for
 
-from modules.services.winlink.core import parse_winlink, generate_subject, generate_body
+from modules.services.winlink.core import (
+    parse_winlink, generate_subject, generate_body,
+    parse_aoct_cargo_query, pat_config_status, send_winlink_message
+)
+from modules.utils.remote_inventory import (
+    parse_remote_snapshot,
+    upsert_remote_inventory,
+    ensure_remote_inventory_tables,
+    build_inventory_snapshot,
+)
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
 from modules.utils.common import _start_radio_tx_once, maybe_extract_flight_code, _is_winlink_reflector_bounce  # call run-once starter from this bp
 
@@ -27,6 +36,112 @@ if _wg_finish_real:
 bp = Blueprint('radio', __name__)
 logger = logging.getLogger(__name__)
 
+# --- AOCT subject/body normalization + mapping helpers -----------------------
+_SUBJECT_PREFIX = re.compile(r'^(?:\s*(?:subject|subj|re|fw|fwd|ack)\s*:?\s*)+', re.I)
+_AOCT_PHRASE   = re.compile(r'\baoct\s+cargo\s+(reply|status|query)\b', re.I)
+_AIRPORT_LINE  = re.compile(r'^\s*AIRPORT\s*:\s*([A-Z0-9]{3,4})\b', re.I | re.M)
+
+def _build_aoct_query(airport: str, categories=None, wants_csv: bool=True):
+    """Return (subject, body) for a standards-compliant AOCT cargo query."""
+    ap = (airport or '').strip().upper()
+    cats = [c.strip().upper() for c in (categories or []) if c and c.strip()]
+    subject = "AOCT cargo query"
+    lines = [subject, "", f"AIRPORT: {ap}"]
+    # Always include CATEGORIES:, even if blank (spec permits an empty list)
+    lines.append("CATEGORIES: " + (", ".join(cats) if cats else ""))
+    # Be explicit about CSV preference
+    lines.append("CSV: " + ("YES" if wants_csv else "NO"))
+    # Update spec revision to current
+    lines += ["", "{AOCT cargo query, rev. 2025-09-01}"]
+    return subject, "\n".join(lines)
+
+def _parse_categories(form):
+    """Accept 'categories[]' multi or 'categories' csv/space; return list[str]."""
+    if 'categories[]' in form:
+        return form.getlist('categories[]')
+    raw = (form.get('categories') or '').strip()
+    if not raw:
+        return []
+    return re.split(r'[,\s]+', raw)
+
+def _normalize_subject(s: str) -> str:
+    """Strip leading 'Subject:/Re:/Fw:/Ack:' prefixes (any count)."""
+    return _SUBJECT_PREFIX.sub('', s or '').strip()
+
+def _airport_from_body(body: str) -> str:
+    """Best-effort pull of 'AIRPORT: KXXX' from the body text."""
+    m = _AIRPORT_LINE.search(body or '')
+    return (m.group(1).upper() if m else '')
+
+def _lookup_callsign_for_airport(code: str) -> str:
+    """Resolve airport → Winlink callsign from preferences mapping."""
+    try:
+        raw = get_preference('airport_call_mappings') or ''
+    except Exception:
+        raw = ''
+    canon = canonical_airport_code((code or '').strip())
+    if not canon:
+        return ''
+    for line in raw.splitlines():
+        if ':' not in line:
+            continue
+        ap, wl = (x.strip().upper() for x in line.split(':', 1))
+        if canonical_airport_code(ap) == canon and wl:
+            return wl
+    return ''
+
+def _split_recipients(raw: str) -> list[str]:
+    """Split a 'to' field into callsigns; accept comma/space/semicolon/newline separated."""
+    if not raw:
+        return []
+    parts = re.split(r'[,\s;]+', raw.upper().strip())
+    seen, out = set(), []
+    for p in parts:
+        if not p:
+            continue
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+def _get_winlink_ccs():
+    """Return list[str] of configured CC addresses (uppercased, non-empty)."""
+    addrs = []
+    try:
+        for i in (1,2,3):
+            v = (get_preference(f'winlink_cc_{i}') or '').strip().upper()
+            if v:
+                addrs.append(v)
+    except Exception:
+        pass
+    return addrs
+
+def _send_with_optional_cc(to_addr: str, subject: str, body: str, include_cc: bool=False) -> bool:
+    """Try to send with cc list if requested; gracefully degrade if core API lacks cc."""
+    cc_list = _get_winlink_ccs() if include_cc else []
+    try:
+        if cc_list:
+            # Attempt kwarg form first (preferred if core supports it)
+            ok = send_winlink_message(to_addr, subject, body, cc=cc_list)  # type: ignore
+        else:
+            ok = send_winlink_message(to_addr, subject, body)
+        return bool(ok)
+    except TypeError:
+        # Core doesn't support cc kwarg — send primary + best-effort copies
+        primary_ok = False
+        try:
+            primary_ok = bool(send_winlink_message(to_addr, subject, body))
+        except Exception:
+            primary_ok = False
+        # Best effort CC fan-out (ignore individual failures)
+        if cc_list and primary_ok:
+            for cc in cc_list:
+                try:
+                    send_winlink_message(cc, subject, body)
+                except Exception:
+                    pass
+        return primary_ok
+
 # Start RadioTX once when this blueprint sees its first request.
 # (Flask blueprints don’t have before_app_first_request; use before_request + our guard.)
 #@bp.before_request
@@ -45,6 +160,180 @@ def radio():
         body   = escape(request.form['body'].strip())
         sender = escape(request.form.get('sender','').strip())
         ts     = datetime.utcnow().isoformat()
+        subj_norm = _normalize_subject(subj)
+
+        # ── AOCT SNAPSHOT MESSAGES (handled before Air Ops parsing) ─────────────
+        # Accept subjects: "AOCT cargo reply" or "AOCT cargo status" (ignore queries)
+        # Detect the phrase ANYWHERE in subject (after normalizing prefixes like "Subject:" / "RE:")
+        m_aoct = _AOCT_PHRASE.search(subj_norm)
+        if m_aoct:
+            kind = m_aoct.group(1).lower()
+            # Audit trail: store raw inbound (empty flight fields)
+            with sqlite3.connect(current_app.config['DB_FILE']) as c:
+                c.execute("""
+                  INSERT INTO incoming_messages(
+                    sender, subject, body, timestamp,
+                    tail_number, airfield_takeoff, airfield_landing,
+                    takeoff_time, eta, cargo_type, cargo_weight, remarks
+                  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (sender, subj, body, ts, '', '', '', '', '', '', '', ''))
+                c.commit()
+
+            # --- AOCT QUERY → compose a reply preview for operator ---
+            if kind == 'query':
+                try:
+                    q = parse_aoct_cargo_query(body or "")
+                    # Determine target airport from query/body (fallback to default)
+                    ap_code = (q.get('airport') or _airport_from_body(body) or (get_preference('default_origin') or '')).strip().upper()
+                    # ── Self-target guard (canonical compare): don’t surface manual reply ──
+                    self_ap  = canonical_airport_code(get_preference('default_origin') or '')
+                    if self_ap and canonical_airport_code(ap_code) == self_ap:
+                        note = (f"This AOCT query targets our own airport ({self_ap}). "
+                                "No action is required — we don’t reply to ourselves.")
+                        if is_ajax:
+                            return jsonify({'action':'aoct_self_target','airport':self_ap,'message':note})
+                        flash(note, "info")
+                        return redirect(url_for('radio.radio'))
+
+                    # Build snapshot using requested categories (our own airport)
+                    # Sanitize category tokens: allow blank, and drop stray CSV YES/NO artifacts
+                    cats_raw = q.get('categories') or []
+                    def _canon_tok(s: str) -> str:
+                        return re.sub(r"[^a-z0-9]+", "-", (s or "").strip().lower()).strip("-")
+                    _DROP = {"csv", "yes", "no", "csv-yes", "csv-no"}
+                    cats = []
+                    for t in cats_raw:
+                        ct = _canon_tok(t)
+                        if not ct or ct in _DROP:
+                            continue
+                        cats.append(ct)
+                    snap, human, csv_text = build_inventory_snapshot(cats)
+                    # Unknown-category banner (DB-driven), same as jobs.py
+                    def _tok_norm_local(s: str) -> str:
+                        return re.sub(r"[^a-z0-9]+", "-", (s or "").strip().lower()).strip("-")
+                    rows = dict_rows("SELECT display_name FROM inventory_categories ORDER BY display_name ASC")
+                    known = {_tok_norm_local(r.get('display_name') or '') for r in rows}
+                    unknown = [t for t in cats if t not in known]
+                    if unknown:
+                        available_names = [r['display_name'] for r in rows]
+                        banner = [
+                          "Unknown category token(s): " + ", ".join(sorted(set(unknown))),
+                          "Categories available at this site are: " + ", ".join(available_names),
+                        ]
+                        human = ("\n".join(banner) + ("\n\n" + (human or "")).rstrip()).strip()
+                    wants_csv = q.get('wants_csv', True)
+                    reply_subject = "AOCT cargo reply"
+                    reply_body = (human or "")
+                    if wants_csv and csv_text:
+                        reply_body = (reply_body + "\n\n" + csv_text).strip()
+
+                    # Determine airport → callsign for autofill (prefer explicit airport in body/query)
+                    to_hint_map = _lookup_callsign_for_airport(ap_code)
+
+                    # Can we send via PAT right away?
+                    pat_ok, _, _ = pat_config_status()
+                    can_send = bool(pat_ok)
+                    # Prefer mapping-derived callsign; fall back to any Sender header that was pasted.
+                    to_hint = to_hint_map or (sender or "").strip().upper()
+
+                    if is_ajax:
+                        return jsonify({
+                            'action': 'aoct_query_reply',
+                            'airport': (snap.get('airport') or ap_code or ''),
+                            'categories': cats,
+                            'subject': reply_subject,
+                            'body': reply_body,
+                            'can_send': can_send,
+                            'to_hint': to_hint
+                        })
+                    # Non-AJAX fallback: just flash and stay on page
+                    flash("AOCT query parsed; reply preview available (use the AJAX path).")
+                    return redirect(url_for('radio.radio'))
+                except Exception as exc:
+                    logger.exception("AOCT query compose failed: %s", exc)
+                    if is_ajax:
+                        return jsonify({'action': 'aoct_ingest_failed', 'error': 'query_compose_failed'})
+                    flash("Could not compose AOCT reply from query.", "error")
+                    return redirect(url_for('radio.radio'))
+
+            # Parse & upsert snapshot for reply/status
+            try:
+                ensure_remote_inventory_tables()
+                # Pass normalized subject so snapshots that were prefixed with "Subject:" etc. still ingest.
+                canon, snap, summary_text, csv_text = parse_remote_snapshot(subj_norm, body, sender or None)
+                rows = (snap.get('rows') or [])
+                mode = ('status' if kind == 'status' else 'reply')
+                is_full = (kind == 'status')
+                # ── Guard: do NOT ingest snapshots that target our own station (alias-aware) ──
+                try:
+                    self_alias_canons = set()
+                    self_raw = (get_preference('default_origin') or '').strip().upper()
+                    if self_raw:
+                        # include all aliases (ICAO/IATA/FAA/GPS/local) → canonical
+                        aliases = set(airport_aliases(self_raw) or [])
+                        aliases.add(self_raw)
+                        for a in aliases:
+                            c = canonical_airport_code(a)
+                            if c:
+                                self_alias_canons.add(c)
+                except Exception:
+                    self_alias_canons = set()
+
+                if canon and (canon in self_alias_canons):
+                    logger.info("AOCT ingest skipped: snapshot for our own station (%s)", canon)
+                    if is_ajax:
+                        return jsonify({'action': 'aoct_ingest_skipped_self', 'airport': canon})
+                    flash("AOCT snapshot targets our own station; ignored.", "info")
+                    return redirect(url_for('radio.radio'))
+                try:
+                    logger.debug(
+                        "AOCT ingest candidate: subj_kind=%s airport=%s canon=%s rows=%d",
+                        kind, (snap.get('airport') or ''), canon, len(rows)
+                    )
+                except Exception:
+                    pass
+                if canon and rows:
+                    # Only overwrite when we have valid rows; do layered updates per category.
+                    cov = sorted({ (r.get('category') or '').strip().upper() for r in rows if (r.get('category') or '').strip() })
+                    upsert_remote_inventory(
+                        canon,
+                        snap,
+                        iso8601_ceil_utc(datetime.utcnow()),
+                        summary_text,
+                        csv_text,
+                        sender or None,
+                        mode=mode,
+                        coverage_categories=cov,
+                        is_full=is_full,
+                    )
+                    if is_ajax:
+                        return jsonify({
+                            'action': 'aoct_ingested',
+                            'airport': canon,
+                            'rows': len(snap.get('rows') or []),
+                            'total_lb': float((snap.get('totals') or {}).get('total_weight_lb') or 0.0),
+                            'generated_at': (snap.get('generated_at') or '')
+                        })
+                    flash(f"AOCT snapshot ingested for {canon}.")
+                    return redirect(url_for('radio.radio'))
+                else:
+                    try:
+                        logger.debug(
+                            "AOCT ingest rejected: airport=%s canon=%s rows=%d",
+                            (snap.get('airport') or ''), canon, len(rows)
+                        )
+                    except Exception:
+                        pass
+                    if is_ajax:
+                        return jsonify({'action': 'aoct_ingest_failed', 'error': 'no_airport'})
+                    flash("AOCT snapshot lacked a recognizable airport code; not ingested.", "error")
+                    return redirect(url_for('radio.radio'))
+            except Exception as exc:
+                logger.exception("AOCT ingest failed: %s", exc)
+                if is_ajax:
+                    return jsonify({'action': 'aoct_ingest_failed', 'error': 'server_error'})
+                flash("AOCT snapshot ingest failed.", "error")
+                return redirect(url_for('radio.radio'))
 
         # --- extract WGID (prefer services' subject+body extractor) ---
         if _extract_wgid_from_text:
@@ -638,3 +927,90 @@ def mark_sent(fid=None, flight_id=None):
 
     flash(f"Flight {code_txt} marked as sent.")
     return redirect(url_for('radio.radio'))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AOCT: ad-hoc sender used by the Radio UI’s “Send via PAT” button
+# POST body: to, subject, body  → JSON {ok:bool, message?:str}
+# ─────────────────────────────────────────────────────────────────────────────
+@bp.route('/aoct_send', methods=['POST'])
+def aoct_send():
+    to_field = (request.form.get('to') or '')
+    to_list  = _split_recipients(to_field)
+    subject = (request.form.get('subject') or '').strip() or 'AOCT cargo reply'
+    body    = (request.form.get('body') or '')
+
+    pat_ok, _, reason = pat_config_status()
+    if not pat_ok:
+        return jsonify(ok=False, message=f"PAT not configured: {reason or 'unknown'}"), 400
+    if not to_list:
+        return jsonify(ok=False, message="Missing destination callsign(s)"), 400
+
+    # Include CCs for AOCT reply if enabled in prefs
+    include_cc = (get_preference('aoct_cc_reply') or 'no').strip().lower() == 'yes'
+    try:
+        ok_any = False
+        for addr in to_list:
+            ok_any = _send_with_optional_cc(addr, subject, body, include_cc=include_cc) or ok_any
+        ok = ok_any
+    except Exception as exc:
+        logger.exception("AOCT PAT send failed: %s", exc)
+        ok = False
+    if not ok:
+        return jsonify(ok=False, message="PAT send failed."), 502
+    return jsonify(ok=True)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AOCT: compose & (optionally) send a cargo QUERY
+# POST form:
+#   to=CALLSIGN  (optional when dry_run=1)
+#   airport=KXXX (defaults to default_origin)
+#   categories   (csv string) or categories[]=a&categories[]=b
+#   wants_csv=yes|no (default yes)
+#   dry_run=1 to only return subject/body JSON (no send)
+# ─────────────────────────────────────────────────────────────────────────────
+@bp.route('/aoct_query', methods=['POST'])
+def aoct_query():
+    """
+    Preview and/or send AOCT queries via PAT.
+    If AIRPORT targets our own default_origin, do NOT send; return a user-facing note.
+    """
+
+    ap = (request.form.get('airport') or (get_preference('default_origin') or '')).strip().upper()
+    cats = _parse_categories(request.form)
+    wants_csv = (request.form.get('wants_csv','yes').strip().lower() != 'no')
+    subject, body = _build_aoct_query(ap, cats, wants_csv)
+
+    # Preview-only?
+    if request.form.get('dry_run'):
+        return jsonify(ok=True, subject=subject, body=body, airport=ap, categories=cats, wants_csv=wants_csv)
+
+    # ── Self-target guard for sends (canonical compare) ──
+    self_ap = canonical_airport_code(get_preference('default_origin') or '')
+    if self_ap and canonical_airport_code(ap) == self_ap:
+        msg = (f"This query targets our own airport ({self_ap}). "
+               "No action is required; we do not send AOCT queries to ourselves.")
+        return jsonify(ok=False, code='self_target', message=msg, airport=self_ap), 200
+
+    # Send via PAT
+    to_field = (request.form.get('to') or '')
+    to_list  = _split_recipients(to_field)
+    if not to_list:
+        return jsonify(ok=False, message="Missing destination callsign(s)"), 400
+    pat_ok, _, reason = pat_config_status()
+    if not pat_ok:
+        return jsonify(ok=False, message=f"PAT not configured: {reason or 'unknown'}"), 400
+    # include CC? explicit form override → otherwise use pref default
+    inc_param = request.form.get('include_cc')
+    include_cc = ((inc_param is not None and inc_param not in ('0','no','false','off'))
+                  or (inc_param is None and (get_preference('aoct_cc_query') or 'no').strip().lower() == 'yes'))
+    try:
+        sent_any = False
+        for addr in to_list:
+            sent_any = _send_with_optional_cc(addr, subject, body, include_cc=include_cc) or sent_any
+        sent = sent_any
+    except Exception as exc:
+        logger.exception("AOCT query PAT send failed: %s", exc)
+        sent = False
+    if not sent:
+        return jsonify(ok=False, message="PAT send failed."), 502
+    return jsonify(ok=True)
