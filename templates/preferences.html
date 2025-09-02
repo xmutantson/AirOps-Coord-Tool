@@ -87,6 +87,35 @@
       <option value="no"  {% if current_radio_unsent=='no'  %}selected{% endif %}>No, show all</option>
       <option value="yes" {% if current_radio_unsent=='yes' %}selected{% endif %}>Yes, only unsent</option>
     </select>
+
+    <hr>
+
+    <!-- ── Remote Airports (AOCT) ─────────────────────────── -->
+    <h3>Remote Airports (AOCT)</h3>
+
+    <label>Auto-broadcast interval:</label>
+    <select name="auto_broadcast_interval_min" onchange="this.form.submit()">
+      <option value="0"
+        {% if auto_broadcast_interval_min not in ['15','30','60'] %}selected{% endif %}>
+        Disabled
+      </option>
+      <option value="15" {% if auto_broadcast_interval_min=='15' %}selected{% endif %}>
+        Every 15 minutes
+      </option>
+      <option value="30" {% if auto_broadcast_interval_min=='30' %}selected{% endif %}>
+        Every 30 minutes
+      </option>
+      <option value="60" {% if auto_broadcast_interval_min=='60' %}selected{% endif %}>
+        Every 60 minutes
+      </option>
+    </select>
+
+    <label style="margin-top:18px">Auto-reply to AOCT cargo queries?</label>
+    <select name="auto_reply_enabled" onchange="this.form.submit()">
+      <option value="yes" {% if auto_reply_enabled=='yes' %}selected{% endif %}>Yes</option>
+      <option value="no"  {% if auto_reply_enabled=='no'  %}selected{% endif %}>No</option>
+    </select>
+
   </form>
 
   <hr>

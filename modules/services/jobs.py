@@ -16,9 +16,16 @@ from modules.services.winlink.core import (
     parse_winlink,          # used in process_unparsed_winlink_messages
     generate_subject,       # used in auto_winlink_send_job
     generate_body,          # used in auto_winlink_send_job
+    parse_aoct_cargo_query,
+    send_winlink_message,
 )
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
 from modules.utils.common import _is_winlink_reflector_bounce
+from modules.utils.remote_inventory import (
+    build_inventory_snapshot,
+    parse_remote_snapshot,
+    upsert_remote_inventory,
+)
 from app import DB_FILE, scheduler
 from flask import current_app
 app = current_app  # legacy shim for helpers
@@ -634,6 +641,79 @@ def process_unparsed_winlink_messages():
                 conn.execute("UPDATE winlink_messages SET parsed=1 WHERE id=?", (m['id'],))
             continue
 
+        # ── Phase 3: Remote inventory replies/status ───────────────────────────
+        if subj_norm in ('aoct cargo reply', 'aoct cargo status'):
+            # Mirror raw mail for audit
+            with sqlite3.connect(DB_FILE) as conn:
+                conn.execute("""
+                    INSERT INTO incoming_messages(
+                        sender, subject, body, timestamp,
+                        tail_number, airfield_takeoff, airfield_landing,
+                        takeoff_time, eta, cargo_type, cargo_weight, remarks
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (
+                    (m.get('sender') or ''), (m.get('subject') or ''), (m.get('body') or ''), ts_iso,
+                    '', '', '', '', '', '', '', ''
+                ))
+
+            # Parse snapshot (CSV preferred; human fallback)
+            ap_canon, snapshot, summary_text, csv_text = parse_remote_snapshot(
+                m.get('subject') or '', m.get('body') or '', m.get('sender') or ''
+            )
+
+            # Ignore if neither CSV nor human header could be parsed
+            has_rows = bool(snapshot.get('rows'))
+            has_header = bool(snapshot.get('airport') or snapshot.get('generated_at'))
+            if ap_canon and (has_rows or has_header):
+                upsert_remote_inventory(
+                    ap_canon,
+                    snapshot,
+                    received_at_iso=ts_iso,
+                    summary_text=summary_text,
+                    csv_text=csv_text,
+                    source_callsign=(m.get('sender') or None)
+                )
+
+            # Mark parsed either way (we already mirrored the inbound)
+            with sqlite3.connect(DB_FILE) as conn:
+                conn.execute("UPDATE winlink_messages SET parsed=1 WHERE id=?", (m['id'],))
+            continue
+
+        # ── Phase 1: AOCT cargo query ─────────────────────────────────────────
+        subj_norm = (m.get('subject') or '').strip().lower()
+        if subj_norm == 'aoct cargo query':
+            # Mirror inbound query to incoming_messages for audit
+            with sqlite3.connect(DB_FILE) as conn:
+                conn.execute("""
+                    INSERT INTO incoming_messages(
+                        sender, subject, body, timestamp,
+                        tail_number, airfield_takeoff, airfield_landing,
+                        takeoff_time, eta, cargo_type, cargo_weight, remarks
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (
+                    (m.get('sender') or ''), (m.get('subject') or ''), (m.get('body') or ''), ts_iso,
+                    '', '', '', '', '', '', '', ''
+                ))
+            # Parse the query body
+            q = parse_aoct_cargo_query(m.get('body') or '')
+            # Build the snapshot (filter by categories if provided)
+            snapshot, human, csv_text = build_inventory_snapshot(q.get('categories') or [])
+            airport = q.get('airport') or (get_preference('default_origin') or '').strip().upper() or 'UNKNOWN'
+            reply_subject = f"AOCT cargo snapshot — {airport}"
+            reply_body = human
+            if q.get('wants_csv', True) and csv_text:
+                reply_body += "\n\nCSV:\n" + csv_text
+            # Choose a reply-to (prefer real From:; fall back to callsign bucket)
+            to_addr = (m.get('sender') or '').strip() or (m.get('callsign') or '').strip()
+            ok = False
+            if pat_config_exists() and to_addr:
+                ok = send_winlink_message(to_addr, reply_subject, reply_body)
+            # Mark parsed regardless; we’ve recorded the inbound either way
+            with sqlite3.connect(DB_FILE) as conn:
+                conn.execute("UPDATE winlink_messages SET parsed=1 WHERE id=?", (m['id'],))
+            # done with this message
+            continue
+
         # run your existing parser
         parsed_data = parse_winlink(m['subject'], m['body'])
 
@@ -997,6 +1077,93 @@ def configure_netops_feeders():
         func=netops_push_job,
         trigger='interval',
         seconds=interval,
+        replace_existing=True
+    )
+    if scheduler.state != STATE_RUNNING:
+        scheduler.start()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 2: Inventory auto-broadcast (every minute; gated by preference)
+# Prefs used:
+#   • auto_broadcast_interval_min : int (0=off; else 15/30/60)
+#   • airport_call_mappings       : lines "AAA: CALL1"
+#   • default_origin              : our airport code (for subject/self-skip)
+#   • winlink_callsign_1          : our WL callsign (self-skip)
+#   • last_auto_broadcast_tick    : internal minute tick we last fired
+# ─────────────────────────────────────────────────────────────────────────────
+def _minute_tick(dt=None) -> str:
+    if dt is None:
+        dt = datetime.utcnow()
+    dt = dt.replace(second=0, microsecond=0)
+    return dt.isoformat() + "Z"
+
+def _should_fire_broadcast_now() -> tuple[bool, str]:
+    try:
+        interval = int(float(get_preference('auto_broadcast_interval_min') or 0))
+    except Exception:
+        interval = 0
+    if interval <= 0:
+        return (False, "")
+    now = datetime.utcnow()
+    if (now.minute % interval) != 0:
+        return (False, "")
+    tick = _minute_tick(now)
+    return ((get_preference('last_auto_broadcast_tick') or '') != tick, tick)
+
+def inventory_auto_broadcast_job():
+    try:
+        should, tick = _should_fire_broadcast_now()
+        if not should:
+            return
+        if not pat_config_exists():
+            return
+        # Build all-non-empty snapshot (no category filter)
+        snapshot, human, csv_text = build_inventory_snapshot([])
+        if not snapshot.get('rows'):
+            set_preference('last_auto_broadcast_tick', tick)
+            return
+        # Recipients
+        raw_map = (get_preference('airport_call_mappings') or '').strip()
+        self_ap = (get_preference('default_origin') or '').strip().upper()
+        self_cs = (get_preference('winlink_callsign_1') or '').strip().upper()
+        mapping = {}
+        for ln in raw_map.splitlines():
+            if ':' not in ln:
+                continue
+            k, v = ln.split(':', 1)
+            k = (k or '').strip().upper()
+            v = (v or '').strip().upper()
+            if k and v:
+                mapping[k] = v
+        recipients = []
+        for ap, wl in mapping.items():
+            if ap == self_ap or wl == self_cs:
+                continue
+            recipients.append(wl)
+        seen = set()
+        recipients = [r for r in recipients if not (r in seen or seen.add(r))]
+        if not recipients:
+            set_preference('last_auto_broadcast_tick', tick)
+            return
+        subject = f"AOCT inventory broadcast — {(snapshot.get('airport') or self_ap or 'UNKNOWN')}"
+        body = human + ("\n\nCSV:\n" + csv_text if csv_text else "")
+        for to in recipients:
+            send_winlink_message(to, subject, body)
+        set_preference('last_auto_broadcast_tick', tick)
+    except Exception as e:
+        try: app.logger.exception("inventory_auto_broadcast_job: %s", e)
+        except Exception: pass
+
+def configure_inventory_broadcast_job():
+    try:
+        scheduler.remove_job('inv_auto_broadcast')
+    except JobLookupError:
+        pass
+    scheduler.add_job(
+        id='inv_auto_broadcast',
+        func=inventory_auto_broadcast_job,
+        trigger='interval',
+        minutes=1,
         replace_existing=True
     )
     if scheduler.state != STATE_RUNNING:

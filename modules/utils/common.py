@@ -835,6 +835,26 @@ def init_db():
           )
         """)
 
+        # ── Remote Airports: last snapshot per remote airport ──────────
+        # Retains only the most recent snapshot per airport (one row per airport).
+        c.execute("""
+          CREATE TABLE IF NOT EXISTS remote_inventory (
+            airport_canon TEXT PRIMARY KEY,
+            snapshot_at   TEXT NOT NULL,   -- timestamp embedded in snapshot (if known)
+            received_at   TEXT NOT NULL,   -- when we stored this snapshot locally
+            summary_text  TEXT NOT NULL,   -- human-readable summary body
+            csv_text      TEXT NOT NULL    -- CSV (plain text) for parsing
+          )
+        """)
+
+        # Defaults for Remote-Airport feature flags
+        c.execute("""
+          INSERT OR IGNORE INTO preferences(name,value)
+          VALUES
+            ('auto_broadcast_interval_min','0'),
+            ('auto_reply_enabled','yes')
+        """)
+
 def run_migrations():
     print("🔧 running DB migrations…")
     # flights table
@@ -979,6 +999,24 @@ def run_migrations():
         c.execute("CREATE INDEX IF NOT EXISTS idx_wg_tasks_role_kind   ON wargame_tasks(role, kind)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_wg_inbound_eta       ON wargame_inbound_schedule(eta)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_wg_ramp_open         ON wargame_ramp_requests(satisfied_at)")
+
+        # Remote-Airports table for existing DBs (idempotent)
+        c.execute("""
+          CREATE TABLE IF NOT EXISTS remote_inventory (
+            airport_canon TEXT PRIMARY KEY,
+            snapshot_at   TEXT NOT NULL,
+            received_at   TEXT NOT NULL,
+            summary_text  TEXT NOT NULL,
+            csv_text      TEXT NOT NULL
+          )
+        """)
+        # Ensure preference defaults exist on upgraded DBs
+        c.execute("""
+          INSERT OR IGNORE INTO preferences(name,value)
+          VALUES
+            ('auto_broadcast_interval_min','0'),
+            ('auto_reply_enabled','yes')
+        """)
 
     # Keep cache tidy after structural changes
     try:

@@ -1,9 +1,9 @@
 
 from markupsafe import escape
-import sqlite3, re, os, json
+import sqlite3, re, os, json, subprocess
 from datetime import datetime
 
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List, Dict
 
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
 from app import DB_FILE
@@ -214,8 +214,9 @@ def _boot_pat_and_winlink():
     # Auto-start polling/parsing so the UI has data without manual clicks.
     try:
         # Lazy import to avoid circulars if this ever runs
-        from modules.services.jobs import configure_winlink_jobs
+        from modules.services.jobs import configure_winlink_jobs, configure_inventory_broadcast_job
         configure_winlink_jobs()
+        configure_inventory_broadcast_job()
     except Exception:
         # Don't crash startup if scheduler init fails.
         pass
@@ -298,3 +299,92 @@ def generate_subject(flight):
             f"took off {flight['takeoff_time'] or '----'} | "
             f"ETA {flight['eta'] or '----'}"
         )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 1: AOCT cargo query parser + send helper
+# ─────────────────────────────────────────────────────────────────────────────
+_q_airport_re   = re.compile(r"(?im)^\s*AIRPORT\s*:\s*([A-Z0-9\-]+)\s*$")
+_q_cats_re      = re.compile(r"(?im)^\s*CATEGORIES?\s*:\s*(.+)$")
+_q_csv_re       = re.compile(r"(?im)^\s*CSV\s*:\s*(yes|no)\s*$")
+_tok_norm_re    = re.compile(r"[^a-z0-9]+")
+
+def _tok_norm(s: str) -> str:
+    return _tok_norm_re.sub("-", (s or "").strip().lower()).strip("-")
+
+def parse_aoct_cargo_query(body: str) -> Dict:
+    """
+    Parse AOCT cargo query body.
+      • AIRPORT: <token>  (or first non-empty line)
+      • CATEGORIES: a, b, c  (optional)
+      • CSV: yes/no          (optional; default yes)
+    """
+    body = body or ""
+    airport = None
+    m = _q_airport_re.search(body)
+    if m:
+        airport = m.group(1).strip().upper()
+    else:
+        # Fallback: first non-empty line's first token
+        for ln in body.splitlines():
+            ln = (ln or "").strip()
+            if not ln:
+                continue
+            airport = ln.split()[0].strip().upper()
+            break
+    airport = canonical_airport_code(airport or "")
+
+    cats: List[str] = []
+    m = _q_cats_re.search(body)
+    if m:
+        raw = m.group(1)
+        cats = [ _tok_norm(x) for x in raw.split(",") if (x or "").strip() ]
+
+    wants_csv = True
+    m = _q_csv_re.search(body)
+    if m:
+        wants_csv = (m.group(1).strip().lower() != "no")
+
+    return {"airport": airport, "categories": cats, "wants_csv": wants_csv}
+
+def send_winlink_message(to_addr: str, subject: str, body: str) -> bool:
+    """
+    Minimal helper to send a text Winlink message via PAT.
+    Records in winlink_messages and outgoing_messages on success.
+    """
+    to_addr = (to_addr or "").strip()
+    if not to_addr:
+        return False
+    cs = get_preference('winlink_callsign_1') or ""
+    if not cs:
+        return False
+    cmd = ["pat", "compose", "--from", cs, "-s", subject, to_addr]
+    try:
+        subprocess.run(
+            cmd,
+            input=body or "",
+            text=True,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except subprocess.CalledProcessError as err:
+        try: app.logger.error("PAT send failed (AOCT reply): %s\n%s", err, err.stderr or err.stdout)
+        except Exception: pass
+        return False
+
+    # Mirror to DB on success
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            ts_iso = iso8601_ceil_utc()
+            conn.execute("""
+                INSERT INTO winlink_messages
+                  (direction, callsign, sender, subject, body)
+                VALUES ('out', ?, ?, ?, ?)
+            """, (cs, to_addr, subject, body))
+            conn.execute("""
+                INSERT INTO outgoing_messages (flight_id, operator_call, timestamp, subject, body)
+                VALUES (?,?,?,?,?)
+            """, (None, "A-O-C-T", ts_iso, subject, body))
+    except Exception:
+        pass
+    return True

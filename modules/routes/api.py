@@ -4,6 +4,9 @@ from flask import jsonify, make_response, session, request
 import re
 import sqlite3
 from app import DB_FILE
+import csv as _csv
+from io import StringIO as _StringIO
+
 bp = Blueprint(__name__.rsplit('.', 1)[-1], __name__)
 app = current_app  # legacy shim if route body references 'app'
 
@@ -314,3 +317,76 @@ def api_manifest_items(mid: str):
         queued_id=draft_id
     )
     return jsonify({'items': chips})
+
+
+def _parse_remote_csv_for_api(csv_text: str):
+    rows = []
+    total = 0.0
+    if not (csv_text or '').strip():
+        return rows, 0, 0.0
+    rdr = _csv.reader(_StringIO(csv_text))
+    header = next(rdr, [])
+    cols = {name: idx for idx, name in enumerate(header)}
+    need = ['category','item','unit_weight_lb','quantity','total_weight_lb']
+    if not all(n in cols for n in need):
+        return rows, 0, 0.0
+    for r in rdr:
+        try:
+            cat  = (r[cols['category']] or '').strip()
+            name = (r[cols['item']] or '').strip()
+            wpu  = float(r[cols['unit_weight_lb']] or 0.0)
+            qty  = int(float(r[cols['quantity']] or 0))
+            tot  = float(r[cols['total_weight_lb']] or 0.0)
+        except Exception:
+            continue
+        rows.append({
+            'category': cat,
+            'item': name,
+            'unit_weight_lb': wpu,
+            'quantity': qty,
+            'total_weight_lb': tot,
+        })
+        total += tot
+    return rows, len(rows), round(total, 1)
+
+@bp.get('/api/remote_inventory')
+def api_remote_inventory_index():
+    recs = dict_rows("""
+      SELECT airport_canon, snapshot_at, received_at, csv_text
+        FROM remote_inventory
+       ORDER BY airport_canon
+    """)
+    out = []
+    for r in recs:
+        _, n, tot = _parse_remote_csv_for_api(r.get('csv_text') or '')
+        out.append({
+            'airport': (r.get('airport_canon') or '').strip().upper(),
+            'generated_at': r.get('snapshot_at') or '',
+            'received_at': r.get('received_at') or '',
+            'rows': n,
+            'total_lbs': tot,
+        })
+    return jsonify({'airports': out})
+
+@bp.get('/api/remote_inventory/<string:airport>')
+def api_remote_inventory_detail(airport: str):
+    canon = canonical_airport_code(airport or '')
+    recs = dict_rows("""
+      SELECT airport_canon, snapshot_at, received_at, csv_text, summary_text
+        FROM remote_inventory
+       WHERE airport_canon = ?
+       LIMIT 1
+    """, (canon,))
+    if not recs:
+        return jsonify({'ok': False, 'error': 'not_found', 'airport': canon}), 404
+    r = recs[0]
+    rows, n, tot = _parse_remote_csv_for_api(r.get('csv_text') or '')
+    return jsonify({
+        'ok': True,
+        'airport': canon,
+        'generated_at': r.get('snapshot_at') or '',
+        'received_at': r.get('received_at') or '',
+        'summary_text': r.get('summary_text') or '',
+        'rows': rows,
+        'totals': {'lines': n, 'total_lbs': tot}
+    })

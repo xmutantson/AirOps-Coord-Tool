@@ -162,6 +162,22 @@ def preferences():
                     SET value = excluded.value
                 """, (val,))
 
+        # ----- Remote Airports (DB-backed) --------------------------------
+        if ('auto_broadcast_interval_min' in request.form or
+            'auto_reply_enabled' in request.form):
+            # Clamp to allowed values: 0/15/30/60
+            if 'auto_broadcast_interval_min' in request.form:
+                raw = (request.form.get('auto_broadcast_interval_min','') or '').strip()
+                allowed = {'0','15','30','60'}
+                val = raw if raw in allowed else '0'
+                set_preference('auto_broadcast_interval_min', val)
+            if 'auto_reply_enabled' in request.form:
+                raw = (request.form.get('auto_reply_enabled','') or '').strip().lower()
+                val = 'yes' if raw == 'yes' else 'no'
+                set_preference('auto_reply_enabled', val)
+            flash("Remote-airport broadcast/auto-reply settings saved.", "success")
+            return redirect(url_for('preferences.preferences'))
+
         # ----- cookie-backed prefs ---------------------------------------
         resp = make_response(redirect(url_for('preferences.preferences')))
 
@@ -283,6 +299,10 @@ def preferences():
     origin_lat = (get_preference('origin_lat') or '')
     origin_lon = (get_preference('origin_lon') or '')
 
+    # Remote-Airport prefs
+    auto_broadcast_interval_min = (get_preference('auto_broadcast_interval_min') or '0')
+    auto_reply_enabled = (get_preference('auto_reply_enabled') or 'yes')
+
     return render_template(
         'preferences.html',
         default_origin=default_origin,
@@ -305,5 +325,8 @@ def preferences():
         netops_push_interval_sec=netops_push_interval_sec,
         netops_window_hours=netops_window_hours,
         origin_lat=origin_lat,
-        origin_lon=origin_lon
+        origin_lon=origin_lon,
+        # Remote-Airport prefs
+        auto_broadcast_interval_min=auto_broadcast_interval_min,
+        auto_reply_enabled=auto_reply_enabled
     )

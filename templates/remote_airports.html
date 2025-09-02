@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Remote Airports – Inventory{% endblock %}
+{% block content %}
+  <h2>Remote Airports</h2>
+
+  {% if airports %}
+    {% include "partials/_remote_airports_table.html" %}
+  {% else %}
+    <p>No remote inventory snapshots yet.</p>
+  {% endif %}
+
+  {% if detail_rows %}
+    <div style="margin-top:1rem"></div>
+    <h3>{{ detail_airport }} — {{ detail_generated_at or 'n/a' }}</h3>
+    <table class="full-bleed">
+      <thead>
+        <tr>
+          <th>Category</th><th>Name</th><th>WPU</th><th>Qty</th><th>Total (lbs)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in detail_rows %}
+          <tr>
+            <td>{{ r.category }}</td>
+            <td>{{ r.sanitized_name }}</td>
+            <td>{{ r.wpu }}</td>
+            <td>{{ r.qty }}</td>
+            <td>{{ r.total }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+{% endblock %}

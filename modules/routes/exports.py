@@ -176,3 +176,34 @@ def import_csv():
     if ref.endswith(url_for('admin.admin')) or "/admin" in ref:
         return redirect(url_for('admin.admin'))
     return redirect(url_for('preferences.preferences'))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Remote Inventory CSV export
+#   /exports/remote_inventory.csv?airport=AAA
+# ─────────────────────────────────────────────────────────────────────────────
+@bp.get('/exports/remote_inventory.csv')
+def export_remote_inventory_csv():
+    code = (request.args.get('airport') or '').strip().upper()
+    if not code:
+        flash("Missing ?airport= code.", "error")
+        return redirect(url_for('preferences.preferences'))
+
+    canon = canonical_airport_code(code)
+    rows = dict_rows("""
+      SELECT airport_canon, snapshot_at, csv_text
+        FROM remote_inventory
+       WHERE airport_canon = ?
+       LIMIT 1
+    """, (canon,))
+    if not rows:
+        flash(f"No remote snapshot for {canon}.", "error")
+        return redirect(url_for('preferences.preferences'))
+
+    csv_text = rows[0].get('csv_text') or ''
+    if not csv_text.strip():
+        flash(f"Snapshot for {canon} has no CSV.", "error")
+        return redirect(url_for('preferences.preferences'))
+
+    buf = io.BytesIO(csv_text.encode('utf-8'))
+    fname = f"remote_inventory_{canon}.csv"
+    return send_file(buf, mimetype='text/csv', as_attachment=True, download_name=fname)

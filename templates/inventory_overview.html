@@ -28,6 +28,17 @@
       Edit Barcode DB
     </button>
   </div>
+  <div style="display:flex; align-items:center; gap:.5rem; margin-top:.5rem;">
+    <!-- LEFT: your existing buttons live here -->
+    <div class="toolbar-left" style="display:flex; gap:.5rem;">
+      {# ...existing left-side buttons... #}
+    </div>
+    <!-- RIGHT: new Remote features -->
+    <div class="toolbar-right" style="margin-left:auto; display:flex; gap:.5rem;">
+      <a class="btn-primary" href="{{ url_for('overview.inventory_broadcast') }}">Broadcast</a>
+      <a class="btn-secondary"   href="{{ url_for('overview.remote_airports') }}">Remote Airports</a>
+    </div>
+  </div>
   <script>
     async function loadInventoryOverview() {
       const resp = await fetch("{{ url_for('inventory.inventory_overview_table') }}");

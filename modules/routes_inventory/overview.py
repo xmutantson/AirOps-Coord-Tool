@@ -7,6 +7,7 @@ from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, e
 from app import DB_FILE, publish_inventory_event
 from flask import jsonify, render_template, request
 from app import inventory_bp as bp  # reuse existing blueprint
+from modules.utils.remote_inventory import ensure_remote_inventory_tables
 
 # Logger for this module
 logger = logging.getLogger(__name__)
@@ -387,4 +388,59 @@ def inventory_detail_table():
         'partials/_inventory_detail_table.html',
         entries=entries,
         mass_pref=mass_pref
+    )
+
+# ──────────────────────────────────────────────────────────────
+# Remote Airports viewer + Broadcast (scaffold routes)
+# Base path: /inventory (blueprint mount) → /inventory/remote, /inventory/broadcast
+# ──────────────────────────────────────────────────────────────
+
+@bp.route('/remote')
+def remote_airports():
+    """List remote airports with latest snapshot summary."""
+    ensure_remote_inventory_tables()
+    rows = dict_rows("""
+      SELECT airport,
+             MAX(generated_at) AS generated_at,
+             COUNT(*)          AS rows,
+             COALESCE(SUM(total_weight_lb),0) AS total_lb
+        FROM remote_inventory_rows
+       GROUP BY airport
+       ORDER BY airport
+    """)
+    return render_template(
+        'remote_airports.html',
+        airports=rows,
+        active='inventory_remote'
+    )
+
+
+@bp.route('/remote/<string:airport>')
+def remote_airport_detail(airport):
+    """Detail view for a single remote airport's latest snapshot."""
+    ensure_remote_inventory_tables()
+    a = canonical_airport_code(airport)
+    rows = dict_rows("""
+      SELECT airport, generated_at, category, sanitized_name,
+             weight_per_unit_lb AS wpu, quantity AS qty, total_weight_lb AS total
+        FROM remote_inventory_rows
+       WHERE airport = ?
+       ORDER BY category, sanitized_name, wpu
+    """, (a,))
+    gen = rows[0]['generated_at'] if rows else ''
+    return render_template(
+        'remote_airports.html',
+        detail_rows=rows,
+        detail_airport=a,
+        detail_generated_at=gen,
+        active='inventory_remote'
+    )
+
+
+@bp.route('/broadcast')
+def inventory_broadcast():
+    """Stub page for inventory broadcast (human + CSV copy UI to be wired)."""
+    return render_template(
+        'inventory_broadcast.html',
+        active='inventory_broadcast'
     )
