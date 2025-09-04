@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Communications Log{% endblock %}
+{% block content %}
+<h2 style="margin-top:.5rem;">Communications Log</h2>
+
+<form method="post" action="{{ url_for('comms.comms_new') }}" class="quick-add"
+      style="display:grid; grid-template-columns: repeat(6, minmax(140px,1fr)); gap:.5rem; align-items:end; margin:.25rem 0 1rem; border:1px solid #ddd; padding:.5rem; border-radius:.4rem;">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div style="grid-column: span 2;">
+    <label for="qa-ts">Date/Time (UTC)</label><br>
+    <input id="qa-ts" name="timestamp_utc" type="datetime-local" step="60"
+           value="{{ now_utc_value }}">
+  </div>
+  <div>
+    <label for="qa-method">Method</label><br>
+    <input id="qa-method" name="method" list="method-suggestions" placeholder="Phone / SAT / Radio / In-person" required>
+    <datalist id="method-suggestions">
+      <option value="Phone">
+      <option value="SAT">
+      <option value="Radio">
+      <option value="In-person">
+    </datalist>
+  </div>
+  <div>
+    <label for="qa-dir">Direction</label><br>
+    <select id="qa-dir" name="direction">
+      <option value="">(optional)</option>
+      <option value="in">Inbound</option>
+      <option value="out">Outbound</option>
+      <option value="internal">Internal</option>
+    </select>
+  </div>
+  <div>
+    <label for="qa-from">From</label><br>
+    <input id="qa-from" name="from_party" type="text" placeholder="caller / party">
+  </div>
+  <div>
+    <label for="qa-to">To</label><br>
+    <input id="qa-to" name="to_party" type="text" placeholder="recipient">
+  </div>
+  <div style="grid-column: span 2;">
+    <label for="qa-subj">Subject</label><br>
+    <input id="qa-subj" name="subject" type="text" placeholder="short subject">
+  </div>
+  <div style="grid-column: span 3;">
+    <label for="qa-body">Message</label><br>
+    <input id="qa-body" name="body" type="text" placeholder="message content">
+  </div>
+  <div style="grid-column: span 3;">
+    <label for="qa-notes">Notes</label><br>
+    <input id="qa-notes" name="notes" type="text" placeholder="operator notes (optional)">
+  </div>
+  <div style="grid-column: span 6; text-align:right;">
+    <button type="submit">Quick Add</button>
+  </div>
+</form>
+
+<form method="get" action="{{ url_for('comms.comms_index') }}" class="filters" style="display:flex; gap:.75rem; flex-wrap:wrap; align-items:end; margin: .5rem 0 1rem;">
+  <div>
+    <label for="window">Window</label><br>
+    <select id="window" name="window">
+      {% set win = (filters.window or '24h') %}
+      <option value="12h" {% if win=='12h' %}selected{% endif %}>Last 12h</option>
+      <option value="24h" {% if win=='24h' %}selected{% endif %}>Last 24h</option>
+      <option value="72h" {% if win=='72h' %}selected{% endif %}>Last 72h</option>
+      <option value="all" {% if win=='all' %}selected{% endif %}>All</option>
+    </select>
+  </div>
+  <div>
+    <label for="method">Method</label><br>
+    <select id="method" name="method">
+      <option value="" {% if not filters.method %}selected{% endif %}>(any)</option>
+      {% for m in methods %}
+        <option value="{{ m }}" {% if filters.method==m %}selected{% endif %}>{{ m }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label for="direction">Direction</label><br>
+    {% set d = (filters.direction or 'any') %}
+    <select id="direction" name="direction">
+      <option value="any"  {% if d in ['any','both'] %}selected{% endif %}>(any)</option>
+      <option value="in"   {% if d=='in' %}selected{% endif %}>Inbound</option>
+      <option value="out"  {% if d=='out' %}selected{% endif %}>Outbound</option>
+    </select>
+  </div>
+  <div style="flex:1 1 280px;">
+    <label for="q">Text search</label><br>
+    <input id="q" name="q" type="text" value="{{ filters.q or '' }}" placeholder="subject, body, from/to, operator" style="width:100%;">
+  </div>
+  <div>
+    <button type="submit">Apply</button>
+  </div>
+  <div>
+    <a class="button" href="{{ export_url }}">Export CSV</a>
+  </div>
+  <div>
+    <a class="button" href="{{ ics309_url }}">ICS-309 (Print View)</a>
+  </div>
+  <div>
+    <a class="button" href="{{ ics309_download_url }}">Download ICS-309 HTML</a>
+  </div>
+</form>
+
+{% include "partials/_comms_table.html" %}
+{% endblock %}

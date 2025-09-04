@@ -684,6 +684,7 @@ body.cw-active .ramp-form-container > :not(#cargo-tools-panel) { display: none !
 .modal-window {
   background: #fff; padding: 1rem; border-radius: 4px;
   width: 80%; max-width: 600px; position: relative;
+  z-index: 1; /* keep above .modal .backdrop so it doesn't get blurred */
 }
 .modal-window .close-modal {
   position: absolute; top: .5rem; right: .5rem;
@@ -1145,4 +1146,164 @@ table.wg-radio-table tr.read { opacity: .8; }
 .toast.warning { background: #ff9800; }
 .toast.import  { background: #673ab7; }
 .toast.db_reset{ background: #9c27b0; }
-/* --- end patch --- */
+/* ────────────────────────────────────────────────────────────────────────────
+   Shift Check-In modal polish
+   Targets either a root with class .modal or #checkin-modal.
+   Keeps styles scoped so the rest of the site isn’t affected.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* design tokens (scoped) */
+.modal, #checkin-modal {
+  --aoct-bg: #0f1115;
+  --aoct-panel: #1a1f24;
+  --aoct-border: #2a2f36;
+  --aoct-muted: #9aa4b2;
+  --aoct-text: #e6edf3;
+  --aoct-field: #0f1318;
+  --aoct-focus: #3b82f6;     /* blue focus ring */
+  --aoct-accent: #16a34a;    /* green primary */
+  --aoct-accent-hover: #15803d;
+  --aoct-secondary: #20262d;
+  --aoct-shadow: 0 18px 60px rgba(0,0,0,.60);
+}
+
+/* backdrop (if your markup uses a separate element for it) */
+.modal .backdrop,
+#checkin-modal .backdrop {
+  /* sit inside the modal container so the panel can stack above */
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,.45);
+  -webkit-backdrop-filter: blur(1px);
+  backdrop-filter: blur(1px);
+  z-index: 0;
+  /* never eat clicks from the panel */
+  pointer-events: none;
+}
+
+/* panel/card */
+.modal .card,
+#checkin-modal,
+#checkin-modal .card {
+  background: var(--aoct-panel);
+  color: var(--aoct-text);
+  border: 1px solid var(--aoct-border);
+  border-radius: 12px;
+  box-shadow: var(--aoct-shadow);
+  position: relative;
+  z-index: 1;
+  /* comfortable default width */
+  width: min(640px, 92vw);
+  padding: 1.25rem 1.25rem 1rem;
+}
+
+/* header + helper text */
+.modal h3,
+#checkin-modal h3 {
+  margin: 0 0 .25rem 0;
+  font-size: 1.25rem;
+  line-height: 1.3;
+  font-weight: 700;
+}
+/* ── Modal layout glue (container) ─────────────────────────────────────────── */
+/* The container itself is fixed and centers the card; JS toggles display */
+#checkin-backdrop.modal {
+  position: fixed;
+  inset: 0;
+  display: none;               /* JS sets to 'flex' to open */
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.modal .muted,
+#checkin-modal p,
+#checkin-modal .muted {
+  margin: 0 0 .75rem 0;
+  color: var(--aoct-muted);
+}
+
+/* labels + fields */
+.modal label,
+#checkin-modal label {
+  display: block;
+  font-size: .875rem;
+  color: var(--aoct-muted);
+  margin: .25rem 0 .35rem;
+}
+.modal input[type="text"],
+.modal input[type="search"],
+.modal input[type="email"],
+.modal input[type="tel"],
+.modal select,
+.modal textarea,
+#checkin-modal input,
+#checkin-modal select,
+#checkin-modal textarea {
+  width: 100%;
+  background: var(--aoct-field);
+  color: var(--aoct-text);
+  border: 1px solid var(--aoct-border);
+  border-radius: 8px;
+  padding: .6rem .7rem;
+  line-height: 1.3;
+}
+.modal input:focus,
+.modal select:focus,
+.modal textarea:focus,
+#checkin-modal input:focus,
+#checkin-modal select:focus,
+#checkin-modal textarea:focus {
+  outline: none;
+  border-color: var(--aoct-focus);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--aoct-focus) 25%, transparent);
+}
+
+/* action row */
+.modal .actions,
+#checkin-modal .actions {
+  display: flex;
+  gap: .5rem;
+  justify-content: flex-end;
+  margin-top: .9rem;
+}
+
+/* buttons (scoped, so it won’t restyle every .button on the site) */
+.modal .button,
+.modal .btn,
+#checkin-modal .button,
+#checkin-modal .btn {
+  border-radius: 8px;
+  padding: .55rem 1rem;
+  border: 1px solid var(--aoct-border);
+  font-weight: 600;
+  text-decoration: none;
+}
+.modal .button.primary,
+.modal .btn-primary,
+#checkin-modal .button.primary,
+#checkin-modal .btn-primary {
+  background: var(--aoct-accent);
+  color: #fff;
+  border-color: transparent;
+}
+.modal .button.primary:hover,
+.modal .btn-primary:hover,
+#checkin-modal .button.primary:hover,
+#checkin-modal .btn-primary:hover { background: var(--aoct-accent-hover); }
+
+.modal .button.secondary,
+.modal .btn-secondary,
+#checkin-modal .button.secondary,
+#checkin-modal .btn-secondary {
+  background: var(--aoct-secondary);
+  color: var(--aoct-text);
+}
+/* ── Check-In modal layout glue ───────────────────────────────────────────── */
+#checkin-backdrop.modal {
+  position: fixed;
+  inset: 0;
+  display: none;                 /* JS sets style.display = 'flex' to open */
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}

@@ -21,6 +21,8 @@ def setup():
         # store hashed pw & log them in
         set_app_password_hash(generate_password_hash(pw))
         session['logged_in'] = True
+        # flag first post-login page view for shift check-in modal
+        session['just_logged_in'] = 1
         session['session_salt'] = get_session_salt()
         flash("Password set—you're logged in!", "success")
         return redirect(url_for('core.dashboard'))
@@ -36,6 +38,8 @@ def login():
         pw = request.form.get('password','')
         if (h := get_app_password_hash()) and check_password_hash(h, pw):
             session['logged_in'] = True
+            # flag first post-login page view for shift check-in modal
+            session['just_logged_in'] = 1
             flash("Logged in successfully.", "success")
             # stamp session salt on successful login
             session['session_salt'] = get_session_salt()
@@ -47,5 +51,6 @@ def login():
 @bp.route('/logout')
 def logout():
     session.pop('logged_in', None)
+    session.pop('just_logged_in', None)
     flash("Logged out.", "info")
     return redirect(url_for('auth.login'))

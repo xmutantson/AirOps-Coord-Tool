@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  /* ICS-214 styling — match the look of the provided form */
+  .ics214 { --line:#333; --blue:#e6edf9; --label:#0a0a0a; --muted:#666; }
+  .ics214 .sheet {
+    background:#fff; color:#000; margin:1rem auto; padding:0; max-width:900px;
+    border:1px solid var(--line);
+  }
+  .ics214 .title {
+    text-align:center; font-weight:700; letter-spacing:.5px;
+    padding:.5rem 0; border-bottom:1px solid var(--line);
+  }
+  .ics214 .grid { display:grid; grid-template-columns: 1fr 1fr; gap:0; }
+  .ics214 .row { display:grid; grid-template-columns: 1fr 1fr 1fr; }
+  .ics214 .blk { border-top:1px solid var(--line); }
+  .ics214 .field { display:flex; border-right:1px solid var(--line); }
+  .ics214 .field:last-child { border-right:none; }
+  .ics214 .label {
+    min-width:10rem; padding:.35rem .5rem; font-weight:600; border-right:1px solid var(--line);
+    background:var(--blue); white-space:nowrap;
+  }
+  .ics214 .value { padding:.35rem .5rem; flex:1; }
+  .ics214 table { width:100%; border-collapse:collapse; }
+  .ics214 th, .ics214 td { border:1px solid var(--line); padding:.35rem .5rem; }
+  /* Ensure header text is dark even with global table styles */
+  .ics214 thead th { background:var(--blue); color:#000; }
+  .ics214 .small { font-size:.9rem; color:var(--muted); }
+  @media print {
+    body { background:#fff; }
+    .no-print { display:none !important; }
+    .sheet { border:1px solid #000; }
+  }
+</style>
+
+{% set __modal_should_open = show_header_modal %}
+
+<div class="ics214">
+  <div class="sheet">
+    <div class="title">ACTIVITY LOG (ICS 214)</div>
+
+    <!-- Header rows -->
+    <div class="grid">
+      <div class="field"><div class="label">1. Incident Name:</div><div class="value">{{ incident_name }}</div></div>
+      <div class="field">
+        <div class="label">2. Operational Period:</div>
+        <div class="value">
+          Date From: <strong>{{ op_from_date }}</strong>&nbsp;&nbsp;&nbsp;
+          Date To: <strong>{{ op_to_date }}</strong><br>
+          Time From: <strong>{{ op_from_time }}</strong>&nbsp;&nbsp;&nbsp;
+          Time To: <strong>{{ op_to_time }}</strong> <span class="small">(UTC)</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid blk">
+      <div class="field"><div class="label">3. Name:</div><div class="value">{{ name_field }}</div></div>
+      <div class="field"><div class="label">4. ICS Position:</div><div class="value">{{ ics_position }}</div></div>
+    </div>
+
+    <div class="blk">
+      <div class="field">
+        <div class="label" style="min-width:14rem;">5. Home Agency (and Unit):</div>
+        <div class="value">{{ home_agency }}</div>
+      </div>
+    </div>
+
+    <!-- 6. Resources Assigned -->
+    <div class="blk">
+      <div class="label" style="border-right:none; border-bottom:1px solid var(--line);">6. Resources Assigned:</div>
+      <table>
+        <thead>
+          <tr>
+            <th style="width:45%;">Name</th>
+            <th style="width:30%;">ICS Position</th>
+            <th>Home Agency (and Unit)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% if resources %}
+            {% for r in resources %}
+              <tr>
+                <td>{{ r.name }}</td>
+                <td>{{ r.ics_position }}</td>
+                <td>{{ r.home_agency }}</td>
+              </tr>
+            {% endfor %}
+          {% else %}
+            <tr><td colspan="3" class="small" style="text-align:center; padding:.75rem;">No resources in this window ({{ window }}).</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+
+    <!-- 7. Activity Log -->
+    <div class="blk">
+      <div class="label" style="border-right:none; border-bottom:1px solid var(--line);">7. Activity Log:</div>
+      <table>
+        <thead>
+          <tr>
+            <th style="width:18%;">Date/Time</th>
+            <th>Notable Activities</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% if activities %}
+            {% for a in activities %}
+              <tr>
+                <td>{{ a.time }}</td>
+                <td>{{ a.text }}</td>
+              </tr>
+            {% endfor %}
+          {% else %}
+            <tr><td colspan="2" class="small" style="text-align:center; padding:.75rem;">No staff activity in this window ({{ window }}).</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+
+    <!-- 8. Prepared By -->
+    <div class="blk">
+      <div class="row">
+        <div class="field"><div class="label">8. Prepared by: Name</div><div class="value">{{ prepared_by_name }}</div></div>
+        <div class="field"><div class="label">Position/Title</div><div class="value">{{ prepared_by_title }}</div></div>
+        <div class="field"><div class="label">Signature</div><div class="value">&nbsp;</div></div>
+      </div>
+      <div class="field" style="border-top:none;">
+        <div class="label" style="min-width:12rem;">Date/Time</div>
+        <div class="value">{{ prepared_dt }}</div>
+      </div>
+    </div>
+
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:.35rem .5rem; border-top:1px solid var(--line);">
+      <div class="small">ICS 214, Page 1</div>
+      <div class="no-print" style="display:flex; gap:.5rem;">
+        <button type="button"
+                class="button"
+                style="padding:.35rem .6rem; border:1px solid #ccc; border-radius:.4rem; background:#fafafa; cursor:pointer;"
+                onclick="openIcs214Modal()">Edit Header</button>
+        <a class="button" style="padding:.35rem .6rem; border:1px solid #ccc; border-radius:.4rem; text-decoration:none;"
+           href="{{ url_for('staff.staff_ics214_download', window=window) }}">Download single-file HTML</a>
+        <button type="button"
+                style="padding:.35rem .6rem; border:1px solid #ccc; border-radius:.4rem; background:#f8f8f8; cursor:pointer;"
+                onclick="window.print()">🖨️ Print</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Lightweight header-prefs modal -->
+<div id="ics214-modal-backdrop" class="modal" style="display:none;">
+  <!-- Backdrop must be before the panel so it renders behind it -->
+  <div class="backdrop" aria-hidden="true"></div>
+  <div class="modal-window">
+    <button class="close-modal" aria-label="Close" onclick="closeIcs214Modal()">✕</button>
+    <h3>ICS-214 Header</h3>
+    <p class="muted">These values are saved for next time. Fields (3) and (8) are independent.</p>
+    <form id="ics214-prefs-form">
+      <label>1. Incident Name</label>
+      <input type="text" name="incident_name" value="{{ incident_name }}">
+
+      <label>3. Name</label>
+      <input type="text" name="ics214_name" value="{{ name_field }}">
+
+      <label>4. ICS Position</label>
+      <input type="text" name="ics214_position" value="{{ ics_position }}">
+
+      <label>5. Home Agency/Unit</label>
+      <input type="text" name="home_agency" value="{{ home_agency }}">
+
+      <label>8. Prepared by — Name</label>
+      <input type="text" name="prepared_by_name" value="{{ prepared_by_name }}">
+
+      <label>8. Prepared by — Title</label>
+      <input type="text" name="prepared_by_title" value="{{ prepared_by_title }}">
+
+      <div class="actions">
+        <button type="button" class="btn btn-secondary" onclick="closeIcs214Modal()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% block scripts %}
+<script>
+  function openIcs214Modal(){ document.getElementById('ics214-modal-backdrop').style.display = 'flex'; }
+  function closeIcs214Modal(){ document.getElementById('ics214-modal-backdrop').style.display = 'none'; }
+  if ({{ 'true' if __modal_should_open else 'false' }}) { openIcs214Modal(); }
+
+  document.getElementById('ics214-prefs-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const payload = Object.fromEntries(fd.entries());
+    try{
+      const r = await fetch("{{ url_for('staff.staff_ics214_save_prefs') }}", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!r.ok) throw new Error('Save failed');
+      // Refresh the page to reflect changes everywhere (incl. download link)
+      location.reload();
+    }catch(err){
+      window.showToast ? window.showToast('Failed to save ICS-214 header', 'error') : alert('Save failed');
+    }
+  });
+</script>
+{% endblock %}
+
+{% endblock %}

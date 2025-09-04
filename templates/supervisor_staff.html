@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="max-width: 1000px; margin: 1rem auto;">
+  <div style="display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap;">
+    <h2 style="margin:0;">Staff Management</h2>
+
+    <div style="display:flex; align-items:center; gap:.5rem;">
+      <label for="window-select" class="muted">Window</label>
+      <select id="window-select" name="window" style="padding:.25rem .5rem; border:1px solid #ccc; border-radius:.3rem;">
+        <option value="12h" {{ 'selected' if window=='12h' else '' }}>Last 12h</option>
+        <option value="24h" {{ 'selected' if window=='24h' else '' }}>Last 24h</option>
+        <option value="72h" {{ 'selected' if window=='72h' else '' }}>Last 72h</option>
+        <option value="all" {{ 'selected' if window=='all' else '' }}>All Time</option>
+      </select>
+      <a href="{{ url_for('supervisor.supervisor') }}" class="button small" style="padding:.25rem .5rem; border:1px solid #ccc; border-radius:.4rem; text-decoration:none; font-size:.9rem;">Back to Supervisor</a>
+    </div>
+  </div>
+
+  <div style="margin: 1rem 0; padding:.75rem; border:1px solid #ddd; border-radius:.4rem;">
+    <form method="post" action="{{ url_for('staff.staff_new') }}" style="display:flex; gap:.5rem; flex-wrap:wrap; align-items:flex-end;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="window" value="{{ window }}">
+      <div>
+        <label class="muted" for="name">Name</label><br>
+        <input id="name" name="name" required placeholder="Jane Doe" style="padding:.35rem .5rem; border:1px solid #ccc; border-radius:.3rem;">
+      </div>
+      <div>
+        <label class="muted" for="role">Role</label><br>
+        <input id="role" name="role" placeholder="Radio / Ramp / Inventory" style="padding:.35rem .5rem; border:1px solid #ccc; border-radius:.3rem;">
+      </div>
+      <div>
+        <label class="muted" for="ew_number">EW #</label><br>
+        <input id="ew_number" name="ew_number" placeholder="EW-123" style="padding:.35rem .5rem; border:1px solid #ccc; border-radius:.3rem;">
+      </div>
+      <button type="submit" class="button" style="padding:.4rem .8rem; border:1px solid #ccc; border-radius:.4rem; background:#f6f6f6;">Add</button>
+    </form>
+  </div>
+
+  <!-- ICS toolbar (214 only; no 309 here) -->
+  <div class="card" style="margin: 0 0 1rem 0; padding:.75rem 1rem; display:flex; gap:.5rem; align-items:center;">
+    <a class="button small" href="{{ url_for('staff.staff_ics214', window=window) }}">ICS-214 (Print View)</a>
+    <a class="button small" href="{{ url_for('staff.staff_ics214_download', window=window) }}">Download ICS-214 HTML</a>
+    <span style="margin-left:auto; font-size:.85rem; color:#444;">Times shown in UTC</span>
+  </div>
+
+  <div id="staff-table-container">
+    {% include "partials/_staff_table.html" %}
+  </div>
+</div>
+
+<script>
+  async function reloadStaffTable() {
+    const win = document.getElementById("window-select").value;
+    const url = new URL("{{ url_for('staff.staff_list') }}", window.location.origin);
+    url.searchParams.set("window", win);
+    url.searchParams.set("partial", "1");
+    const resp = await fetch(url, { headers: { "X-Requested-With": "XMLHttpRequest" }});
+    document.getElementById("staff-table-container").innerHTML = await resp.text();
+  }
+
+  document.getElementById("window-select").addEventListener("change", reloadStaffTable);
+
+  // Intercept Clock In/Out form submits and do AJAX to the form's true action URL.
+  document.addEventListener("submit", async (e) => {
+    const f = e.target.closest("form.toggle-form");
+    if (!f) return;
+    e.preventDefault();
+    const fd = new FormData(f);
+    const url = new URL(f.action, window.location.origin);
+    // preserve current window in the query too, so the JSON response uses it
+    const winSel = document.getElementById("window-select");
+    const winVal = winSel ? winSel.value : (fd.get("window") || "24h");
+    url.searchParams.set("window", winVal);
+    try {
+      const resp = await fetch(url.toString(), {
+        method: "POST",
+        headers: { "X-Requested-With": "XMLHttpRequest" },
+        body: fd
+      });
+      if (!resp.ok) throw new Error("bad status");
+      // We could patch the single row, but a full partial refresh is simplest & robust
+      await reloadStaffTable();
+    } catch (_e) {
+      // If anything goes sideways (including CSRF expiry), fall back to full reload
+      window.location.reload();
+    }
+  }, false);
+</script>
+{% endblock %}

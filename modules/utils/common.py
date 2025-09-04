@@ -855,6 +855,14 @@ def init_db():
             ('auto_reply_enabled','yes')
         """)
 
+    # ── Staff tables (idempotent; separated util owns schema) ────────────────
+    try:
+        from modules.utils.staff import ensure_staff_tables  # type: ignore
+        ensure_staff_tables()
+    except Exception:
+        # never hard-fail app init if optional module isn’t available yet
+        pass
+
 def run_migrations():
     print("🔧 running DB migrations…")
     # flights table
@@ -1018,6 +1026,13 @@ def run_migrations():
             ('auto_reply_enabled','yes')
         """)
 
+    # ── Staff tables (again during migrations for upgraded DBs) ───────────────
+    try:
+        from modules.utils.staff import ensure_staff_tables  # type: ignore
+        ensure_staff_tables()
+    except Exception:
+        pass
+
     # Keep cache tidy after structural changes
     try:
         clear_airport_cache()
@@ -1120,6 +1135,35 @@ def iso8601_ceil_utc(dt: datetime | None = None) -> str:
         dt = dt + timedelta(seconds=1)
     dt = dt.replace(microsecond=0)
     return dt.isoformat().replace("+00:00", "Z")
+
+# ── shared helper: mirror Winlink traffic into communications ────────────────
+def _mirror_comm_winlink(timestamp_utc, direction, from_party, to_party,
+                         subject, body, operator=None, metadata=None):
+    """
+    Centralized, best-effort mirror. Uses modules.utils.comms.insert_comm if
+    available, else falls back to a direct INSERT. Never raises upstream.
+    """
+    meta_json = json.dumps(metadata or {}, ensure_ascii=False)
+    # Try the shared helper first to keep logic/schema in one place.
+    try:
+        from modules.utils.comms import insert_comm as _insert_comm  # type: ignore
+        _insert_comm(timestamp_utc, "Winlink", direction, from_party, to_party,
+                     subject, body, operator=operator, metadata_json=meta_json)
+        return
+    except Exception:
+        pass
+    # Fallback: direct insert (kept deliberately simple).
+    try:
+        with sqlite3.connect(get_db_file()) as _c:
+            _c.execute("""
+              INSERT INTO communications(
+                timestamp_utc, method, direction,
+                from_party, to_party, subject, body, operator, metadata_json
+              ) VALUES (?, 'Winlink', ?, ?, ?, ?, ?, ?, ?)
+            """, (timestamp_utc, direction, from_party, to_party,
+                  subject, body, operator or '', meta_json))
+    except Exception:
+        pass
 
 def sanitize_name(raw: str) -> str:
     cleaned = re.sub(r'[^\w\s]', ' ', raw or '')
@@ -1298,6 +1342,25 @@ def hhmm_from_iso(iso_str: str) -> str:
         return datetime.fromisoformat(iso_str).strftime('%H%M')
     except Exception:
         return 'TBD'
+
+def safe_csv_cell(s) -> str:
+    """
+    Guard against Excel CSV formula injection.
+    If the cell begins with TAB or CR, or the first *non-space* character is
+    one of = + - @, prefix a single quote. Otherwise return the value as-is.
+    Always returns a str; None becomes ''.
+    """
+    if s is None:
+        return ''
+    t = str(s)
+    if not t:
+        return ''
+    if t[0] in ('\t', '\r'):
+        return "'" + t
+    lead = t.lstrip()
+    if lead and lead[0] in ('=', '+', '-', '@'):
+        return "'" + t
+    return t
 
 def choose_ramp_direction_with_balance() -> str:
     """
@@ -1612,6 +1675,25 @@ def apply_incoming_parsed(p: dict) -> tuple[int,str]:
           p['takeoff_time'], p['eta'], p['cargo_type'], p['cargo_weight'],
           p.get('remarks','')
         ))
+
+        # 1a) communications mirror (inbound)
+        try:
+            _mirror_comm_winlink(
+                p.get('timestamp') or iso8601_ceil_utc(),
+                "in",
+                from_party=p.get('sender') or '',
+                to_party=(get_preference('winlink_callsign_1') or 'OPERATOR'),
+                subject=p.get('subject', ''),
+                body=p.get('body', ''),
+                operator=None,  # inbound: no definitive human operator yet
+                metadata={
+                    "tail_number": p.get('tail_number') or '',
+                    "flight_code": (maybe_extract_flight_code(p.get('subject','')) or
+                                    maybe_extract_flight_code(p.get('body','')) or '')
+                }
+            )
+        except Exception:
+            pass
 
         # Ignore Winlink *test message reflector* bounces beyond raw store.
         if _is_winlink_reflector_bounce(p.get('subject',''), p.get('body','')):

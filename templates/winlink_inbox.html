@@ -4,6 +4,13 @@
 <h2>WinLink Inbox</h2>
 <p><a href="{{ url_for('radio.radio') }}">← Back to Out-box</a></p>
 <div class="container">
+  <div style="display:flex; align-items:center; gap:.75rem; margin:.5rem 0 0.25rem;">
+    <label style="display:flex; align-items:center; gap:.5rem; font-weight:600;">
+      <input type="checkbox" id="hideParsableToggle">
+      Hide parsable
+    </label>
+    <small style="color:#666;">(AOCT CARGO QUERY / STATUS / REPLY, AIR OPS:)</small>
+  </div>
   <table id="wl-inbox-table" class="wg-inbox">
     <thead>
       <tr>
@@ -96,6 +103,7 @@ function applyReadState(){
 
 let wlMsgs = [];
 async function loadInbox() {
+  // Server looks at cookie and optional query param; cookie is enough here.
   const resp = await fetch('/winlink/inbox.json');
   wlMsgs = await resp.json();
   const tb = document.querySelector('#wl-inbox-table tbody');
@@ -119,6 +127,19 @@ loadInbox();
 setInterval(loadInbox, 30000);
 
 document.addEventListener('DOMContentLoaded', function () {
+  // Initialize “Hide parsable” toggle from cookie/template
+  const hideToggle = document.getElementById('hideParsableToggle');
+  const initial = (getCookie('hide_parsable') || ('{{ "yes" if hide_parsable else "no" }}')) === 'yes';
+  hideToggle.checked = initial;
+  hideToggle.addEventListener('change', () => {
+    setCookie('hide_parsable', hideToggle.checked ? 'yes' : 'no');
+    // Optionally reflect state in URL for shareable link (no reload)
+    const url = new URL(location.href);
+    url.searchParams.set('hide_parsable', hideToggle.checked ? '1' : '0');
+    history.replaceState({}, '', url);
+    loadInbox();   // re-fetch with new cookie in place
+  });
+
   // Modal controls
   const dlg      = document.getElementById('winlinkMsgDialog');
   const subj     = document.getElementById('winlinkModalSubject');

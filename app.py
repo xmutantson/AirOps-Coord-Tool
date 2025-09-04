@@ -154,8 +154,10 @@ from modules.utils.common import (
     _ensure_wargame_scheduler_once,
     _start_radio_tx_once,
     maybe_start_distances,
-
 )
+
+from modules.utils.comms import ensure_comms_tables
+from modules.utils.staff import ensure_staff_tables
 
 # Replace sqlite3.connect with the wrapped/traced one exported by modules.utils.common
 sqlite3.connect = connect
@@ -431,6 +433,8 @@ wgramp_bp      = _get_bp("modules.routes.wargame.ramp")
 super_bp       = _get_bp("modules.routes.wargame.super")
 supervisor_bp  = _get_bp("modules.routes.supervisor")
 wginventory_bp  = _get_bp("modules.routes.wargame.inventory")
+staff_bp       = _get_bp("modules.routes.staff")
+comms_bp       = _get_bp("modules.routes.comms")
 
 # Register blueprints with unique names to avoid collisions
 app.register_blueprint(inventory_bp, name="inventory")
@@ -450,6 +454,8 @@ _reg(admin_bp,       name="admin")
 _reg(index_bp,       name="wgindex")
 _reg(super_bp,       name="wgsuper")
 _reg(supervisor_bp,  name="supervisor")
+_reg(staff_bp,       name="staff")
+_reg(comms_bp,       name="comms")
 
 # Shutdown hook from services
 _jobs = _safe_import("modules.services.jobs")
@@ -560,6 +566,8 @@ _fmt_airport = fmt_airport
 # DB init / migrations / data seeds
 init_db()
 run_migrations()
+ensure_staff_tables()        # staff schema first (owned by modules/utils/staff.py)
+ensure_comms_tables()        # then communications (may be mirrored to by staff routes)
 ensure_airports_table()
 load_airports_from_csv()
 seed_default_categories()

@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ICS-214 Activity Log</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html,body { background:#fff; color:#000; margin:0; font:14px/1.35 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
+  .ics214 { --line:#333; --blue:#e6edf9; --label:#0a0a0a; --muted:#666; }
+  .ics214 .sheet { background:#fff; color:#000; margin:1rem auto; padding:0; max-width:900px; border:1px solid var(--line); }
+  .ics214 .title { text-align:center; font-weight:700; letter-spacing:.5px; padding:.5rem 0; border-bottom:1px solid var(--line); }
+  .ics214 .grid { display:grid; grid-template-columns: 1fr 1fr; gap:0; }
+  .ics214 .row { display:grid; grid-template-columns: 1fr 1fr 1fr; }
+  .ics214 .blk { border-top:1px solid var(--line); }
+  .ics214 .field { display:flex; border-right:1px solid var(--line); }
+  .ics214 .field:last-child { border-right:none; }
+  .ics214 .label { min-width:10rem; padding:.35rem .5rem; font-weight:600; border-right:1px solid var(--line); background:var(--blue); white-space:nowrap; }
+  .ics214 .value { padding:.35rem .5rem; flex:1; }
+  .ics214 table { width:100%; border-collapse:collapse; }
+  .ics214 th, .ics214 td { border:1px solid var(--line); padding:.35rem .5rem; }
+  .ics214 thead th { background:var(--blue); }
+  .ics214 .small { font-size:.9rem; color:var(--muted); }
+  @media print {
+    .sheet { border:1px solid #000; }
+  }
+</style>
+</head>
+<body>
+<div class="ics214">
+  <div class="sheet">
+    <div class="title">ACTIVITY LOG (ICS 214)</div>
+
+    <div class="grid">
+      <div class="field"><div class="label">1. Incident Name:</div><div class="value">{{ incident_name }}</div></div>
+      <div class="field">
+        <div class="label">2. Operational Period:</div>
+        <div class="value">
+          Date From: <strong>{{ op_from_date }}</strong>&nbsp;&nbsp;&nbsp;
+          Date To: <strong>{{ op_to_date }}</strong><br>
+          Time From: <strong>{{ op_from_time }}</strong>&nbsp;&nbsp;&nbsp;
+          Time To: <strong>{{ op_to_time }}</strong> <span class="small">(UTC)</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid blk">
+      <div class="field"><div class="label">3. Name:</div><div class="value">{{ name_field }}</div></div>
+      <div class="field"><div class="label">4. ICS Position:</div><div class="value">{{ ics_position }}</div></div>
+    </div>
+
+    <div class="blk">
+      <div class="field">
+        <div class="label" style="min-width:14rem;">5. Home Agency (and Unit):</div>
+        <div class="value">{{ home_agency }}</div>
+      </div>
+    </div>
+
+    <div class="blk">
+      <div class="label" style="border-right:none; border-bottom:1px solid var(--line);">6. Resources Assigned:</div>
+      <table>
+        <thead>
+          <tr>
+            <th style="width:45%;">Name</th>
+            <th style="width:30%;">ICS Position</th>
+            <th>Home Agency (and Unit)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% if resources %}
+            {% for r in resources %}
+              <tr>
+                <td>{{ r.name }}</td>
+                <td>{{ r.ics_position }}</td>
+                <td>{{ r.home_agency }}</td>
+              </tr>
+            {% endfor %}
+          {% else %}
+            <tr><td colspan="3" class="small" style="text-align:center; padding:.75rem;">No resources in this window ({{ window }}).</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="blk">
+      <div class="label" style="border-right:none; border-bottom:1px solid var(--line);">7. Activity Log:</div>
+      <table>
+        <thead>
+          <tr>
+            <th style="width:18%;">Date/Time</th>
+            <th>Notable Activities</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% if activities %}
+            {% for a in activities %}
+              <tr>
+                <td>{{ a.time }}</td>
+                <td>{{ a.text }}</td>
+              </tr>
+            {% endfor %}
+          {% else %}
+            <tr><td colspan="2" class="small" style="text-align:center; padding:.75rem;">No staff activity in this window ({{ window }}).</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="blk">
+      <div class="row">
+        <div class="field"><div class="label">8. Prepared by: Name</div><div class="value">{{ prepared_by_name }}</div></div>
+        <div class="field"><div class="label">Position/Title</div><div class="value">{{ prepared_by_title }}</div></div>
+        <div class="field"><div class="label">Signature</div><div class="value">&nbsp;</div></div>
+      </div>
+      <div class="field" style="border-top:none;">
+        <div class="label" style="min-width:12rem;">Date/Time</div>
+        <div class="value">{{ prepared_dt }}</div>
+      </div>
+    </div>
+
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:.35rem .5rem; border-top:1px solid var(--line);">
+      <div class="small">ICS 214, Page 1</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

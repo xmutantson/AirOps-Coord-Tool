@@ -15,7 +15,8 @@ from modules.utils.remote_inventory import (
     build_inventory_snapshot,
 )
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
-from modules.utils.common import _start_radio_tx_once, maybe_extract_flight_code, _is_winlink_reflector_bounce  # call run-once starter from this bp
+from modules.utils.common import _start_radio_tx_once, maybe_extract_flight_code, _is_winlink_reflector_bounce, _mirror_comm_winlink  # call run-once starter from this bp
+from modules.utils.comms import insert_comm
 
 # --- IMPORTANT ---
 # The star import above brings in a DB-only fallback wargame_task_finish that returns None
@@ -35,6 +36,8 @@ if _wg_finish_real:
 # Give this blueprint a stable, explicit name so endpoints are always 'radio.*'
 bp = Blueprint('radio', __name__)
 logger = logging.getLogger(__name__)
+
+# Mirror helper now imported from modules.utils.common as _mirror_comm_winlink
 
 # --- AOCT subject/body normalization + mapping helpers -----------------------
 _SUBJECT_PREFIX = re.compile(r'^(?:\s*(?:subject|subj|re|fw|fwd|ack)\s*:?\s*)+', re.I)
@@ -178,6 +181,18 @@ def radio():
                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (sender, subj, body, ts, '', '', '', '', '', '', '', ''))
                 c.commit()
+            # Mirror to communications (inbound AOCT)
+            try:
+                _mirror_comm_winlink(
+                    ts, "in",
+                    from_party=(sender or ''),
+                    to_party=(get_preference('winlink_callsign_1') or 'OPERATOR'),
+                    subject=subj, body=body,
+                    operator=(request.cookies.get('operator_call') or None),
+                    metadata={"kind": f"AOCT {kind}"}
+                )
+            except Exception:
+                pass
 
             # --- AOCT QUERY → compose a reply preview for operator ---
             if kind == 'query':
@@ -388,6 +403,22 @@ def radio():
 
             # ---- end the write txn, then finish SLA BEFORE any early return ----
             c.commit()
+            # Mirror to communications (generic inbound)
+            try:
+                _mirror_comm_winlink(
+                    ts, "in",
+                    from_party=(sender or ''),
+                    to_party=(get_preference('winlink_callsign_1') or 'OPERATOR'),
+                    subject=subj, body=body,
+                    operator=(request.cookies.get('operator_call') or None),
+                    metadata={
+                        "tail_number": p.get('tail_number') or '',
+                        "flight_code": (p.get('flight_code') or ''),
+                        "wgid": (wgid or '')
+                    }
+                )
+            except Exception:
+                pass
             if wgid:
                 try:
                     recorded = wargame_task_finish('radio', 'inbound', key=f"msg:{wgid}")
@@ -864,13 +895,43 @@ def mark_sent(fid=None, flight_id=None):
             (callsign,)
         ).fetchone()[0]
 
-        # snapshot the state we’re sending (like manual path)
-        snap = dict(before)
-        snap['operator_call'] = callsign
-        c.execute("""
-            INSERT INTO flight_history(flight_id, timestamp, data)
-            VALUES (?,?,?)
-        """, (fid, now_ts, json.dumps(snap)))
+        # Upsert operator into the *earliest* history snapshot for this flight
+        # (avoid creating a second history row that would duplicate in flights.csv)
+        row_hist = c.execute(
+            "SELECT id, data FROM flight_history "
+            " WHERE flight_id=? ORDER BY timestamp ASC, id ASC LIMIT 1",
+            (fid,)
+        ).fetchone()
+        if row_hist:
+            try:
+                # Prefer in-DB JSON patch (SQLite JSON1)
+                c.execute(
+                    "UPDATE flight_history "
+                    "   SET data = json_set(COALESCE(data,'{}'), '$.operator_call', ?) "
+                    " WHERE id=?",
+                    (callsign, row_hist["id"])
+                )
+            except Exception:
+                # Fallback: read/modify/write if json_set isn't available
+                try:
+                    d = json.loads(row_hist["data"] or "{}")
+                except Exception:
+                    d = {}
+                d["operator_call"] = callsign
+                c.execute(
+                    "UPDATE flight_history SET data=? WHERE id=?",
+                    (json.dumps(d), row_hist["id"])
+                )
+        else:
+            # No prior snapshot (e.g., queued send) → create a single canonical row
+            snap = dict(before)
+            snap["operator_call"] = callsign
+            c.execute(
+                "INSERT INTO flight_history(flight_id, timestamp, data) "
+                "VALUES (?,?,?)",
+                (fid, now_ts, json.dumps(snap))
+            )
+
         # now snapshot the outgoing Winlink message
         include_test = request.cookies.get('include_test','yes') == 'yes'
         # build body exactly as radio_detail()
@@ -913,6 +974,29 @@ def mark_sent(fid=None, flight_id=None):
 
         # commit the atomic mark + snapshots
         c.commit()
+
+    # --- Log to communications as an OUTBOUND "radio" message -------------
+    try:
+        # Best-effort destination party from airport→Winlink mapping
+        to_party = _lookup_callsign_for_airport(before.get('airfield_landing', ''))
+        insert_comm(
+            timestamp_utc=now_ts,
+            method="radio",            # manual radio (not Winlink)
+            direction="out",
+            from_party=callsign,
+            to_party=(to_party or None),
+            subject=subject,
+            body=body,
+            related_flight_id=fid,
+            operator=callsign,
+            metadata={
+                "tail_number": (before.get("tail_number") or ""),
+                "flight_code": (before.get("flight_code") or ""),
+                "source": "radio_mark_sent"
+            },
+        )
+    except Exception as e:
+        logger.debug("communications insert (mark_sent fid=%s) failed: %s", fid, e)
 
     # finalize SLA — reaching here means this call performed the 0→1 transition
     try:

@@ -6,8 +6,11 @@ from datetime import datetime
 from typing import Tuple, Optional, List, Dict
 
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
+from modules.utils.common import _mirror_comm_winlink  # unified communications mirror helper
 from app import DB_FILE
 from flask import current_app as app, has_request_context, request
+
+# Mirror helper now imported from modules.utils.common as _mirror_comm_winlink
 
 # --- Winlink parsing regexes (inserted by fix_all_patches.py) ---
 air_ops_re = re.compile(r'''
@@ -404,6 +407,28 @@ def send_winlink_message(to_addr: str, subject: str, body: str) -> bool:
                 INSERT INTO outgoing_messages (flight_id, operator_call, timestamp, subject, body)
                 VALUES (?,?,?,?,?)
             """, (None, "A-O-C-T", ts_iso, subject, body))
+            # ---- communications mirror (outbound) ----
+            try:
+                # Best guess operator: cookie if present, else the station callsign
+                operator = (request.cookies.get('operator_call', cs)
+                            if has_request_context() else cs)
+                # Try to pull a tail# if this was an “Air Ops” message
+                tail = ''
+                try:
+                    tail = (parse_winlink(subject, body) or {}).get('tail_number', '')  # type: ignore
+                except Exception:
+                    pass
+                _mirror_comm_winlink(
+                    ts_iso, "out",
+                    from_party=cs,
+                    to_party=to_addr,
+                    subject=subject,
+                    body=body,
+                    operator=operator,
+                    metadata={"tail_number": tail}
+                )
+            except Exception:
+                pass
     except Exception:
         pass
     return True

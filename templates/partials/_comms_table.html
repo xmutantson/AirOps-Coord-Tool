@@ -1,0 +1,36 @@
+{% set rows = rows or [] %}
+<div class="table-wrap" style="overflow:auto; max-height: calc(100vh - 12rem); border:1px solid #ddd; border-radius:.4rem;">
+  <table class="table" style="width:100%; border-collapse:collapse;">
+    <thead>
+      <tr>
+        <th style="text-align:left; padding:.5rem; border-bottom:1px solid #ddd;">Timestamp (UTC)</th>
+        <th style="text-align:left; padding:.5rem; border-bottom:1px solid #ddd;">Method</th>
+        <th style="text-align:left; padding:.5rem; border-bottom:1px solid #ddd;">Dir</th>
+        <th style="text-align:left; padding:.5rem; border-bottom:1px solid #ddd;">From</th>
+        <th style="text-align:left; padding:.5rem; border-bottom:1px solid #ddd;">To</th>
+        <th style="text-align:left; padding:.5rem; border-bottom:1px solid #ddd;">Subject</th>
+        <th style="text-align:left; padding:.5rem; border-bottom:1px solid #ddd;">Operator</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% if not rows %}
+        <tr><td colspan="7" class="muted" style="padding:.75rem;">No communications match the current filters.</td></tr>
+      {% else %}
+        {% for r in rows %}
+          <tr>
+            <td style="padding:.5rem; border-bottom:1px solid #f0f0f0; white-space:nowrap;">{{ r.ts_view }}</td>
+            <td style="padding:.5rem; border-bottom:1px solid #f0f0f0;">{{ r.method }}</td>
+            <td style="padding:.5rem; border-bottom:1px solid #f0f0f0;">{{ r.direction }}</td>
+            <td style="padding:.5rem; border-bottom:1px solid #f0f0f0;">{{ r.from_party }}</td>
+            <td style="padding:.5rem; border-bottom:1px solid #f0f0f0;">{{ r.to_party }}</td>
+            <td style="padding:.5rem; border-bottom:1px solid #f0f0f0;">{{ r.subject_short }}</td>
+            <td style="padding:.5rem; border-bottom:1px solid #f0f0f0;">{{ r.operator }}</td>
+          </tr>
+        {% endfor %}
+      {% endif %}
+    </tbody>
+  </table>
+  {% if rows and rows|length >= 500 %}
+    <div class="muted" style="padding:.5rem; border-top:1px solid #eee;">Showing the most recent 500 rows. Use a smaller window or add a filter to narrow results.</div>
+  {% endif %}
+</div>

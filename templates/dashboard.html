@@ -65,6 +65,69 @@
   <div id="dashboard-table"></div>
 </div>
 
+{% if show_checkin %}
+<!-- ── Shift Check-In Modal (first page after login) ───────────────────── -->
+<div id="checkin-backdrop" class="modal" role="dialog" aria-modal="true" aria-labelledby="checkin-title">
+  <!-- overlay sheet (styled by .modal .backdrop in style.css) -->
+  <div class="backdrop" aria-hidden="true"></div>
+  <!-- panel/card (styled by #checkin-modal + .card in style.css) -->
+  <div id="checkin-modal" class="card">
+    <h3 id="checkin-title">Shift Check-In</h3>
+    <p class="muted">Welcome! Clock in so others know who’s on duty. You can skip if you’re just looking around.</p>
+    <form id="checkin-form" autocomplete="on">
+      <label for="ci-name">Name</label>
+      <input id="ci-name" name="name" class="force-upper" placeholder="e.g. JANE DOE"
+             value="{{ (last_staff.name or '')|e }}">
+      <label for="ci-role">Role</label>
+      <input id="ci-role" name="role" placeholder="e.g. RADIO / RAMP / SUPERVISOR"
+             value="{{ (last_staff.role or '')|e }}">
+      <label for="ci-ew">EW#</label>
+      <input id="ci-ew" name="ew_number" placeholder="Optional EW number"
+             value="{{ (last_staff.ew or '')|e }}">
+      <div class="actions">
+        <button type="button" class="button secondary" id="checkin-skip">Skip</button>
+        <button type="submit" class="button primary">Clock In</button>
+      </div>
+    </form>
+  </div>
+  <span class="sr-only">Login time check-in modal</span>
+</div>
+<script>
+  (function(){
+    // Embed a CSRF token for AJAX POSTs (Flask-WTF accepts X-CSRFToken / X-CSRF-Token)
+    const CSRF = {{ csrf_token()|tojson }};
+    const backdrop = document.getElementById('checkin-backdrop');
+    const form     = document.getElementById('checkin-form');
+    const btnSkip  = document.getElementById('checkin-skip');
+    function openModal(){ backdrop.style.display = 'flex'; setTimeout(()=>document.getElementById('ci-name').focus(), 10); }
+    function closeModal(){ backdrop.remove(); }
+    openModal();
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const data = new URLSearchParams(new FormData(form));
+      const r = await fetch('{{ url_for("staff.staff_quick_checkin") }}', {
+        method: 'POST',
+        headers: { 'X-CSRFToken': CSRF },
+        body: data,
+        credentials: 'same-origin'
+      });
+      if (r.ok) { closeModal(); window.showToast('Clocked in. Have a great shift!', 'success'); }
+      else { window.showToast('Check-in failed. Please try again.', 'error'); }
+    });
+    btnSkip.addEventListener('click', async () => {
+      const r = await fetch('{{ url_for("staff.staff_quick_checkin") }}', {
+        method:'POST',
+        headers: { 'X-CSRFToken': CSRF },
+        body: new URLSearchParams({skip:'1'}),
+        credentials: 'same-origin'
+      });
+      if (r.ok) { closeModal(); window.showToast('Okay — we won’t ask again for a while.', 'info'); }
+    });
+  })();
+</script>
+{% endif %}
+
 <script>
   async function refreshDashboard(){
     try {

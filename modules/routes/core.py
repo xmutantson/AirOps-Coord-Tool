@@ -85,6 +85,20 @@ def dashboard():
         canon = canonical_airport_code(raw_dest)
         f['dest_mapped'] = canon in mapping
 
+    # --- Shift check-in modal gating (Step 9) --------------------------
+    # Show only on the first page load *after* successful login and
+    # only if the cooldown cookie isn't set.
+    just_logged_in = bool(session.pop('just_logged_in', None))
+    cooldown_cookie = request.cookies.get('checked_in_recently')
+    show_checkin = just_logged_in and not cooldown_cookie
+
+    # Prefill fields from prior cookies if present
+    last_staff = {
+        'name': request.cookies.get('last_staff_name',''),
+        'role': request.cookies.get('last_staff_role',''),
+        'ew':   request.cookies.get('last_staff_ew',''),
+    }
+
     # pass tail_filter so the input box shows the right value
     tail_filter = request.args.get('tail_filter','').strip().upper()
     airport_filter = request.args.get('airport_filter','').strip().upper()
@@ -93,7 +107,9 @@ def dashboard():
         active='dashboard',
         tail_filter=tail_filter,
         airport_filter=airport_filter,
-        mapping=mapping
+        mapping=mapping,
+        show_checkin=show_checkin,
+        last_staff=last_staff
     )
 
 @bp.route('/dashboard/plain')

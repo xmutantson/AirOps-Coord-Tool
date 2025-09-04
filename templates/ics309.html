@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block title %}ICS-309{% endblock %}
+{% block content %}
+{% set __modal_should_open = show_header_modal %}
+<style>
+/* Scoped to #ics309 to avoid bleeding into site styles */
+#ics309 { background:#fff; }
+#ics309 .sheet { width: 8.5in; margin: 0 auto; padding: 0.25in; box-sizing: border-box; }
+#ics309 h1 { text-align:center; margin: 0 0 .25rem; font-size: 1.25rem; }
+#ics309 .hdr, #ics309 table { width:100%; border-collapse: collapse; }
+#ics309 .box { border:1px solid #333; padding:.25rem .35rem; font-size:.9rem; }
+#ics309 .label { font-size:.78rem; color:#333; margin-bottom:.15rem; }
+#ics309 .row { display:grid; grid-template-columns: 2fr 2fr 2fr 2fr; gap:.15rem; }
+#ics309 .subrow { display:grid; grid-template-columns: 1fr 1fr; gap:.15rem; }
+#ics309 .muted { color:#555; }
+#ics309 table thead th { border:1px solid #333; padding:.25rem; font-weight:600; background:#e9eafe; }
+#ics309 table tbody td { border:1px solid #333; padding:.25rem; vertical-align:top; height:1.1rem; }
+#ics309 .tiny { font-size:.75rem; }
+#ics309 .footer { display:grid; grid-template-columns: 3fr 2fr; gap:.15rem; margin-top:.25rem; }
+@media print {
+  header, footer { display:none !important; }
+  body { background:#fff; }
+  #ics309 .sheet { padding:0; }
+  @page { size: letter portrait; margin: 0.5in; }
+  thead { display: table-header-group; }
+}
+/* Hard-light the ICS-309 area only (works in dark/light, avoids extension inversion) */
+#ics309, #ics309 * {
+  color: #000 !important;
+  background: transparent; /* let explicit backgrounds show */
+}
+#ics309 table, #ics309 th, #ics309 td {
+  background: #fff !important;
+  color: #000 !important;
+  border-color: #000 !important;
+}
+/* Hint to UA that this sub-tree is light themed (affects form controls if any) */
+#ics309 { color-scheme: light; }
+/* Keep page backdrop light on this view */
+body { background: #fff !important; }
+@media print {
+  /* Exact print colors; ensure gridlines remain solid */
+  #ics309, #ics309 * {
+    color: #000 !important;
+    background: #fff !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  #ics309 table th, #ics309 table td { border-color:#000 !important; }
+  #ics309 table thead th { background:#e9eafe !important; color:#000 !important; }
+}
+</style>
+
+<div id="ics309">
+  <div class="sheet">
+    <h1>Communications Log (ICS 309)</h1>
+
+    <!-- Header blocks -->
+    <div class="row" style="margin-bottom:.15rem;">
+      <div class="box">
+        <div class="label">1. INCIDENT NAME</div>
+        <div>{{ incident_name }}</div>
+      </div>
+      <div class="box">
+        <div class="label">2. OPERATIONAL PERIOD</div>
+        <div class="subrow">
+          <div>From: {{ op_from_date }}&nbsp;&nbsp;Time {{ op_from_time }}</div>
+          <div>To: {{ op_to_date }}&nbsp;&nbsp;Time {{ op_to_time }}</div>
+        </div>
+      </div>
+      <div class="box">
+        <div class="label">3. RADIO NETWORK NAME</div>
+        <div>{{ radio_network_name }}</div>
+      </div>
+      <div class="box">
+        <div class="label">4. RADIO OPERATOR (Name, Call Sign)</div>
+        <div>{{ radio_operator }}</div>
+      </div>
+    </div>
+
+    <!-- Log table -->
+    <table>
+      <thead>
+        <tr>
+          <th style="width:10%;">Time<br><span class="tiny">(24:00)</span></th>
+          <th style="width:20%;">FROM<br><span class="tiny">Call Sign/ID &nbsp;|&nbsp; Msg #</span></th>
+          <th style="width:20%;">TO<br><span class="tiny">Call Sign/ID &nbsp;|&nbsp; Msg #</span></th>
+          <th>Message</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r.time_utc }}</td>
+          <td>{{ r.from_id }}{% if r.from_msg_no %} &nbsp;|&nbsp; {{ r.from_msg_no }}{% endif %}</td>
+          <td>{{ r.to_id }}{% if r.to_msg_no %} &nbsp;|&nbsp; {{ r.to_msg_no }}{% endif %}</td>
+          <td>{{ r.message }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <!-- Footer -->
+    <div class="footer">
+      <div class="box"><div class="label">6. PREPARED BY (Name, Position)</div>{{ prepared_by }}</div>
+      <div class="box"><div class="label">7. DATE &amp; TIME PREPARED</div>{{ prepared_dt }}</div>
+    </div>
+
+    <div class="no-print" style="margin-top:.5rem; display:flex; gap:.5rem; justify-content:flex-end;">
+      <button type="button"
+              class="button"
+              style="padding:.35rem .6rem; border:1px solid #ccc; border-radius:.4rem; background:#fafafa; cursor:pointer;"
+              onclick="openIcs309Modal()">Edit Header</button>
+      <a class="button"
+         style="padding:.35rem .6rem; border:1px solid #ccc; border-radius:.4rem; text-decoration:none;"
+         href="{{ url_for('exports.comms_ics309_download', **request.args.to_dict()) }}">
+        Download single-file HTML
+      </a>
+      <button class="button" onclick="window.print()">Print</button>
+      <div class="muted tiny" style="margin-left:auto;">Times shown in UTC</div>
+    </div>
+  </div>
+</div>
+
+<!-- Lightweight ICS-309 header-prefs modal (mirrors ICS-214 UX) -->
+<div id="ics309-modal-backdrop" class="modal" style="display:none;">
+  <!-- Backdrop first so it sits behind the panel -->
+  <div class="backdrop" aria-hidden="true"></div>
+  <div class="modal-window">
+    <button class="close-modal" aria-label="Close" onclick="closeIcs309Modal()">✕</button>
+    <h3>ICS-309 Header</h3>
+    <p class="muted">These values are saved for next time. Time prepared is automatic.</p>
+    <form id="ics309-prefs-form">
+      <label>1. Incident Name</label>
+      <input type="text" name="incident_name" value="{{ incident_name }}">
+
+      <label>3. Radio Network Name</label>
+      <input type="text" name="radio_network_name" value="{{ radio_network_name }}">
+
+      <label>4. Radio Operator (Name, Call Sign)</label>
+      <input type="text" name="radio_operator" value="{{ radio_operator }}">
+
+      <label>6. Prepared By (Name, Position)</label>
+      <input type="text" name="prepared_by" value="{{ prepared_by }}">
+
+      <div class="actions">
+        <button type="button" class="btn btn-secondary" onclick="closeIcs309Modal()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function openIcs309Modal(){ document.getElementById('ics309-modal-backdrop').style.display = 'flex'; }
+  function closeIcs309Modal(){ document.getElementById('ics309-modal-backdrop').style.display = 'none'; }
+  if ({{ 'true' if __modal_should_open else 'false' }}) { openIcs309Modal(); }
+
+  document.getElementById('ics309-prefs-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const payload = Object.fromEntries(fd.entries());
+    try{
+      const r = await fetch("{{ url_for('exports.comms_ics309_save_prefs') }}", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!r.ok) throw new Error('Save failed');
+      location.reload();  // refresh so values appear in-page and in downloads
+    }catch(err){
+      window.showToast ? window.showToast('Failed to save ICS-309 header', 'error') : alert('Save failed');
+    }
+  });
+</script>
+{% endblock %}

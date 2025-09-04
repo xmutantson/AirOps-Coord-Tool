@@ -179,51 +179,62 @@ def preferences():
         # ----- Remote Airports (DB-backed) --------------------------------
         if ('auto_broadcast_interval_min' in request.form or
             'auto_reply_enabled' in request.form):
+            # Only act (and early-return) if something actually changed.
+            curr_iv  = (get_preference('auto_broadcast_interval_min') or '0').strip()
+            curr_ar  = (get_preference('auto_reply_enabled') or 'yes').strip().lower()
+            changed  = False
+
             # Clamp to allowed values: 0/15/30/60
             if 'auto_broadcast_interval_min' in request.form:
-                raw = (request.form.get('auto_broadcast_interval_min','') or '').strip()
+                raw_iv  = (request.form.get('auto_broadcast_interval_min','') or '').strip()
                 allowed = {'0','15','30','60'}
-                val = raw if raw in allowed else '0'
-                set_preference('auto_broadcast_interval_min', val)
+                val_iv  = raw_iv if raw_iv in allowed else '0'
+                if val_iv != curr_iv:
+                    set_preference('auto_broadcast_interval_min', val_iv)
+                    changed = True
             if 'auto_reply_enabled' in request.form:
-                raw = (request.form.get('auto_reply_enabled','') or '').strip().lower()
-                val = 'yes' if raw == 'yes' else 'no'
-                set_preference('auto_reply_enabled', val)
-            # (Re)configure the minute-tick job whenever cadence changes
-            try:
-                configure_inventory_broadcast_job()
-            except Exception:
-                pass
-            # Soft guidance: warn if inputs look incomplete
-            try:
-                iv = int(float(get_preference('auto_broadcast_interval_min') or 0))
-            except Exception:
-                iv = 0
-            if iv > 0:
-                pat_ok, pat_path, pat_reason = pat_config_status()
-                # Compute recipients (skip our own airport & callsign)
-                raw_map = (get_preference('airport_call_mappings') or '').strip()
-                self_ap = (get_preference('default_origin') or '').strip().upper()
-                self_cs = (get_preference('winlink_callsign_1') or '').strip().upper()
-                recipients = []
-                seen = set()
-                for ln in raw_map.splitlines():
-                    if ':' not in ln:
-                        continue
-                    ap, wl = (x.strip().upper() for x in ln.split(':', 1))
-                    if not ap or not wl:
-                        continue
-                    if ap == self_ap or wl == self_cs:
-                        continue
-                    if wl not in seen:
-                        seen.add(wl)
-                        recipients.append(wl)
-                if not pat_ok:
-                    flash("Auto-broadcast enabled, but PAT credentials are not configured.", "warning")
-                if not recipients:
-                    flash("Auto-broadcast enabled, but no recipients found in airport_call_mappings.", "warning")
-            flash("Remote-airport broadcast/auto-reply settings saved.", "success")
-            return redirect(url_for('preferences.preferences'))
+                raw_ar = (request.form.get('auto_reply_enabled','') or '').strip().lower()
+                val_ar = 'yes' if raw_ar == 'yes' else 'no'
+                if val_ar != curr_ar:
+                    set_preference('auto_reply_enabled', val_ar)
+                    changed = True
+
+            if changed:
+                # (Re)configure the minute-tick job whenever cadence changes
+                try:
+                    configure_inventory_broadcast_job()
+                except Exception:
+                    pass
+                # Soft guidance: warn if inputs look incomplete
+                try:
+                    iv = int(float(get_preference('auto_broadcast_interval_min') or 0))
+                except Exception:
+                    iv = 0
+                if iv > 0:
+                    pat_ok, pat_path, pat_reason = pat_config_status()
+                    # Compute recipients (skip our own airport & callsign)
+                    raw_map = (get_preference('airport_call_mappings') or '').strip()
+                    self_ap = (get_preference('default_origin') or '').strip().upper()
+                    self_cs = (get_preference('winlink_callsign_1') or '').strip().upper()
+                    recipients = []
+                    seen = set()
+                    for ln in raw_map.splitlines():
+                        if ':' not in ln:
+                            continue
+                        ap, wl = (x.strip().upper() for x in ln.split(':', 1))
+                        if not ap or not wl:
+                            continue
+                        if ap == self_ap or wl == self_cs:
+                            continue
+                        if wl not in seen:
+                            seen.add(wl)
+                            recipients.append(wl)
+                    if not pat_ok:
+                        flash("Auto-broadcast enabled, but PAT credentials are not configured.", "warning")
+                    if not recipients:
+                        flash("Auto-broadcast enabled, but no recipients found in airport_call_mappings.", "warning")
+                flash("Remote-airport broadcast/auto-reply settings saved.", "success")
+                return redirect(url_for('preferences.preferences'))
 
         # ----- cookie-backed prefs ---------------------------------------
         resp = make_response(redirect(url_for('preferences.preferences')))
