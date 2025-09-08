@@ -3,14 +3,16 @@
 # - Schema creation (idempotent)
 # - Insert helper with light validation & UTC coercion
 # - List/filter helper for views
-# - (CSV projection removed; use /exports/communications.csv)
 #
 # Canonical metadata keys written into `metadata_json` (when present):
-#   - tail_number   : "N123AB" (aircraft tail)
-#   - flight_code   : any free-form flight/mission code
-#   - operator_call : operator/callsign string
-#   - wgid          : optional wargame id (if applicable)
-#   - source        : producer hint (e.g. "winlink_rx", "radio_ui", "manual_comms")
+#   - tail_number     : "N123AB" (aircraft tail)
+#   - flight_code     : any free-form flight/mission code
+#   - operator_call   : operator/callsign string
+#   - wgid            : optional wargame id (if applicable)
+#   - source          : producer hint (e.g. "TAR1090", "dump1090", "winlink_rx", "radio_ui")
+#   - sample_ts       : ISO-8601 '...Z' of ADS-B sample used in a reply (if applicable)
+#   - receiver_call   : receiving station callsign for ADS-B sample (if applicable)
+#   - receiver_airport: receiver’s airport code for ADS-B sample (if applicable)
 # Keep additions small and snake_case; exporters treat `metadata_json` as an opaque string.
 
 from __future__ import annotations

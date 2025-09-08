@@ -6,7 +6,8 @@ from flask import Blueprint, current_app, flash, jsonify, redirect, render_templ
 
 from modules.services.winlink.core import (
     parse_winlink, generate_subject, generate_body,
-    parse_aoct_cargo_query, pat_config_status, send_winlink_message
+    parse_aoct_cargo_query, pat_config_status, send_winlink_message,
+    build_aoct_flight_reply_body,   # ← for AOCT flight query preview
 )
 from modules.utils.remote_inventory import (
     parse_remote_snapshot,
@@ -15,8 +16,10 @@ from modules.utils.remote_inventory import (
     build_inventory_snapshot,
 )
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
+from modules.utils.common import adsb_bulk_upsert
 from modules.utils.common import _start_radio_tx_once, maybe_extract_flight_code, _is_winlink_reflector_bounce, _mirror_comm_winlink  # call run-once starter from this bp
 from modules.utils.comms import insert_comm
+from modules.services.jobs import _parse_aoct_flight_reply
 
 # --- IMPORTANT ---
 # The star import above brings in a DB-only fallback wargame_task_finish that returns None
@@ -42,6 +45,7 @@ logger = logging.getLogger(__name__)
 # --- AOCT subject/body normalization + mapping helpers -----------------------
 _SUBJECT_PREFIX = re.compile(r'^(?:\s*(?:subject|subj|re|fw|fwd|ack)\s*:?\s*)+', re.I)
 _AOCT_PHRASE   = re.compile(r'\baoct\s+cargo\s+(reply|status|query)\b', re.I)
+_AOCT_FLIGHT   = re.compile(r'\baoct\s+flight\s+(reply|query)\b', re.I)
 _AIRPORT_LINE  = re.compile(r'^\s*AIRPORT\s*:\s*([A-Z0-9]{3,4})\b', re.I | re.M)
 
 def _build_aoct_query(airport: str, categories=None, wants_csv: bool=True):
@@ -145,6 +149,93 @@ def _send_with_optional_cc(to_addr: str, subject: str, body: str, include_cc: bo
                     pass
         return primary_ok
 
+# --- AOCT flight-query sighting resolver -------------------------------------
+def _latest_sighting_for_tail_db_first(tail: str) -> dict | None:
+    """
+    Best-effort resolver used by AOCT flight query preview:
+      1) newest row in adsb_sightings for this tail
+      2) fallback to adsb_latest_for_tail(tail)
+      3) fallback to scanning adsb_fetch_snapshot()
+    Always back-fills receiver metadata from preferences if blank.
+    Returns a dict with keys compatible with build_aoct_flight_reply_body(), or None.
+    """
+    t = (tail or '').strip().upper()
+    if not t:
+        return None
+    row = None
+    try:
+        with sqlite3.connect(current_app.config['DB_FILE']) as c:
+            c.row_factory = sqlite3.Row
+            row = c.execute("""
+                SELECT tail, sample_ts_utc, lat, lon, track_deg, speed_kt, alt_ft,
+                       receiver_airport, receiver_call, source
+                  FROM adsb_sightings
+                 WHERE UPPER(tail)=?
+                 ORDER BY sample_ts_utc DESC
+                 LIMIT 1
+            """, (t,)).fetchone()
+    except Exception:
+        row = None
+
+    d: dict | None = dict(row) if row else None
+    if not d:
+        try:
+            logger.debug("AOCT flight: no DB/live sample for tail=%s; scanning snapshot…", t)
+        except Exception:
+            pass
+        # Try the lightweight live helper
+        try:
+            live = adsb_latest_for_tail(t)
+        except Exception:
+            live = None
+        if live and (live.get('lat') is not None) and (live.get('lon') is not None):
+            d = {
+                "tail": (live.get("tail") or t).strip().upper(),
+                "lat": float(live["lat"]),
+                "lon": float(live["lon"]),
+                "track_deg": live.get("track_deg"),
+                "speed_kt": live.get("speed_kt"),
+                "alt_ft": live.get("alt_ft"),
+                "sample_ts_utc": live.get("sample_ts_utc") or iso8601_ceil_utc(),
+                "receiver_airport": (live.get("receiver_airport") or "").strip().upper(),
+                "receiver_call":    (live.get("receiver_call") or "").strip().upper(),
+                "source": (live.get("source") or ""),
+            }
+        else:
+            # Last-ditch: scan the current snapshot for a matching tail
+            try:
+                snap = adsb_fetch_snapshot() or []
+            except Exception:
+                snap = []
+            for r in snap:
+                rt = (r.get("tail") or r.get("reg") or "").strip().upper()
+                if rt == t and r.get("lat") is not None and r.get("lon") is not None:
+                    d = {
+                        "tail": t,
+                        "lat": float(r["lat"]),
+                        "lon": float(r["lon"]),
+                        "track_deg": r.get("track_deg"),
+                        "speed_kt": r.get("speed_kt"),
+                        "alt_ft": r.get("alt_ft"),
+                        "sample_ts_utc": r.get("sample_ts_utc") or iso8601_ceil_utc(),
+                        "receiver_airport": (r.get("receiver_airport") or "").strip().upper(),
+                        "receiver_call":    (r.get("receiver_call") or "").strip().upper(),
+                        "source": (r.get("source") or ""),
+                    }
+                    break
+
+    if not d:
+        return None
+    # Fill metadata defaults if missing (we are the receiver)
+    d.setdefault("sample_ts_utc", iso8601_ceil_utc())
+    if not (d.get("receiver_airport") or "").strip():
+        d["receiver_airport"] = (get_preference('default_origin') or '').strip().upper()
+    if not (d.get("receiver_call") or "").strip():
+        d["receiver_call"] = (get_preference('winlink_callsign_1') or '').strip().upper()
+    if not (d.get("source") or "").strip():
+        d["source"] = "adsb"
+    return d
+
 # Start RadioTX once when this blueprint sees its first request.
 # (Flask blueprints don’t have before_app_first_request; use before_request + our guard.)
 #@bp.before_request
@@ -164,6 +255,185 @@ def radio():
         sender = escape(request.form.get('sender','').strip())
         ts     = datetime.utcnow().isoformat()
         subj_norm = _normalize_subject(subj)
+
+        # --- AOCT FLIGHT REPLY (manual paste) --------------------------------
+        if subj_norm.lower() == 'aoct flight reply':
+            # audit row
+            with sqlite3.connect(current_app.config['DB_FILE']) as c:
+                c.execute("""
+                  INSERT INTO incoming_messages(
+                    sender, subject, body, timestamp,
+                    tail_number, airfield_takeoff, airfield_landing,
+                    takeoff_time, eta, cargo_type, cargo_weight, remarks
+                  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (sender, subj, body, ts, '', '', '', '', '', '', '', ''))
+                c.commit()
+            # parse + persist
+            try:
+                d = _parse_aoct_flight_reply(body)
+            except Exception as exc:
+                logger.exception("AOCT flight reply parse failed (manual): %s", exc)
+                if is_ajax:
+                    return jsonify({'action':'aoct_flight_failed', 'error':'parse_error'}), 200
+                flash("AOCT flight reply could not be parsed.", "error")
+                return redirect(url_for('radio.radio'))
+
+            # --- NEW: ingest parsed flight reply + update locate + respond ---
+            try:
+                # Basic sanity: must have tail + lat/lon
+                if (not d) or (not d.get('tail')) or (d.get('lat') is None) or (d.get('lon') is None):
+                    if is_ajax:
+                        return jsonify({'action':'aoct_flight_failed', 'error':'missing_fields'}), 200
+                    flash("AOCT flight reply lacked tail/lat/lon; not ingested.", "error")
+                    return redirect(url_for('radio.radio'))
+
+                # Defaults & normalization
+                d['sample_ts_utc']    = d.get('sample_ts_utc') or iso8601_ceil_utc()
+                d['receiver_airport'] = canonical_airport_code(
+                    d.get('receiver_airport') or (get_preference('default_origin') or '')
+                ) or ''
+                d['receiver_call']    = (d.get('receiver_call') or (get_preference('winlink_callsign_1') or '')).strip().upper()
+                d['source']           = d.get('source') or 'readsb'
+
+                # De-duped insert into adsb_sightings
+                adsb_bulk_upsert([{
+                    'tail': d['tail'],
+                    'sample_ts_utc': d['sample_ts_utc'],
+                    'lat': d['lat'],
+                    'lon': d['lon'],
+                    'track_deg': d.get('track_deg'),
+                    'speed_kt': d.get('speed_kt'),
+                    'alt_ft': d.get('alt_ft'),
+                    'receiver_airport': d.get('receiver_airport') or None,
+                    'receiver_call': d.get('receiver_call') or None,
+                    'source': d.get('source') or 'readsb',
+                }])
+
+                # Flip most recent locate row for this tail to "responded"
+                with sqlite3.connect(current_app.config['DB_FILE']) as c:
+                    row = c.execute("""
+                        SELECT id FROM flight_locates
+                         WHERE UPPER(tail)=?
+                         ORDER BY requested_at_utc DESC
+                         LIMIT 1
+                    """, (d['tail'],)).fetchone()
+                    if row:
+                        c.execute("""
+                          UPDATE flight_locates
+                             SET latest_sample_ts_utc=?,
+                                 latest_from_airport=?,
+                                 latest_from_call=?
+                           WHERE id=?
+                        """, (d['sample_ts_utc'], d.get('receiver_airport') or None,
+                              d.get('receiver_call') or None, row[0]))
+                        c.commit()
+
+                # Success response
+                if is_ajax:
+                    return jsonify({'action':'aoct_flight_ingested',
+                                    'tail': d['tail'],
+                                    'airport': d.get('receiver_airport') or '',
+                                    'ts': d['sample_ts_utc']}), 200
+                flash(f"AOCT flight reply ingested for {d['tail']} from {d.get('receiver_airport','')} at {d['sample_ts_utc']}.", "success")
+                return redirect(url_for('radio.radio'))
+            except Exception as exc:
+                logger.exception("AOCT flight reply ingest failed (manual): %s", exc)
+                if is_ajax:
+                    return jsonify({'action':'aoct_flight_failed', 'error':'server_error'}), 200
+                flash("AOCT flight reply ingest failed.", "error")
+                return redirect(url_for('radio.radio'))
+
+
+        # --- AOCT FLIGHT QUERY (manual preview) ------------------------------
+        # Behaves like the cargo-query path: compose a reply and show the modal.
+        m_flt = _AOCT_FLIGHT.search(subj_norm)
+        if subj_norm.lower() == 'aoct flight query' or (m_flt and m_flt.group(1).lower() == 'query'):
+            ts = datetime.utcnow().isoformat()
+            # Audit trail: store raw inbound (empty flight fields)
+            with sqlite3.connect(current_app.config['DB_FILE']) as c:
+                c.execute("""
+                  INSERT INTO incoming_messages(
+                    sender, subject, body, timestamp,
+                    tail_number, airfield_takeoff, airfield_landing,
+                    takeoff_time, eta, cargo_type, cargo_weight, remarks
+                  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (sender, subj, body, ts, '', '', '', '', '', '', '', ''))
+                c.commit()
+            # Mirror to communications (inbound AOCT flight query)
+            try:
+                _mirror_comm_winlink(
+                    ts, "in",
+                    from_party=(sender or ''),
+                    to_party=(get_preference('winlink_callsign_1') or 'OPERATOR'),
+                    subject=subj, body=body,
+                    operator=(request.cookies.get('operator_call') or None),
+                    metadata={"kind": "AOCT flight query"}
+                )
+            except Exception:
+                pass
+
+            # Parse minimal fields from body
+            m_tail = re.search(r'^\s*TAIL\s*:\s*([A-Z0-9\-]+)\b', body or '', re.I | re.M)
+            tail   = (m_tail.group(1).upper() if m_tail else '').strip()
+            m_from = re.search(r'^\s*FROM_AIRPORT\s*:\s*([A-Z0-9]{3,4})\b', body or '', re.I | re.M)
+            from_ap = (m_from.group(1).upper() if m_from else '').strip()
+
+            # Build reply body from newest ADS-B sample (DB first, then live/snapshot)
+            reply_subject = "AOCT flight reply"
+            reply_body    = ""
+            sample        = _latest_sighting_for_tail_db_first(tail) if tail else None
+            if sample and (sample.get('lat') is not None) and (sample.get('lon') is not None):
+                try:
+                    reply_body = build_aoct_flight_reply_body(sample)
+                except Exception:
+                    # fallback: inline compose if builder isn’t available
+                    lines = [
+                        "AOCT flight reply", "",
+                        f"TAIL: {sample['tail']}",
+                        f"POSITION: {sample['lat']},{sample['lon']}",
+                        f"TRACK_DEG: {'' if sample.get('track_deg') is None else sample['track_deg']}",
+                        f"GROUND_SPEED_KT: {'' if sample.get('speed_kt') is None else sample['speed_kt']}",
+                        f"ALTITUDE_FT: {'' if sample.get('alt_ft') is None else sample['alt_ft']}",
+                        f"SAMPLE_TS: {sample['sample_ts_utc']}",
+                        f"RECEIVER_AIRPORT: {sample.get('receiver_airport','')}",
+                        f"RECEIVER_CALL: {sample.get('receiver_call','')}",
+                        f"SOURCE: {sample.get('source','')}",
+                        "{AOCT flight reply, rev. 2025-09-01}",
+                    ]
+                    reply_body = "\n".join(lines)
+            else:
+                # No sighting available → produce a polite, standards-shaped notice
+                # (Operator may still send manually, or try again later.)
+                tail_txt = tail or "UNKNOWN"
+                reply_body = (
+                    "AOCT flight reply\n\n"
+                    f"TAIL: {tail_txt}\n"
+                    "POSITION: \n"
+                    "TRACK_DEG: \n"
+                    "GROUND_SPEED_KT: \n"
+                    "ALTITUDE_FT: \n"
+                    f"SAMPLE_TS: {iso8601_ceil_utc()}\n"
+                    f"RECEIVER_AIRPORT: {(get_preference('default_origin') or '').strip().upper()}\n"
+                    f"RECEIVER_CALL: {(get_preference('winlink_callsign_1') or '').strip().upper()}\n"
+                    "SOURCE: adsb\n"
+                    "{AOCT flight reply, rev. 2025-09-01}"
+                )
+
+            # Determine destination callsign hint from FROM_AIRPORT mapping
+            to_hint = _lookup_callsign_for_airport(from_ap) or (sender or "").strip().upper()
+            pat_ok, _, _ = pat_config_status()
+            if is_ajax:
+                return jsonify({
+                    'action': 'aoct_query_reply',
+                    'airport': from_ap,
+                    'categories': [],  # shape parity with cargo path
+                    'subject': reply_subject,
+                    'body': reply_body,
+                    'can_send': bool(pat_ok),
+                    'to_hint': to_hint
+                })
+            flash("AOCT flight query parsed; reply preview available (AJAX).")
+            return redirect(url_for('radio.radio'))
 
         # ── AOCT SNAPSHOT MESSAGES (handled before Air Ops parsing) ─────────────
         # Accept subjects: "AOCT cargo reply" or "AOCT cargo status" (ignore queries)

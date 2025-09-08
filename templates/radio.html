@@ -237,6 +237,23 @@ function normalizeHHMM(t){
             </a>
           </div>`;
         setTimeout(() => { feedbackBox.innerHTML = ''; }, 15000);
+      } else if (srvJson.action === 'aoct_flight_ingested') {
+        const tail = srvJson.tail || '';
+        const ap   = srvJson.airport || '';
+        const ts   = srvJson.ts || '';
+        feedbackBox.innerHTML = `
+          <div class="radio-content-box" style="border:1px solid #9bd3ae; background:#f2fbf5;">
+            <strong>AOCT flight reply ingested</strong><br>
+            Tail: ${tail} • From: ${ap} • Sample: ${ts}<br>
+            <a class="btn btn-secondary" href="/locates?tail=${encodeURIComponent(tail)}">Open Map</a>
+          </div>`;
+        setTimeout(() => { feedbackBox.innerHTML = ''; }, 15000);
+      } else if (srvJson.action === 'aoct_flight_failed') {
+        feedbackBox.innerHTML = `
+          <div class="radio-content-box" style="border:1px solid #f0b7b7; background:#fff6f6;">
+            <strong>AOCT flight reply could not be parsed.</strong>
+          </div>`;
+        setTimeout(() => { feedbackBox.innerHTML = ''; }, 12000);
       } else if (srvJson.action === 'aoct_query_ignored') {
         feedbackBox.innerHTML = `
           <div class="radio-content-box">

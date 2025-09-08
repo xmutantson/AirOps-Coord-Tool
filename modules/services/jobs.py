@@ -5,7 +5,7 @@ import logging
 import uuid
 import time
 import sqlite3, os, json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import subprocess
 import glob
 from apscheduler.schedulers.base import STATE_RUNNING
@@ -19,6 +19,7 @@ from modules.services.winlink.core import (
     generate_subject,       # used in auto_winlink_send_job
     generate_body,          # used in auto_winlink_send_job
     parse_aoct_cargo_query,
+    maybe_auto_reply_flight_query,
     send_winlink_message,
 )
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
@@ -28,6 +29,7 @@ from modules.utils.remote_inventory import (
     parse_remote_snapshot,
     upsert_remote_inventory,
 )
+from modules.utils.common import adsb_fetch_stream_snapshot, adsb_bulk_upsert, get_preference
 from app import DB_FILE, scheduler
 from flask import current_app
 app = current_app  # legacy shim for helpers
@@ -86,6 +88,69 @@ def _winlink_ccs() -> list[str]:
         pass
     return out
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ADS-B Local Poller (optional)
+# Prefs:
+#   • adsb_poll_enabled    : 'yes' | 'no'
+#   • adsb_poll_interval_s : seconds (str/number; default 10s; min 3s)
+# Uses the Step-6 adapter: adsb_fetch_snapshot() → normalized dicts.
+# Inserts into adsb_sightings with receiver metadata and light de-duplication.
+# ─────────────────────────────────────────────────────────────────────────────
+def adsb_poller_tick():
+    """
+    One polling tick: fetch snapshot from TAR1090/readsb and upsert rows.
+    Skips work entirely when 'adsb_poll_enabled' is not 'yes'.
+    """
+    try:
+        enabled = (get_preference('adsb_poll_enabled') or 'no').strip().lower() == 'yes'
+    except Exception:
+        enabled = False
+    if not enabled:
+        return
+    try:
+        rows = adsb_fetch_stream_snapshot()
+        if not rows:
+            return
+        # Best-effort bulk insert; helper handles dedupe and blanks
+        adsb_bulk_upsert(rows)
+    except Exception as e:
+        try:
+            LOG.debug("adsb_poller_tick failed: %s", e)
+        except Exception:
+            pass
+
+def configure_adsb_poller_job():
+    """
+    (Re)install or remove the ADS-B poller based on preferences.
+    Safe to call repeatedly.
+    """
+    try:
+        scheduler.remove_job('adsb_poller')
+    except Exception:
+        pass
+
+    try:
+        enabled = (get_preference('adsb_poll_enabled') or 'no').strip().lower() == 'yes'
+    except Exception:
+        enabled = False
+    if not enabled:
+        return
+    try:
+        raw = get_preference('adsb_poll_interval_s') or '10'
+        interval = max(3, int(float(raw)))
+    except Exception:
+        interval = 10
+
+    scheduler.add_job(
+        id='adsb_poller',
+        func=adsb_poller_tick,
+        trigger='interval',
+        seconds=interval,
+        replace_existing=True
+    )
+    if scheduler.state != STATE_RUNNING:
+        scheduler.start()
+
 def _send_with_optional_cc(to_addr: str, subject: str, body: str, include_cc: bool=False) -> bool:
     """
     Try to use send_winlink_message(..., cc=[...]) if available; otherwise
@@ -124,6 +189,66 @@ def _wl_ascii(s):
          .replace('–', '-')
          .replace('×', 'x')
     )
+
+# --- AOCT flight reply (key:value) parser ------------------------------------
+def _parse_aoct_flight_reply(body: str) -> dict:
+    """
+    Parse the AOCT flight reply per spec:
+      TAIL, POSITION(lat,lon), TRACK_DEG, GROUND_SPEED_KT, ALTITUDE_FT,
+      SAMPLE_TS (ISO 8601, Z), RECEIVER_AIRPORT, RECEIVER_CALL, SOURCE
+    Returns a dict with normalized keys or raises ValueError on bad input.
+    """
+    if not body:
+        raise ValueError("empty body")
+
+    kv = {}
+    for raw in (body or "").splitlines():
+        if ":" not in raw:
+            continue
+        k, v = raw.split(":", 1)
+        kv[k.strip().upper()] = v.strip()
+
+    tail = (kv.get("TAIL") or "").upper()
+    if not tail:
+        raise ValueError("missing TAIL")
+
+    pos = kv.get("POSITION") or ""
+    if "," not in pos:
+        raise ValueError("POSITION must be 'lat,lon'")
+    lat_s, lon_s = [p.strip() for p in pos.split(",", 1)]
+    lat, lon = float(lat_s), float(lon_s)
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        raise ValueError("POSITION out of range")
+
+    def _num(name, cast=float):
+        s = kv.get(name)
+        if s is None or s == "":
+            return None
+        try:
+            return cast(s)
+        except Exception:
+            return None
+
+    track = _num("TRACK_DEG", float)
+    spd   = _num("GROUND_SPEED_KT", float)
+    alt   = _num("ALTITUDE_FT", float)
+
+    ts = kv.get("SAMPLE_TS") or ""
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00")) if ts else None
+    except Exception:
+        dt = None
+    sample_ts = iso8601_ceil_utc(dt)  # uses now if dt is None
+
+    return {
+        "tail": tail,
+        "lat": lat, "lon": lon,
+        "track_deg": track, "speed_kt": spd, "alt_ft": alt,
+        "sample_ts_utc": sample_ts,
+        "receiver_airport": (kv.get("RECEIVER_AIRPORT") or "").upper(),
+        "receiver_call":    (kv.get("RECEIVER_CALL") or "").upper(),
+        "source": (kv.get("SOURCE") or "")
+    }
 
 def _shutdown_scheduler():
     try:
@@ -416,6 +541,18 @@ def configure_wargame_jobs():
             app.logger.warning("Wargame generators not applied: %s", e)
         except Exception:
             pass
+    # Ensure nightly retention job is (re)installed alongside wargame jobs.
+    try:
+        configure_retention_jobs()
+    except Exception:
+        pass
+
+    # Also ensure the inventory auto-broadcast minute ticker is installed.
+    # (Safe to call repeatedly; job is replace_existing=True.)
+    try:
+        configure_inventory_broadcast_job()
+    except Exception:
+        pass
 
 def configure_winlink_jobs():
     # ── clear any existing jobs ───────────────────
@@ -453,6 +590,57 @@ def configure_winlink_jobs():
     )
 
 
+    if scheduler.state != STATE_RUNNING:
+        scheduler.start()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Retention & Purge (ADS-B)
+# ─────────────────────────────────────────────────────────────────────────────
+def purge_adsb_sightings_job():
+    """
+    Nightly retention: purge ADS-B sightings older than N hours (default 24h).
+    Retains flight_locates indefinitely.
+    """
+    try:
+        hours_raw = get_preference('adsb_retention_hours') or '24'
+        retention_hours = max(1.0, float(hours_raw))
+    except Exception:
+        retention_hours = 24.0
+
+    cutoff_dt  = datetime.utcnow() - timedelta(hours=retention_hours)
+    cutoff_iso = iso8601_ceil_utc(cutoff_dt)
+
+    try:
+        with sqlite3.connect(DB_FILE) as c:
+            c.execute(
+                "DELETE FROM adsb_sightings WHERE IFNULL(sample_ts_utc,'') <> '' AND sample_ts_utc < ?",
+                (cutoff_iso,)
+            )
+        try:
+            LOG.info("ADS-B purge ran: cutoff=%s (%.1f h retention)", cutoff_iso, retention_hours)
+        except Exception:
+            pass
+    except Exception as e:
+        try:
+            LOG.warning("ADS-B purge failed: %s", e)
+        except Exception:
+            pass
+
+def configure_retention_jobs():
+    """Install/refresh nightly purge of ADS-B sightings at 02:30 UTC."""
+    try:
+        scheduler.remove_job('purge_adsb_sightings')
+    except Exception:
+        pass
+    scheduler.add_job(
+        id='purge_adsb_sightings',
+        func=purge_adsb_sightings_job,
+        trigger='cron',
+        hour=2,
+        minute=30,
+        timezone=timezone.utc,
+        replace_existing=True
+    )
     if scheduler.state != STATE_RUNNING:
         scheduler.start()
 
@@ -758,6 +946,97 @@ def process_unparsed_winlink_messages():
 
         # normalize subject once for routing
         subj_norm = (m.get('subject') or '').strip().lower()
+
+        # ── AOCT flight query (auto-reply from background path) ───────────────
+        if subj_norm == 'aoct flight query':
+            try:
+                # Mirror raw mail for audit (like other AOCT branches)
+                with sqlite3.connect(DB_FILE) as conn:
+                    conn.execute("""
+                        INSERT INTO incoming_messages(
+                            sender, subject, body, timestamp,
+                            tail_number, airfield_takeoff, airfield_landing,
+                            takeoff_time, eta, cargo_type, cargo_weight, remarks
+                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    """, (
+                        (m.get('sender') or ''), (m.get('subject') or ''), (m.get('body') or ''), ts_iso,
+                        '', '', '', '', '', '', '', ''
+                    ))
+                handled = maybe_auto_reply_flight_query(m)
+                with sqlite3.connect(DB_FILE) as conn:
+                    conn.execute("UPDATE winlink_messages SET parsed=1 WHERE id=?", (m['id'],))
+                try:
+                    LOG.info("AOCT flight query handled=%s from=%r", bool(handled), (m.get('sender') or m.get('callsign') or ''))
+                except Exception:
+                    pass
+                continue
+            except Exception:
+                # fall through to generic handling on any error
+                pass
+
+        # ── AOCT flight reply → insert sighting + update locate status ───────
+        if subj_norm == 'aoct flight reply':
+            try:
+                # Mirror raw mail for audit
+                with sqlite3.connect(DB_FILE) as conn:
+                    conn.execute("""
+                        INSERT INTO incoming_messages(
+                            sender, subject, body, timestamp,
+                            tail_number, airfield_takeoff, airfield_landing,
+                            takeoff_time, eta, cargo_type, cargo_weight, remarks
+                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    """, (
+                        (m.get('sender') or ''), (m.get('subject') or ''), (m.get('body') or ''), ts_iso,
+                        '', '', '', '', '', '', '', ''
+                    ))
+
+                d = _parse_aoct_flight_reply(m.get('body') or '')
+
+                # 1) record into adsb_sightings (map reads this) — de-duped
+                adsb_bulk_upsert([{
+                    'tail': d['tail'],
+                    'sample_ts_utc': d['sample_ts_utc'],
+                    'lat': d['lat'],
+                    'lon': d['lon'],
+                    'track_deg': d['track_deg'],
+                    'speed_kt': d['speed_kt'],
+                    'alt_ft': d['alt_ft'],
+                    'receiver_airport': d['receiver_airport'],
+                    'receiver_call': d['receiver_call'],
+                    'source': d['source'],
+                }])
+
+                # 2) update the newest locate request for this tail (if any)
+                with sqlite3.connect(DB_FILE) as conn:
+                    row = conn.execute("""
+                        SELECT id FROM flight_locates
+                         WHERE UPPER(tail)=?
+                         ORDER BY id DESC LIMIT 1
+                    """, (d["tail"],)).fetchone()
+                    if row:
+                        conn.execute("""
+                            UPDATE flight_locates
+                               SET latest_sample_ts_utc=?,
+                                   latest_from_airport=?,
+                                   latest_from_call=?
+                             WHERE id=?
+                        """, (d["sample_ts_utc"], d["receiver_airport"], d["receiver_call"], row[0]))
+
+                with sqlite3.connect(DB_FILE) as conn:
+                    conn.execute("UPDATE winlink_messages SET parsed=1 WHERE id=?", (m['id'],))
+
+                try:
+                    LOG.info("AOCT flight reply ingested: tail=%s ts=%s lat=%.5f lon=%.5f src=%s",
+                             d["tail"], d["sample_ts_utc"], d["lat"], d["lon"], d["receiver_airport"])
+                except Exception:
+                    pass
+                continue
+            except Exception as e:
+                try:
+                    LOG.exception("AOCT flight reply parse failed: %s", e)
+                except Exception:
+                    pass
+                # fall through to generic handling
 
         # ── Phase 3: Remote inventory replies/status ───────────────────────────
         if subj_norm in ('aoct cargo reply', 'aoct cargo status'):

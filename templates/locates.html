@@ -1,0 +1,310 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  #locate-map { width: 100%; height: calc(100vh - 64px); }
+  .locates-card{background:#fff;border:1px solid #ddd;border-radius:.5rem;padding:12px;margin-top:8px}
+  table{width:100%;border-collapse:collapse}
+  th,td{padding:8px 10px;border-bottom:1px solid #eee;text-align:left;font-size:14px}
+  th{background:#fafafa;font-weight:600}
+  .badge{display:inline-block;padding:2px 6px;border-radius:8px;font-size:12px;border:1px solid #ddd}
+  .ok{background:#eaf8ef;border-color:#cfead9}
+  .marker-label{background:rgba(0,0,0,.75);color:#fff;font-size:12px;padding:2px 6px;border-radius:6px;line-height:1.2;white-space:nowrap}
+  .age-fresh  { background: rgba(14, 159, 110, 0.85); } /* green-ish */
+  .age-stale  { background: rgba(245, 158, 11, 0.85); } /* amber */
+  .age-old    { background: rgba(239, 68, 68, 0.85); }  /* red-ish */
+  /* ensure overlays are never hidden by tiles/site css */
+  #locate-map .leaflet-tile-pane    { z-index:200 }
+  #locate-map .leaflet-overlay-pane { z-index:400 }
+  #locate-map .leaflet-marker-pane  { z-index:600 }
+  #locate-map .leaflet-tooltip-pane { z-index:650 }
+  #locate-map .leaflet-popup-pane   { z-index:700 }
+  #locate-map .leaflet-aircraft-pane      { z-index:660 }
+  #locate-map .leaflet-aircraftlabel-pane { z-index:670 }
+
+</style>
+
+{# Unified page:
+   • If a tail is provided → show the map focused on that tail.
+   • Otherwise → show the “all locate requests” list. #}
+{% if tail %}
+  <div id="locate-map"></div>
+
+{% else %}
+  <div class="locates-card">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+      <h2 style="margin:0;font-size:18px;">Locate Requests</h2>
+      <form method="get" action="/locates" style="display:flex;gap:8px;align-items:center;">
+        <input type="search" name="q" value="{{ q or '' }}" placeholder="Filter by tail (e.g., N12345)"
+               style="padding:6px 10px;border:1px solid #ccc;border-radius:8px;font-size:14px" />
+        <button type="submit" style="padding:6px 10px;border:1px solid #ccc;border-radius:8px;background:#f7f7f7;cursor:pointer">Filter</button>
+      </form>
+    </div>
+    <div class="muted" style="margin:.35rem 0 .5rem 0;font-size:13px;">Newest first • Click “Open map” to focus a tail.</div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width:70px;">ID</th>
+          <th>Tail</th>
+          <th>Requested (UTC)</th>
+          <th>By</th>
+          <th>Status</th>
+          <th>From</th>
+          <th style="width:120px;"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in (locates or []) %}
+          <tr>
+            <td>{{ r.id }}</td>
+            <td><strong>{{ (r.tail or '')|upper }}</strong></td>
+            <td>{{ r.requested_at_utc or '—' }}</td>
+            <td>{{ r.requested_by or '—' }}</td>
+            <td>
+              {% if r.latest_sample_ts_utc %}
+                <span class="badge ok">responded</span>
+                <div class="muted" style="font-size:12px">{{ r.latest_sample_ts_utc }}</div>
+              {% else %}
+                <span class="badge">pending</span>
+              {% endif %}
+            </td>
+            <td>{{ r.latest_from_airport or '' }} {{ r.latest_from_call or '' }}</td>
+            <td><a href="/locates?tail={{ (r.tail or '')|upper }}">Open map</a></td>
+          </tr>
+        {% endfor %}
+        {% if not (locates or []) %}
+          <tr><td colspan="7" class="muted">No locate requests yet.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+{% endif %}
+
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css') }}">
+<script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js') }}"></script>
+
+<script>
+(function(){
+  // If there is no tail, we’re in list mode; skip map JS entirely.
+  {% if not tail %}
+  return;
+  {% endif %}
+  const qs = new URLSearchParams(location.search);
+  const FOCUSED_TAIL = (qs.get('tail') || '{{ tail or "" }}').toUpperCase().trim();
+  const WINDOW_S = 3600; // 1 hour
+  const POLL_MS_MIN = 10000, POLL_MS_MAX = 15000;
+  const POLL_MS = Math.round((POLL_MS_MIN + POLL_MS_MAX) / 2);
+
+  // Map init — start with a sensible regional (PNW) view instead of street level
+  // preferCanvas avoids any global SVG CSS conflicts.
+  const map = L.map('locate-map', { zoomControl: true, preferCanvas: true });
+  const PNW_BOUNDS = L.latLngBounds([ [42.0, -128.0], [51.5, -112.0] ]);
+  map.fitBounds(PNW_BOUNDS, { padding: [40,40] });
+  // custom panes so our layers always sit above tiles/popups safely
+  map.createPane('aircraft');
+  map.getPane('aircraft').classList.add('leaflet-aircraft-pane');
+  map.createPane('aircraftLabel');
+  map.getPane('aircraftLabel').classList.add('leaflet-aircraftlabel-pane');
+
+  // Try offline tiles first (Step 8 will wire this fully). Fallback to OSM if it fails.
+  const offline = L.tileLayer('/tiles/{z}/{x}/{y}.png', {
+    maxZoom: 18, minZoom: 2, attribution: '&copy; OpenMap'
+  }).addTo(map);
+  offline.on('tileerror', function once(){
+    offline.off('tileerror', once);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+  });
+
+  // Helper: destination point (simple equirectangular approx; good enough for short lines)
+  function forwardPoint(lat, lon, bearingDeg, distanceMeters){
+    const R = 6371000.0;
+    const br = (bearingDeg*Math.PI)/180.0;
+    const dR = distanceMeters / R;
+    const φ1 = (lat*Math.PI)/180.0;
+    const λ1 = (lon*Math.PI)/180.0;
+
+    const φ2 = Math.asin( Math.sin(φ1)*Math.cos(dR) + Math.cos(φ1)*Math.sin(dR)*Math.cos(br) );
+    const λ2 = λ1 + Math.atan2(Math.sin(br)*Math.sin(dR)*Math.cos(φ1),
+                               Math.cos(dR)-Math.sin(φ1)*Math.sin(φ2));
+    return [ (φ2*180.0)/Math.PI, (λ2*180.0)/Math.PI ];
+  }
+
+  // Marker book-keeping
+  const markers = new Map(); // tail -> {dot, tip, line, trackDeg}
+  let fittedOnce = false;    // prevent missing the initial fit after the first fetch
+  let latestTail = null;     // track which tail we’re showing (single marker mode)
+  function classifyAge(mins){
+    if (mins <= 5)  return 'fresh';
+    if (mins <= 30) return 'stale';
+    return 'old';
+  }
+
+  // Timestamp helper (treat missing/invalid as -Infinity so they lose)
+  function tsOf(m){ const v = Date.parse(m?.sample_ts_utc||''); return isNaN(v) ? -Infinity : v; }
+
+  // Bearing line length: fixed 45 statute miles so it’s always visible.
+  // (If you later want zoom-based scaling, swap this to return a value
+  //  based on `z` instead. 45 mi ≈ 72,420 m.)
+  function lineLenMeters(_z){
+    return 45 * 1609.34;
+  }
+
+  function upsertMarker(m){
+    const tail = (m.tail || '').toUpperCase();
+    const lat  = +m.lat, lon = +m.lon;
+    if (!tail || isNaN(lat) || isNaN(lon)) return;
+
+    const ts = Date.parse(m.sample_ts_utc || new Date().toISOString());
+    const ageMin = Math.max(0, (Date.now() - ts) / 60000.0);
+    const ageCls = classifyAge(ageMin);
+    console.debug('[locates] upsert', { tail, lat, lon, track: m.track_deg, alt: m.alt_ft, spd: m.speed_kt, ageMin });
+
+    const labelText = `<strong>${tail}</strong> · `
+                    + `ALT ${m.alt_ft != null ? Math.round(m.alt_ft) : '—'} ft · `
+                    + `SPD ${m.speed_kt != null ? Math.round(m.speed_kt) : '—'} kt · `
+                    + `AGE ${Math.round(ageMin)}m`;
+    const popup = `Receiver: ${m.receiver_call || '—'} @ ${m.receiver_airport || '—'}<br>`
+                + `Source: ${m.source || '—'} • Time: ${m.sample_ts_utc || '—'}`;
+
+    const colorClass = `age-${ageCls}`;
+
+    // use Leaflet's tooltip className instead of embedding custom HTML
+    // (Single-marker mode helpers)
+    function clearMarkersExcept(keepTail){
+      for (const [t, obj] of markers.entries()){
+        if (keepTail && t === keepTail) continue;
+        if (obj.line) map.removeLayer(obj.line);
+        if (obj.tip)  map.removeLayer(obj.tip);
+        if (obj.dot)  map.removeLayer(obj.dot);
+        markers.delete(t);
+      }
+    }
+    function setSingleMarker(mrec){
+      const t = (mrec.tail||'').toUpperCase();
+      clearMarkersExcept(t);
+      latestTail = t;
+    }
+
+    const have = markers.get(tail);
+    // forward line
+    const trk = (typeof m.track_deg === 'number') ? m.track_deg : null;
+    const fwdLenM = lineLenMeters(map.getZoom());
+    const fwdPts = (trk == null) ? null : [ [lat, lon], forwardPoint(lat, lon, trk, fwdLenM) ];
+
+    if (have){
+      have.dot.setLatLng([lat, lon]);
+      have.tip.setLatLng([lat, lon]).setContent(labelText);
+      have.dot.setPopupContent(popup);
+      have.trackDeg = trk;
+      // refresh tooltip class for age color (defensive)
+      try { have.tip.options.className = `marker-label ${colorClass}`; } catch(_){}
+      setSingleMarker(m); // keep only the newest one visible
+      if (have.line && fwdPts){
+        have.line.setLatLngs(fwdPts);
+      } else if (fwdPts){
+        have.line = L.polyline(fwdPts, {weight: 2, opacity: 0.7, pane: 'aircraft'}).addTo(map);
+      } else if (have.line){
+        map.removeLayer(have.line);
+        have.line = null;
+      }
+    } else {
+      const dot = L.circleMarker([lat, lon], {
+        pane: 'aircraft',
+        radius: 8, weight: 2, color: '#1f2937', fillColor: '#3b82f6', fillOpacity: 0.9
+      }).addTo(map);
+      const tip = L.tooltip({
+        pane: 'aircraftLabel',
+        permanent: true, direction: 'right', offset: [10, 0], opacity: 0.98,
+        className: `marker-label ${colorClass}`
+      }).setLatLng([lat, lon]).setContent(labelText).addTo(map);
+
+      dot.bindPopup(popup);
+      let line = null;
+      if (fwdPts){
+        line = L.polyline(fwdPts, {weight: 2, opacity: 0.7, pane: 'aircraft'}).addTo(map);
+      }
+      markers.set(tail, { dot, tip, line, trackDeg: trk });
+    }
+  }
+
+  // Choose newest by reported sighting timestamp; if a tail is focused, restrict to that
+  function chooseLatest(list){
+    const arr = (list||[]).filter(x => x && typeof x.lat === 'number' && typeof x.lon === 'number');
+    if (FOCUSED_TAIL){
+      const t = FOCUSED_TAIL.toUpperCase();
+      return arr.filter(x => (x.tail||'').toUpperCase()===t).sort((a,b)=>tsOf(b)-tsOf(a))[0]||null;
+    }
+    return arr.sort((a,b)=>tsOf(b)-tsOf(a))[0]||null;
+  }
+
+  function fitIfNeeded(){
+    if (fittedOnce) return;
+    if (FOCUSED_TAIL && markers.has(FOCUSED_TAIL)){
+      const ll = markers.get(FOCUSED_TAIL).dot.getLatLng();
+      map.setView(ll, 7); fittedOnce = true; return;
+    }
+    if (markers.size === 1){
+      const only = markers.values().next().value;
+      if (only && only.dot){
+        const ll = only.dot.getLatLng();
+        map.setView(ll, 7); fittedOnce = true; return;
+      }
+    }
+    // No data yet → keep a broad regional view
+    map.fitBounds(PNW_BOUNDS, { padding: [40,40] });
+  }
+
+  map.on('zoomend', () => {
+    // resize forward lines with zoom
+    for (const [tail, obj] of markers.entries()){
+      const deg = (typeof obj.trackDeg === 'number') ? obj.trackDeg : null;
+      if (deg == null) continue;
+      const latlng = obj.dot.getLatLng();
+      const fwdLenM = lineLenMeters(map.getZoom());
+      const pts = [ [latlng.lat, latlng.lng], forwardPoint(latlng.lat, latlng.lng, deg, fwdLenM) ];
+      if (obj.line){
+        obj.line.setLatLngs(pts);
+      } else {
+        obj.line = L.polyline(pts, {weight: 2, opacity: 0.7, pane: 'aircraft'}).addTo(map);
+      }
+    }
+  });
+
+  async function refresh(){
+    const url = `/api/locates/markers?window=${WINDOW_S}` + (FOCUSED_TAIL ? `&tail=${encodeURIComponent(FOCUSED_TAIL)}` : '');
+    try{
+      const resp = await fetch(url, { cache: 'no-cache' });
+      const data = await resp.json();
+      if (!data || !data.ok) return;
+      const newest = chooseLatest(data.markers || []);
+      console.debug('[locates] fetched', (data.markers||[]).length, 'markers; newest=',
+                    newest && newest.tail, newest && newest.sample_ts_utc);
+      if (newest){
+        // ensure single-marker mode: clear others, then upsert the newest
+        for (const k of Array.from(markers.keys())) { if (k !== (newest.tail||'').toUpperCase()) {
+          const o = markers.get(k); if (o?.line) map.removeLayer(o.line); if (o?.tip) map.removeLayer(o.tip); if (o?.dot) map.removeLayer(o.dot); markers.delete(k);
+        }}
+        upsertMarker(newest);
+      } else {
+        // no data → clear any previous visuals
+        for (const [k,o] of markers.entries()){ if (o.line) map.removeLayer(o.line); if (o.tip) map.removeLayer(o.tip); if (o.dot) map.removeLayer(o.dot); markers.delete(k); }
+      }
+      fitIfNeeded();
+    }catch(e){
+      console.warn('[locates] fetch failed', e);
+    }
+  }
+
+  refresh();
+  setInterval(refresh, POLL_MS);
+  // expose for console sanity checks
+  window.__locateMap = map;
+  window.__locateMarkers = markers;
+  window.__dumpAircraft = function(){
+    markers.forEach((v,k)=>console.log(k, v.dot.getLatLng(), v.trackDeg, v.line && v.line.getLatLngs()));
+  };
+})();
+</script>
+{% endblock %}

@@ -69,7 +69,33 @@ if [ "${DIGIRIG_ENABLE:-0}" = "1" ]; then
   fi
 fi
 
-# 3) waitress settings (env‑configurable; sensible defaults)
+# 3) Warm map tiles (non-blocking if offline). BBox defaults to CONUS + S. Canada.
+if [ "${TILES_PREFETCH_ON_START:-1}" = "1" ]; then
+  echo "Prefetching base map tiles (this will be skipped if offline)…"
+  # Normalize env and ensure a non-empty, well-formed bbox is used.
+  _raw_bbox="$(printf '%s' "${AOCT_PREFETCH_BBOX:-}" | tr -d '[:space:]')"
+  if [ -z "$_raw_bbox" ]; then
+    _raw_bbox="-130,24,-60,55"
+  fi
+  # Quick validation: require exactly 3 commas (4 numbers)
+  _comma_count="$(printf '%s' "$_raw_bbox" | tr -cd ',' | wc -c | tr -d '[:space:]')"
+  if [ "$_comma_count" != "3" ]; then
+    echo "WARNING: AOCT_PREFETCH_BBOX='${AOCT_PREFETCH_BBOX:-}' is invalid. Using default -130,24,-60,55."
+    _raw_bbox="-130,24,-60,55"
+  fi
+  echo "Prefetch bbox: ${_raw_bbox}  (z ${TILE_PREFETCH_ZMIN:-5}-${TILE_PREFETCH_ZMAX:-7}, threads ${TILE_PREFETCH_THREADS:-8})"
+
+  # Never fail startup; if offline or CLI rejects args, continue gracefully.
+  if ! python -m modules.services.tiles prefetch \
+        --bbox="${_raw_bbox}" \
+        --zmin="${TILE_PREFETCH_ZMIN:-5}" \
+        --zmax="${TILE_PREFETCH_ZMAX:-7}" \
+        --threads="${TILE_PREFETCH_THREADS:-8}"; then
+    echo "Tile prefetch skipped (no internet or error). Continuing startup."
+  fi
+fi
+
+# 4) waitress settings (env‑configurable; sensible defaults)
 LISTEN_ADDR="${WAITRESS_LISTEN:-0.0.0.0:5150}"
 THREADS="${WAITRESS_THREADS:-32}"
 CONNLIM="${WAITRESS_CONNECTION_LIMIT:-200}"
@@ -81,7 +107,7 @@ fi
 
 echo "Starting waitress: listen=${LISTEN_ADDR} threads=${THREADS} conn_limit=${CONNLIM} channel_timeout=${CHTIME}"
 
-# 4) finally exec the app via waitress
+# 5) finally exec the app via waitress
 #    also forward any extra args passed to this entrypoint
 exec waitress-serve \
   --listen="${LISTEN_ADDR}" \

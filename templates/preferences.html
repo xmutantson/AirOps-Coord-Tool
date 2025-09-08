@@ -116,6 +116,56 @@
       <option value="no"  {% if auto_reply_enabled=='no'  %}selected{% endif %}>No</option>
     </select>
 
+    <hr>
+
+    <!-- ── Flight Locate & Offline Maps ─────────────────────────── -->
+    <h3>Flight Locate &amp; Offline Maps</h3>
+
+    <label>ADS-B Base URL (aircraft.json):</label>
+    <input
+      name="adsb_base_url"
+      value="{{ adsb_base_url }}"
+      placeholder="http://192.168.8.x/tar1090">
+
+    <label style="margin-top:18px">ADS-B JSON stream (30154):</label>
+    <input
+      name="adsb_stream_url"
+      value="{{ adsb_stream_url }}"
+      placeholder="tcp://ops.lan:30154">
+    <small>Use <code>tcp://host:port</code> (recommended). If your setup serves JSON-lines over HTTP, use <code>http://host:port/</code>.</small>
+
+    <label style="margin-top:18px">Auto-reply to Flight Query with latest sighting?</label>
+    <select name="aoct_auto_reply_flight" onchange="this.form.submit()">
+      <option value="yes" {% if aoct_auto_reply_flight=='yes' %}selected{% endif %}>Yes</option>
+      <option value="no"  {% if aoct_auto_reply_flight=='no'  %}selected{% endif %}>No</option>
+    </select>
+
+    <label style="margin-top:18px">Enable local ADS-B poller?</label>
+    <select name="adsb_poll_enabled" onchange="this.form.submit()">
+      <option value="no"  {% if adsb_poll_enabled!='yes' %}selected{% endif %}>No</option>
+      <option value="yes" {% if adsb_poll_enabled=='yes' %}selected{% endif %}>Yes</option>
+    </select>
+
+    <label>Poll interval (seconds):</label>
+    <input
+      name="adsb_poll_interval_s"
+      type="number" inputmode="numeric" min="1" step="1"
+      value="{{ adsb_poll_interval_s }}"
+      placeholder="10">
+
+    <label style="margin-top:18px">Map tiles path (directory or .mbtiles file):</label>
+    <input
+      name="map_tiles_path"
+      value="{{ map_tiles_path }}"
+      placeholder="{{ map_tiles_default }}">
+    <small>Leave blank to use default: <code>{{ map_tiles_default }}</code></small>
+
+    <label style="margin-top:18px">Seed low-zoom tiles on first boot?</label>
+    <select name="map_offline_seed" onchange="this.form.submit()">
+      <option value="yes" {% if map_offline_seed=='yes' %}selected{% endif %}>Yes</option>
+      <option value="no"  {% if map_offline_seed=='no'  %}selected{% endif %}>No</option>
+    </select>
+
   </form>
 
   <hr>

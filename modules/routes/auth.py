@@ -43,7 +43,7 @@ def login():
             flash("Logged in successfully.", "success")
             # stamp session salt on successful login
             session['session_salt'] = get_session_salt()
-            return redirect(request.args.get('next') or url_for('core.dashboard'))
+            return redirect(url_for('core.dashboard'))
         flash("Incorrect password.", "error")
 
     return render_template('login.html', active='login')

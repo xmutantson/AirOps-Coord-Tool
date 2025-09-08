@@ -421,7 +421,7 @@ def remote_airports():
     return render_template(
         'remote_airports.html',
         airports=rows,
-        active='inventory_remote'
+        active='inventory'
     )
 
 @bp.route('/remote/<string:airport>/clear', methods=['POST'])
@@ -508,7 +508,7 @@ def remote_airport_detail(airport):
         detail_last_full_at=gen,          # alias for templates
         detail_meta=meta,                 # may include per-category times
         detail_age_text=age_txt,
-        active='inventory_remote'
+        active='inventory'
     )
 
 @bp.route('/_remote_dropdown')
@@ -584,7 +584,7 @@ def inventory_broadcast():
                            current_interval=cur,
                            broadcast_warnings=warnings,
                            recipient_count=len(recipients),
-                           active='inventory_broadcast')
+                           active='inventory')
 
 @bp.route('/broadcast/preview', methods=['POST'])
 def broadcast_preview():
@@ -755,7 +755,7 @@ def aoct_query():
     return render_template('inventory_query.html',
                            can_send=bool(pat_ok),
                            map_json=json.dumps(hint_map),
-                           active='inventory_broadcast')
+                           active='inventory')
 
 @bp.route('/aoct_query/send', methods=['POST'])
 def aoct_query_send():

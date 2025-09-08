@@ -5,6 +5,9 @@
 // - Used by: /inventory/detail, /inventory/stock, /inventory/barcodes
 
 (function () {
+  // Prevent double-initialization if this file is included more than once
+  if (window.__AOCT_PROPAGATE_INIT__) return;
+  window.__AOCT_PROPAGATE_INIT__ = true;
   // Use the API routes mounted by modules/routes_inventory/propagate.py
   const API_BASE = '/inventory/api/propagate';
 
@@ -25,6 +28,10 @@
   function toFixed1(n) {
     const x = parseFloat(n || '0') || 0;
     return (Math.round(x * 10) / 10).toFixed(1);
+  }
+  // Hard reload so the table reflects changes immediately after apply
+  function hardReload() {
+    try { window.location.reload(); } catch (_) { window.location.href = window.location.href; }
   }
 
   // ────────────────────────────── API ──────────────────────────────────
@@ -62,7 +69,13 @@
 
   // ────────────────────────────── Modal ────────────────────────────────
   // Returns { wait():Promise<{ok:boolean}>, close(ok?), overlay, box }
-  function openModal(title, innerHTML, { confirmLabel = 'Apply', cancelLabel = 'Cancel' } = {}) {
+  function openModal(title, innerHTML, opts = {}) {
+    const {
+      confirmLabel = 'Apply',
+      cancelLabel  = 'Cancel',
+      showApply    = true,
+      showCancel   = true
+    } = opts || {};
     const overlay = document.createElement('div');
     overlay.className = 'aoct-prop-modal';
     Object.assign(overlay.style, {
@@ -78,6 +91,11 @@
       boxShadow: '0 10px 28px rgba(0,0,0,.30)'
     });
 
+    const actionsHTML = [
+      (showCancel && cancelLabel !== null) ? `<button type="button" class="pm-cancel">${cancelLabel}</button>` : '',
+      (showApply  && confirmLabel !== null) ? `<button type="button" class="pm-apply">${confirmLabel}</button>` : ''
+    ].filter(Boolean).join('');
+
     box.innerHTML = `
       <div style="position:sticky;top:0;display:flex;align-items:center;justify-content:space-between;
                   background:#222;color:#fff;padding:10px 14px;border-top-left-radius:12px;border-top-right-radius:12px;">
@@ -86,10 +104,9 @@
                 style="background:transparent;border:0;color:#fff;font-size:20px;line-height:1;cursor:pointer">×</button>
       </div>
       <div class="pm-content" style="padding:14px 16px;">${innerHTML || ''}</div>
-      <div class="pm-actions" style="display:flex;gap:8px;justify-content:flex-end;padding:12px 16px;">
-        <button type="button" class="pm-cancel">${cancelLabel}</button>
-        <button type="button" class="pm-apply">${confirmLabel}</button>
-      </div>
+      ${ actionsHTML
+          ? `<div class="pm-actions" style="display:flex;gap:8px;justify-content:flex-end;padding:12px 16px;">${actionsHTML}</div>`
+          : `` }
     `;
 
     overlay.appendChild(box);
@@ -113,8 +130,10 @@
     document.addEventListener('keydown', onKey);
     overlay.addEventListener('click', e => { if (e.target === overlay) close(false); });
     box.querySelector('.pm-x').onclick = () => close(false);
-    box.querySelector('.pm-cancel').onclick = () => close(false);
-    box.querySelector('.pm-apply').onclick = () => close(true);
+    const cancelBtn = box.querySelector('.pm-cancel');
+    const applyBtn  = box.querySelector('.pm-apply');
+    if (cancelBtn) cancelBtn.onclick = () => close(false);
+    if (applyBtn)  applyBtn.onclick  = () => close(true);
 
     return { wait, close, overlay, box };
   }
@@ -181,11 +200,15 @@
 
   // ───────────────────── Attachments / Entry points ───────────────────
   // 1) Detail table: enable “Fix/Propagate…” links
+  const __wiredContainers = new WeakSet();
   function attachDetailHandlers(container) {
     container = container || document;
-    container.addEventListener('click', (e) => {
+    if (__wiredContainers.has(container)) return; // idempotent wiring
+    const onClick = (e) => {
       const a = e.target.closest('.propagate-link');
       if (!a) return;
+      // If a modal is already open, ignore to avoid multiple stacks
+      if (document.querySelector('.aoct-prop-modal')) return;
       e.preventDefault();
 
       const tr = a.closest('tr');
@@ -203,7 +226,8 @@
           <button type="button" class="pm-act" data-k="weight">Weight</button>
         </div>
       `;
-      const mod = openModal('Fix / Propagate', chooserHTML, { confirmLabel: 'Close', cancelLabel: 'Close' });
+      // Show a single "Close" button (avoid duplicate Close actions)
+      const mod = openModal('Fix / Propagate', chooserHTML, { confirmLabel: null, cancelLabel: 'Close' });
 
       // Wire action buttons inside the modal
       mod.box.addEventListener('click', async (ev) => {
@@ -226,24 +250,26 @@
             if (!r2.ok) return;
             const cid = m2.box.querySelector('select').value;
             mod.close(false);
-            previewBulk('category', [name], { new_category_id: cid });
+            previewBulk('category', [name], { new_category_id: cid }, null, () => hardReload());
           } catch (_) {}
         } else if (k === 'name') {
           const newn = prompt(`Rename '${name}' to:`) || '';
           if (!newn.trim()) return;
           mod.close(false);
-          previewBulk('name', [name], { new_name: newn.trim() });
+          previewBulk('name', [name], { new_name: newn.trim() }, null, () => hardReload());
         } else if (k === 'weight') {
           const neww = parseFloat(prompt(`New weight for '${name}'. Current reference size: ${wpuLbs} lbs`) || '0');
           if (!neww || neww <= 0) return;
           mod.close(false);
-          previewBulk('weight', [name], { new_weight_per_unit: neww }, wpuLbs);
+          previewBulk('weight', [name], { new_weight_per_unit: neww }, wpuLbs, () => hardReload());
         }
       });
 
       // If user just closes, do nothing
       mod.wait().then(() => {});
-    });
+    };
+    container.addEventListener('click', onClick);
+    __wiredContainers.add(container);
   }
 
   // 2) Barcode admin: offer propagation after an inline row save

@@ -265,19 +265,24 @@
   }
 
   function showKnown(item, code, ai) {
-    const qtyDefault = ai?.count; // suggest only; do not preselect
+    const qtySuggested = Number.isFinite(ai?.count) ? ai.count : null; // suggest only; do not preselect
     if (resultEl) resultEl.innerHTML = `
       <div class="card" style="border:1px solid #ddd;border-radius:10px;padding:12px;">
         <div><strong>${item.sanitized_name}</strong></div>
         <div>Category ID: ${item.category_id}</div>
         <div>Unit size: ${item.weight_per_unit} lb</div>
-        <label>Quantity
-          <select id="qty" required style="padding:6px;">
-            <option value="" disabled selected>Qty…</option>
-            ${Array.from({length:20}, (_,i)=>`<option value="${i+1}">${i+1}</option>`).join('')}
-          </select>
-          ${Number.isFinite(qtyDefault) ? `<small style="margin-left:6px;">Suggested: ${qtyDefault}</small>` : ``}
-        </label>
+        <div style="margin-top:8px;">
+          <label for="qty-num" style="display:block;">Quantity</label>
+          <div class="qty-wrap" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <button type="button" id="qty-minus" aria-label="Decrease">−</button>
+            <input id="qty-num" type="number" inputmode="numeric" min="1" step="1" required placeholder="Qty…"
+                   style="padding:6px; width:8ch;">
+            <button type="button" id="qty-plus" aria-label="Increase">+</button>
+            <input id="qty-slider" type="range" min="1" max="50" value="${qtySuggested ?? 1}"
+                   style="flex:1; min-width:160px;">
+            ${qtySuggested ? `<small style="margin-left:6px;">Suggested: ${qtySuggested}</small>` : ``}
+          </div>
+        </div>
         <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">
           <button id="postTx">Post ${getScanDir()}</button>
           <button id="scan-reset-card" type="button">Reset</button>
@@ -289,11 +294,42 @@
     // Hide the classic form while the quick-post card is active
     hideLegacyForm(true);
 
+    // qty widgets: keep slider and number in sync, support ± buttons
+    const num   = $('#qty-num');
+    const slider= $('#qty-slider');
+    const minus = $('#qty-minus');
+    const plus  = $('#qty-plus');
+    // initialize from suggestion (number stays empty unless suggested)
+    if (qtySuggested) { num.value = String(qtySuggested); slider.value = String(qtySuggested); }
+    const clamp = v => Math.max(1, Math.floor(Number(v) || 0));
+    function syncFromNum(){
+      const v = clamp(num.value);
+      // expand slider max if needed
+      if (v > Number(slider.max)) slider.max = String(v);
+      slider.value = String(v);
+    }
+    function syncFromSlider(){
+      const v = clamp(slider.value);
+      num.value = String(v);
+    }
+    num?.addEventListener('input', () => { if (num.value !== '') syncFromNum(); });
+    slider?.addEventListener('input', syncFromSlider);
+    minus?.addEventListener('click', () => {
+      const v = clamp((num.value || '1')) - 1;
+      num.value = String(Math.max(1, v));
+      syncFromNum();
+    });
+    plus?.addEventListener('click', () => {
+      const v = clamp((num.value || '0')) + 1;
+      num.value = String(v);
+      syncFromNum();
+    });
+
     const postBtn = $('#postTx');
     if (postBtn) {
       postBtn.onclick = async () => {
-        const qtyVal = $('#qty')?.value || '';
-        if (!qtyVal) { setStatus('Choose a quantity','err'); $('#qty')?.focus(); return; }
+        const qtyVal = (num?.value || '').trim();
+        if (!qtyVal) { setStatus('Enter a quantity','err'); num?.focus(); return; }
         const qty = parseInt(qtyVal, 10);
         const dirWord = getScanDir() === 'IN' ? 'inbound' : 'outbound';
         const body = { barcode: code, qty, direction: dirWord, commit_now: true, manifest_id: MANIFEST_ID || undefined };

@@ -7,6 +7,7 @@ SQL_TRACE = False
 SQL_TRACE_EXPANDED = False
 _sql_logger = _logging.getLogger("sql")
 TraceConn = None
+# sql logger exists even if not configured; WARNINGs will still show
 
 _zeroconf = None
 MDNS_NAME = ""
@@ -15,6 +16,7 @@ MDNS_REASON = ""
 
 HARDCODED_AIRFIELDS = []
 WARGAME_ITEMS = {}
+AIRFIELD_CALLSIGNS = {}
 
 # one-time init flags for background workers
 _wg_scheduler_inited = False
@@ -24,6 +26,8 @@ _radio_started = False
 DASHY_RE = _re.compile(r'^[\s\-_‒–—―]+$')
 logger = _logging.getLogger(__name__)
 ENGLISH_ADJECTIVES = set()
+# Throttle guard for background-y DB tidy
+_pending_cleanup_last = 0.0
 
 # stray alias used in a few helpers
 _r = _random
@@ -108,6 +112,7 @@ _hydrate_from_app()
 import random, string
 
 import uuid
+from typing import List, Iterable, Optional
 from flask_wtf.csrf import generate_csrf
 from markupsafe import escape
 import sqlite3, csv, re, os, json
@@ -118,10 +123,46 @@ from zeroconf import ServiceInfo, NonUniqueNameException
 import fcntl
 import struct
 from radio_tx import start_radio_tx
+try:
+    from radio_tx import start_radio_tx
+except Exception:
+    # Optional dependency: keep import-time failures from crashing the app.
+    # _start_radio_tx_once() already wraps usage in try/except.
+    def start_radio_tx(*args, **kwargs):  # type: ignore
+        raise RuntimeError("radio_tx.start_radio_tx unavailable")
 
 from flask import current_app
 from flask import flash, jsonify, make_response, redirect, render_template, request, session, url_for
 app = current_app  # legacy shim for helpers
+
+# ---- SQL diagnostics toggles (env-driven) -------------------------------
+#  AOCT_SQL_SLOW_MS   : float, default 50 (log queries >= threshold)
+#  AOCT_SQL_LOG       : 1/true to log ALL queries executed via dict_rows()
+#  AOCT_SQL_EXPLAIN   : 1/true to log EXPLAIN QUERY PLAN for slow SELECTs
+#  AOCT_SQL_TRACE     : 1/true to force SQL_TRACE (sqlite trace hook)
+#  AOCT_SQL_TRACE_EXPANDED : 1/true to include expanded SQL in trace
+_AOCT_SQL_LOG      = (os.getenv("AOCT_SQL_LOG", "0").lower() in ("1","true","yes"))
+try:
+    _AOCT_SQL_SLOW_MS = float(os.getenv("AOCT_SQL_SLOW_MS", "50") or 50)
+except Exception:
+    _AOCT_SQL_SLOW_MS = 50.0
+_AOCT_SQL_EXPLAIN  = (os.getenv("AOCT_SQL_EXPLAIN", "0").lower() in ("1","true","yes"))
+
+def _apply_sql_env_overrides():
+    v = os.getenv("AOCT_SQL_TRACE")
+    if v is not None and v != "": globals()["SQL_TRACE"] = (v.lower() in ("1","true","yes"))
+    v = os.getenv("AOCT_SQL_TRACE_EXPANDED")
+    if v is not None and v != "": globals()["SQL_TRACE_EXPANDED"] = (v.lower() in ("1","true","yes"))
+_apply_sql_env_overrides()
+
+# ---- Network/ADS-B guardrails (env-driven) -------------------------------
+#  AOCT_DISABLE_ONDEMAND_ADSB : 1/true to forbid live ADS-B fetches (DB-only)
+#  AOCT_ADSB_BUDGET_MS        : overall budget per locate call (default 1200 ms)
+_AOCT_DISABLE_ONDEMAND_ADSB = (os.getenv("AOCT_DISABLE_ONDEMAND_ADSB","0").lower() in ("1","true","yes"))
+try:
+    _AOCT_ADSB_BUDGET_MS = float(os.getenv("AOCT_ADSB_BUDGET_MS","1200") or 1200.0)
+except Exception:
+    _AOCT_ADSB_BUDGET_MS = 1200.0
 
 # ───── Flight Code helpers/spec ─────────────────────────────────────────────
 # Format: OOOMMDDYYDDDHHMM  (OOO/IATA pref, DDD/IATA pref, local date mmddyy)
@@ -239,9 +280,15 @@ def connect(db, timeout=30, **kwargs):
 
 def _ip_for_iface(iface: str) -> str:
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    packed = struct.pack('256s', iface.encode()[:15])
-    addr = fcntl.ioctl(s.fileno(), 0x8915, packed)[20:24]  # SIOCGIFADDR
-    return socket.inet_ntoa(addr)
+    try:
+        packed = struct.pack('256s', iface.encode()[:15])
+        addr = fcntl.ioctl(s.fileno(), 0x8915, packed)[20:24]  # SIOCGIFADDR
+        return socket.inet_ntoa(addr)
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
 
 def get_lan_ip() -> str:
     # 0) explicit IP override:
@@ -774,6 +821,45 @@ def init_db():
             ('wargame_mode',     'no'),
             ('wargame_settings', '{}')
         """)
+
+    # ─── Flight Locate: ADS-B sightings & locate logs ────────────────────────
+    with sqlite3.connect(get_db_file()) as c:
+        c.execute("""
+          CREATE TABLE IF NOT EXISTS adsb_sightings (
+            id               INTEGER PRIMARY KEY,
+            tail             TEXT,
+            sample_ts_utc    TEXT,   -- ISO-8601 UTC from source station
+            lat              REAL,
+            lon              REAL,
+            track_deg        REAL,   -- nullable
+            speed_kt         REAL,   -- nullable
+            alt_ft           REAL,   -- nullable
+            receiver_airport TEXT,
+            receiver_call    TEXT,
+            source           TEXT,   -- e.g., TAR1090, readsb
+            inserted_at_utc  TEXT    -- server UTC at ingest
+          )
+        """)
+        c.execute("""
+          CREATE INDEX IF NOT EXISTS idx_adsb_sightings_tail_time
+            ON adsb_sightings(tail, sample_ts_utc DESC)
+        """)
+        c.execute("""
+          CREATE INDEX IF NOT EXISTS idx_adsb_sightings_inserted
+            ON adsb_sightings(inserted_at_utc DESC)
+        """)
+        c.execute("""
+          CREATE TABLE IF NOT EXISTS flight_locates (
+            id                   INTEGER PRIMARY KEY,
+            tail                 TEXT,
+            requested_at_utc     TEXT,
+            requested_by         TEXT,   -- operator cookie
+            latest_sample_ts_utc TEXT,
+            latest_from_airport  TEXT,
+            latest_from_call     TEXT
+          )
+        """)
+
         c.execute("""
           CREATE TABLE IF NOT EXISTS wargame_tasks (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -854,6 +940,18 @@ def init_db():
             ('auto_broadcast_interval_min','0'),
             ('auto_reply_enabled','yes')
         """)
+
+        # Defaults for Flight Locate & Offline Maps
+        c.execute("""
+          INSERT OR IGNORE INTO preferences(name,value)
+          VALUES
+            ('adsb_base_url',''),
+            ('aoct_auto_reply_flight','yes'),
+            ('adsb_poll_enabled','no'),
+            ('adsb_poll_interval_s','10'),
+            ('map_tiles_path', ?),
+            ('map_offline_seed','yes')
+        """, (os.path.join(os.path.dirname(get_db_file()), 'tiles'),))
 
     # ── Staff tables (idempotent; separated util owns schema) ────────────────
     try:
@@ -1025,6 +1123,17 @@ def run_migrations():
             ('auto_broadcast_interval_min','0'),
             ('auto_reply_enabled','yes')
         """)
+        # New prefs for Flight Locate & Offline Maps (ensure on upgrade)
+        c.execute("""
+          INSERT OR IGNORE INTO preferences(name,value)
+          VALUES
+            ('adsb_base_url',''),
+            ('aoct_auto_reply_flight','yes'),
+            ('adsb_poll_enabled','no'),
+            ('adsb_poll_interval_s','10'),
+            ('map_tiles_path', ?),
+            ('map_offline_seed','yes')
+        """, (os.path.join(os.path.dirname(get_db_file()), 'tiles'),))
 
     # ── Staff tables (again during migrations for upgraded DBs) ───────────────
     try:
@@ -1040,11 +1149,28 @@ def run_migrations():
         pass
 
 def cleanup_pending():
-    """Purge any pending inventory‐entries older than 15 minutes."""
-    cutoff = (datetime.utcnow() - timedelta(minutes=15)).isoformat()
-    with sqlite3.connect(get_db_file()) as c:
-        c.execute("DELETE FROM inventory_entries WHERE pending=1 AND pending_ts<=?",
-                  (cutoff,))
+    """Purge any pending inventory‐entries older than 15 minutes.
+       Run at most once per 60s and never 500 the request."""
+    import sqlite3 as _sqlite3
+    from time import monotonic
+    global _pending_cleanup_last
+    # throttle on hot pages to reduce write contention
+    now = monotonic()
+    if (now - _pending_cleanup_last) < 60.0:
+        return
+    _pending_cleanup_last = now
+    try:
+        cutoff = (datetime.utcnow() - timedelta(minutes=15)).isoformat()
+        with connect(get_db_file(), timeout=30) as c:
+            c.execute("DELETE FROM inventory_entries WHERE pending=1 AND pending_ts<=?", (cutoff,))
+    except _sqlite3.OperationalError as e:
+        # benign under load; try later rather than crashing the request
+        if "locked" in str(e).lower():
+            logger.debug("cleanup_pending: skipped (database is locked)")
+            return
+        raise
+    except Exception:
+        logger.debug("cleanup_pending: best-effort failed", exc_info=True)
 
 def _cleanup_before_view():
     # Fire on inventory-like views (Inventory pages, RampBoss, and API endpoints used by scanning)
@@ -1135,6 +1261,36 @@ def iso8601_ceil_utc(dt: datetime | None = None) -> str:
         dt = dt + timedelta(seconds=1)
     dt = dt.replace(microsecond=0)
     return dt.isoformat().replace("+00:00", "Z")
+
+def _parse_iso_utc(ts: str | None) -> datetime | None:
+    """
+    Parse ISO-8601 (optionally with 'Z') into an aware UTC datetime.
+    Returns None if parsing fails.
+    """
+    if not ts:
+        return None
+    try:
+        s = ts.strip()
+        # Handle trailing 'Z'
+        if s.endswith('Z'):
+            s = s[:-1] + '+00:00'
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+        return dt
+    except Exception:
+        return None
+
+def age_seconds(ts_iso: str | None, *, now: datetime | None = None) -> int:
+    """
+    Non-negative age in whole seconds between `now` (UTC) and `ts_iso`.
+    Unparseable timestamps return 0.
+    """
+    now = now or datetime.now(timezone.utc)
+    dt  = _parse_iso_utc(ts_iso)
+    return max(0, int((now - dt).total_seconds())) if dt else 0
 
 # ── shared helper: mirror Winlink traffic into communications ────────────────
 def _mirror_comm_winlink(timestamp_utc, direction, from_party, to_party,
@@ -1276,9 +1432,430 @@ def _create_tables_wargame_ramp_requests(c):
       )""")
 
 def get_preference(name: str) -> str | None:
-    """Fetch a single preference value (or None if not set)."""
+    """Fetch a single preference value (or sensible default if not set)."""
     rows = dict_rows("SELECT value FROM preferences WHERE name=?", (name,))
-    return rows[0]['value'] if rows else None
+    val = rows[0]['value'] if rows else None
+    # Provide opinionated defaults for new feature flags
+    key = (name or '').strip()
+    if key == 'map_tiles_path':
+        v = blankish_to_none(val)
+        return v if v is not None else os.path.join(os.path.dirname(get_db_file()), 'tiles')
+    if key == 'adsb_poll_interval_s':
+        v = blankish_to_none(val)
+        return v if v is not None else '10'
+    if key == 'adsb_poll_enabled':
+        v = blankish_to_none(val)
+        return v if v is not None else 'no'
+    if key == 'map_offline_seed':
+        v = blankish_to_none(val)
+        return v if v is not None else 'yes'
+    if key == 'aoct_auto_reply_flight':
+        v = blankish_to_none(val)
+        return v if v is not None else 'yes'
+    if key == 'adsb_base_url':
+        # default empty string
+        return (val or '')
+    if key == 'adsb_stream_url':
+        # JSON-lines stream for readsb/tar1090 (:30154). Accepts:
+        #   • tcp://host:port   (recommended)
+        #   • http://host:port/ (if your setup serves JSONL over HTTP)
+        v = blankish_to_none(val)
+        return v if v is not None else 'tcp://127.0.0.1:30154'
+    if key == 'adsb_retention_hours':
+        # retention window for ADS-B table purge (in hours); default 24h
+        v = blankish_to_none(val)
+        return v if v is not None else '24'
+    return val
+
+# ── ADS-B Adapter (Step 6) ──────────────────────────────────────────────────
+def _epoch_to_iso_utc(val) -> str:
+    """Convert seconds (int/float/str) since epoch → ISO-8601 Z. Fallback to now."""
+    try:
+        sec = float(val)
+        dt  = datetime.fromtimestamp(sec, tz=timezone.utc)
+        return iso8601_ceil_utc(dt)
+    except Exception:
+        return iso8601_ceil_utc()
+
+def _as_float(x):
+    try:
+        if x is None or (isinstance(x, float) and x != x):  # NaN check
+            return None
+        return float(x)
+    except Exception:
+        try:
+            m = re.search(r'[-+]?\d+(?:\.\d+)?', str(x))
+            return float(m.group(0)) if m else None
+        except Exception:
+            return None
+
+def _sanitize_tail(t: str | None) -> str:
+    return (t or '').strip().upper()
+
+def _receiver_station_defaults() -> tuple[str, str]:
+    """Resolve preferred receiver airport/call from preferences (or blanks)."""
+    ap   = canonical_airport_code(get_preference('default_origin') or '') or ''
+    call = (get_preference('winlink_callsign_1') or '').strip().upper()
+    return ap, call
+
+def _normalize_adsb_dict(obj: dict, *, sample_ts_iso: str, source: str) -> Optional[dict]:
+    """
+    Map raw readsb/tar1090 keys → canonical dict:
+      tail, lat, lon, track_deg?, speed_kt?, alt_ft?, sample_ts_utc, receiver_airport, receiver_call, source
+    Returns None if lat/lon missing.
+    """
+    # Validate bounds for coordinates and clamp speed/alt to sane ranges
+    lat = clamp_range(_as_float(obj.get('lat')),  -90.0,  90.0)
+    lon = clamp_range(_as_float(obj.get('lon')), -180.0, 180.0)
+    if lat is None or lon is None:
+        return None
+    track = _as_float(obj.get('track') or obj.get('trk') or obj.get('heading'))
+    # Prefer geometric altitude, then baro
+    alt = _as_float(obj.get('alt_geom') if obj.get('alt_geom') not in (None, 'ground') else None)
+    if alt is None:
+        alt = _as_float(obj.get('alt_baro'))
+    alt = clamp_range(alt, -1000.0, 60000.0)
+    gs  = _as_float(obj.get('gs') or obj.get('speed') or obj.get('speed_kt'))
+    gs  = clamp_range(gs, 0.0, 800.0)
+    # Tail / registration:
+    #   • Prefer readsb/tar1090 'r' (registration)
+    #   • Fall back to 'registration' if present
+    #   • Many GA aircraft only populate 'flight' with the N-number → accept that
+    tail = _sanitize_tail(obj.get('r') or obj.get('registration') or '')
+    if not tail:
+        f = (obj.get('flight') or obj.get('callsign') or '').strip()
+        # keep only A–Z, 0–9, and '-' then upper
+        f = re.sub(r'[^A-Za-z0-9-]', '', f).upper()
+        # basic sanity: at least 3 chars (e.g., "N12", "C-GABC"), max 8
+        if 3 <= len(f) <= 8:
+            tail = f
+    rx_ap, rx_call = _receiver_station_defaults()
+    return {
+        'tail': tail,
+        'lat': float(lat),
+        'lon': float(lon),
+        'track_deg': None if track is None else float(track % 360.0),
+        'speed_kt': None if gs is None else float(gs),
+        'alt_ft': None if alt is None else float(alt),
+        'sample_ts_utc': sample_ts_iso,
+        'receiver_airport': rx_ap,
+        'receiver_call': rx_call,
+        'source': source
+    }
+
+def adsb_fetch_snapshot(*, _budget_s: float | None = None) -> List[dict]:
+    """
+    Try to read {base}/data/aircraft.json (tar1090/readsb).
+    Returns a list of normalized dicts (see _normalize_adsb_dict), possibly empty.
+    """
+    # Build candidate base URLs (preference first, then common localhost fallbacks)
+    base = (get_preference('adsb_base_url') or '').strip()
+    candidates = []
+    if base:
+        candidates.append(base)
+    # Common local defaults
+    candidates.extend([
+        "http://127.0.0.1",
+        "http://localhost",
+        "http://127.0.0.1/tar1090",
+        "http://localhost/tar1090",
+    ])
+
+    last_err = None
+    for b in candidates:
+        try:
+            url = b.rstrip('/') + "/data/aircraft.json"
+            # respect remaining budget if provided (min 0.3s)
+            to = 3
+            if _budget_s is not None:
+                to = max(0.3, min(3.0, _budget_s))
+            with urlopen(url, timeout=to) as resp:
+                raw = resp.read()
+            doc = json.loads(raw.decode('utf-8', errors='ignore'))
+            # tar1090/readsb top-level 'now' is seconds since epoch
+            ts_iso = _epoch_to_iso_utc(doc.get('now')) if isinstance(doc, dict) else iso8601_ceil_utc()
+            source = "TAR1090" if ('tar1090' in b.lower()) else "readsb"
+            out: List[dict] = []
+            ac_list = (doc.get('aircraft') if isinstance(doc, dict) else None) or []
+            for rec in ac_list:
+                if not isinstance(rec, dict):
+                    continue
+                norm = _normalize_adsb_dict(rec, sample_ts_iso=ts_iso, source=source)
+                if norm:
+                    out.append(norm)
+            return out
+        except Exception as e:
+            last_err = e
+            continue
+    # No candidates worked
+    if last_err:
+        logger.debug("adsb_fetch_snapshot failed: %s", last_err, exc_info=True)
+    return []
+
+def adsb_bulk_upsert(rows: List[dict]) -> int:
+    """
+    Insert a batch of normalized ADS-B rows into adsb_sightings.
+    De-dupe by (tail, sample_ts_utc, lat, lon) and skip blank tails.
+    Returns number of rows inserted.
+    """
+    if not rows:
+        return 0
+    n = 0
+    with sqlite3.connect(get_db_file()) as c:
+        cur = c.cursor()
+        for r in rows:
+            tail = (r.get('tail') or '').strip().upper()
+            if not tail:
+                continue
+            sample = r.get('sample_ts_utc') or ''
+            lat = r.get('lat'); lon = r.get('lon')
+            if lat is None or lon is None:
+                continue
+            cur.execute("""
+              INSERT INTO adsb_sightings
+                (tail, sample_ts_utc, lat, lon, track_deg, speed_kt, alt_ft,
+                 receiver_airport, receiver_call, source, inserted_at_utc)
+              SELECT ?,?,?,?,?,?,?,?,?,?,?
+               WHERE NOT EXISTS (
+                 SELECT 1 FROM adsb_sightings
+                  WHERE tail=? AND sample_ts_utc=?
+                    AND ABS(IFNULL(lat,0)-?) < 1e-7
+                    AND ABS(IFNULL(lon,0)-?) < 1e-7
+               )
+            """, (
+                tail, sample, r.get('lat'), r.get('lon'),
+                r.get('track_deg'), r.get('speed_kt'), r.get('alt_ft'),
+                r.get('receiver_airport'), r.get('receiver_call'),
+                r.get('source'), iso8601_ceil_utc(),
+                # EXISTS args
+                tail, sample, r.get('lat'), r.get('lon')
+            ))
+            if cur.rowcount > 0:
+                n += 1
+    return n
+
+def adsb_latest_from_table(tail: str) -> dict | None:
+    t = _sanitize_tail(tail)
+    if not t:
+        return None
+    try:
+        rows = dict_rows("""
+            SELECT tail, sample_ts_utc, lat, lon, track_deg, speed_kt, alt_ft,
+                   receiver_airport, receiver_call, source
+              FROM adsb_sightings
+             WHERE UPPER(tail) = ?
+             ORDER BY sample_ts_utc DESC
+             LIMIT 1
+        """, (t,))
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+def adsb_parse_socket_lines(lines: Iterable[str]) -> List[dict]:
+    """
+    Parse JSON lines coming from the :30154 feed (readsb/TAR1090 JSONL).
+    Returns normalized dicts; empty list on failure.
+    """
+    ts_default = iso8601_ceil_utc()
+    out: List[dict] = []
+    for ln in lines:
+        try:
+            rec = json.loads(ln.strip())
+            if not isinstance(rec, dict):
+                continue
+            ts_iso = _epoch_to_iso_utc(rec.get('now')) if 'now' in rec else ts_default
+            norm = _normalize_adsb_dict(rec, sample_ts_iso=ts_iso, source="readsb")
+            if norm:
+                out.append(norm)
+        except Exception:
+            continue
+    return out
+
+def adsb_latest_for_tail(tail: str) -> dict | None:
+    """
+    Return the latest sighting dict for a given tail using either:
+      1) adsb_sightings table (preferred when populated), or
+      2) on-demand snapshot (aircraft.json) or socket (:30154) feed.
+    Normalized keys:
+      tail, lat, lon, track_deg?, speed_kt?, alt_ft?, sample_ts_utc,
+      receiver_airport, receiver_call, source
+    """
+    t = _sanitize_tail(tail)
+    if not t:
+        return None
+
+    # 1) Try DB first (cheap and already normalized)
+    try:
+        rows = dict_rows("""
+            SELECT tail, sample_ts_utc, lat, lon, track_deg, speed_kt, alt_ft,
+                   receiver_airport, receiver_call, source
+              FROM adsb_sightings
+             WHERE UPPER(tail) = ?
+             ORDER BY sample_ts_utc DESC
+             LIMIT 1
+        """, (t,))
+        if rows:
+            return rows[0]
+    except Exception:
+        # best-effort only
+        pass
+
+    # 2) On-demand HTTP snapshot (tar1090/readsb)
+    if _AOCT_DISABLE_ONDEMAND_ADSB:
+        return None
+    try:
+        # overall wall-clock budget across all branches
+        start = time.perf_counter()
+        budget = _AOCT_ADSB_BUDGET_MS / 1000.0
+        for rec in adsb_fetch_snapshot(_budget_s=budget - (time.perf_counter() - start)):
+            # after normalization 'tail' is set; still be tolerant
+            rt = _sanitize_tail(rec.get('tail') or rec.get('registration') or '')
+            if rt == t and rec.get('lat') is not None:
+                return rec
+    except Exception:
+        pass
+
+    # 3) Live socket feed (:30154 JSON lines)
+    if _AOCT_DISABLE_ONDEMAND_ADSB:
+        return None
+    try:
+        # keep socket dial within remaining budget
+        start = time.perf_counter()
+        budget = _AOCT_ADSB_BUDGET_MS / 1000.0
+        remain = max(0.3, budget - (start - start))  # ≈ budget (avoid 0)
+        sock = socket.create_connection(('127.0.0.1', 30154), timeout=min(2, remain))
+        f = sock.makefile('r')
+        lines = []
+        # cap read loop by remaining budget too
+        deadline = time.time() + min(1.5, max(0.3, budget - (time.perf_counter() - start)))
+        while time.time() < deadline:
+            ln = f.readline()
+            if not ln:
+                break
+            lines.append(ln)
+            if len(lines) >= 1000:
+                break
+        try:
+            sock.close()
+        except Exception:
+            pass
+        for rec in adsb_parse_socket_lines(lines):
+            if _sanitize_tail(rec.get('tail')) == t and rec.get('lat') is not None:
+                return rec
+    except Exception:
+        pass
+
+    return None
+
+def adsb_auto_lookup_tail(tail: str) -> dict | None:
+    """
+    Helper for auto-replies:
+      • If the ADS-B poller is ON → prefer table lookup only (no live HTTP).
+      • If OFF → perform a one-shot on-demand fetch (DB fallback still OK).
+    """
+    # Prefer table when the poller is ON, or when live lookups are disabled.
+    try:
+        poll_on = (get_preference('adsb_poll_enabled') or 'no').strip().lower() == 'yes'
+    except Exception:
+        poll_on = False
+    if poll_on or _AOCT_DISABLE_ONDEMAND_ADSB:
+        return adsb_latest_from_table(tail)
+    return adsb_latest_for_tail(tail)
+
+def adsb_fetch_stream_snapshot(max_lines: int = 1000, timeout_s: float = 1.8) -> List[dict]:
+    """
+    Read a short burst from the configured JSON-lines stream and return
+    normalized sighting dicts suitable for adsb_bulk_upsert(...).
+    Supports:
+      • tcp://host:port    (recommended; readsb/tar1090 :30154)
+      • http://host:port/  (if your setup proxies JSON-lines over HTTP)
+    Falls back to [] on any error.
+    """
+    try:
+        url = (get_preference('adsb_stream_url') or 'tcp://127.0.0.1:30154').strip()
+    except Exception:
+        url = 'tcp://127.0.0.1:30154'
+
+    # Parse scheme without adding a top-level import
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        scheme = (parsed.scheme or 'tcp').lower()
+    except Exception:
+        parsed = None
+        scheme = 'tcp'
+
+    # TCP JSON-lines (readsb)
+    if scheme in ('tcp', ''):
+        try:
+            host = parsed.hostname or '127.0.0.1'
+            port = parsed.port or 30154
+            sock = socket.create_connection((host, port), timeout=timeout_s)
+            f = sock.makefile('r', encoding='utf-8', errors='ignore')
+            lines: List[str] = []
+            deadline = time.time() + timeout_s
+            while time.time() < deadline and len(lines) < max_lines:
+                ln = f.readline()
+                if not ln:
+                    break
+                lines.append(ln)
+            try:
+                sock.close()
+            except Exception:
+                pass
+            return adsb_parse_socket_lines(lines)
+        except Exception:
+            return []
+
+    # HTTP(S) JSON-lines
+    if scheme in ('http', 'https'):
+        try:
+            # Read a bounded chunk to avoid hanging on infinite streams
+            with urlopen(url, timeout=timeout_s) as resp:
+                raw = resp.read(128 * 1024)  # up to 128 KiB
+            text = raw.decode('utf-8', errors='ignore')
+            # Primary: treat as JSON-lines
+            if '\n' in text:
+                return adsb_parse_socket_lines(text.splitlines())
+            # Fallback: if a single JSON object/array slipped through, try to normalize it
+            try:
+                doc = json.loads(text)
+            except Exception:
+                return []
+            # If it looks like aircraft.json, reuse that path’s normalizer quickly
+            if isinstance(doc, dict) and isinstance(doc.get('aircraft'), list):
+                ts_iso = _epoch_to_iso_utc(doc.get('now'))
+                out: List[dict] = []
+                for rec in doc.get('aircraft') or []:
+                    if not isinstance(rec, dict):
+                        continue
+                    norm = _normalize_adsb_dict(rec, sample_ts_iso=ts_iso, source="readsb")
+                    if norm:
+                        out.append(norm)
+                return out
+            # Otherwise: nothing usable
+            return []
+        except Exception:
+            return []
+
+    # Unknown scheme
+    return []
+
+
+# ── Validation / clamping helpers (defensive parsing) ───────────────────────
+def clamp_range(val: float | int | None, lo: float, hi: float) -> float | None:
+    """
+    Clamp numeric input into [lo, hi]. Returns None if input is None or unparseable.
+    """
+    if val is None:
+        return None
+    try:
+        x = float(val)
+        if x < lo: return lo
+        if x > hi: return hi
+        return x
+    except Exception:
+        return None
 
 def set_preference(name: str, value: str) -> None:
     """Upsert a preference."""
@@ -1322,6 +1899,24 @@ def set_preference(name: str, value: str) -> None:
 
     except Exception:
         # Never hard-fail a preference write if scheduling errors occur
+        pass
+
+    # Keep retention job configured and refreshed when its pref changes.
+    try:
+        if name == 'adsb_retention_hours':
+            from modules.services.jobs import configure_retention_jobs
+            configure_retention_jobs()
+        # Turning the local ADS-B poller on/off or changing its cadence
+        # should immediately (re)configure the scheduler job.
+        if name in ('adsb_poll_enabled', 'adsb_poll_interval_s'):
+            try:
+                from modules.services.jobs import configure_adsb_poller_job
+                configure_adsb_poller_job()
+            except Exception:
+                # best-effort only; never block preference writes
+                pass
+    except Exception:
+        # Best-effort: don't block preference writes on scheduling errors.
         pass
 
 def clear_embedded_preferences() -> None:
@@ -1437,9 +2032,30 @@ def choose_ramp_direction_with_balance() -> str:
     return 'inbound' if random.random() < p_inbound else 'outbound'
 
 def dict_rows(sql, params=()):
-    with sqlite3.connect(get_db_file()) as c:
+    """SELECT helper → list[dict]; logs slow queries if enabled."""
+    t0 = time.perf_counter()
+    with connect(get_db_file(), timeout=30) as c:
         c.row_factory = sqlite3.Row
-        return [dict(r) for r in c.execute(sql, params)]
+        if SQL_TRACE and SQL_TRACE_EXPANDED:
+            try:
+                c.set_trace_callback(lambda s: _sql_logger.debug("SQL EXPANDED | %s", s))
+            except Exception:
+                pass
+        cur = c.execute(sql, params)
+        rows = [dict(r) for r in cur.fetchall()]
+    dt_ms = (time.perf_counter() - t0) * 1000.0
+    try:
+        if _AOCT_SQL_LOG or dt_ms >= _AOCT_SQL_SLOW_MS:
+            one = " ".join((sql or "").strip().split())
+            _sql_logger.warning("[SQL %s %.1f ms] %s | params=%s",
+                               "SLOW" if dt_ms >= _AOCT_SQL_SLOW_MS else "OK", dt_ms, one, params)
+            if _AOCT_SQL_EXPLAIN and one.lstrip().upper().startswith("SELECT"):
+                with connect(get_db_file(), timeout=30) as c2:
+                    plan = c2.execute("EXPLAIN QUERY PLAN " + one, params).fetchall()
+                _sql_logger.warning("[SQL PLAN] %s", "; ".join(str(tuple(r)) for r in plan))
+    except Exception:
+        pass
+    return rows
 
 def hhmm_norm(t:str)->str: return t.strip().zfill(4) if t.strip() else ''
 
@@ -1593,10 +2209,19 @@ def airport_aliases(code: str) -> list:
     return [a.upper() for a in aliases if a]
 
 def parse_weight_str(w):
-    w=w.strip()
+    w = (w or '').strip()
+    if not w:
+        return ''
+    # Convert any 'kg' flavor to lbs when a number is present; otherwise fall back unchanged.
     if 'kg' in w.lower():
-        num=float(re.findall(r"[\d.]+",w)[0])
-        return f"{kg_to_lbs(num)} lbs"
+        m = re.search(r"[\d.]+", w)
+        if m:
+            try:
+                num = float(m.group(0))
+                return f"{kg_to_lbs(num)} lbs"
+            except Exception:
+                return w
+        return w
     return w
 
 def _is_winlink_reflector_bounce(subj: str, body: str) -> bool:
@@ -2090,7 +2715,7 @@ def extract_wgid_from_text(subject: str | None, body: str | None) -> str | None:
     Returns the first hex ID found, else None.
     """
     pat = re.compile(r'\[?WGID:([a-f0-9]{16,})\]?', re.I)
-    for chunk in (subject or "", body or ""):
+    for chunk in (subject, body):
         if not chunk:
             continue
         m = pat.search(chunk)

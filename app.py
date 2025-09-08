@@ -364,6 +364,7 @@ def _get_bp(modpath: str, attr: str = "bp"):
     return getattr(m, attr, None) if m else None
 
 def _reg(bp, *, name: str):
+    # Note: name is the *blueprint name* used internally by Flask's app
     if not bp:
         logger.warning("Skipping blueprint '%s' (missing or failed import)", name)
         return
@@ -435,8 +436,10 @@ supervisor_bp  = _get_bp("modules.routes.supervisor")
 wginventory_bp  = _get_bp("modules.routes.wargame.inventory")
 staff_bp       = _get_bp("modules.routes.staff")
 comms_bp       = _get_bp("modules.routes.comms")
+locates_bp     = _get_bp("modules.routes.locates")   # /api/locates/*
 
 # Register blueprints with unique names to avoid collisions
+tiles_bp       = _get_bp("modules.services.tiles")   # /tiles/{z}/{x}/{y}.png
 app.register_blueprint(inventory_bp, name="inventory")
 _reg(wginventory_bp,  name="wginventory")
 _reg(radio_bp,       name="radio")
@@ -454,6 +457,8 @@ _reg(admin_bp,       name="admin")
 _reg(index_bp,       name="wgindex")
 _reg(super_bp,       name="wgsuper")
 _reg(supervisor_bp,  name="supervisor")
+_reg(tiles_bp,       name="tiles")
+_reg(locates_bp,     name="locates")
 _reg(staff_bp,       name="staff")
 _reg(comms_bp,       name="comms")
 
@@ -575,6 +580,15 @@ clear_airport_cache()
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpful route dump + dev diagnostics
+
+# First-boot offline tiles bootstrap (non-blocking; best-effort)
+try:
+    import modules.services.tiles as _tiles
+    # Creates directory/MBTiles if missing and kicks off a tiny z0–7 seed,
+    # guarded by a sentinel file and the 'map_offline_seed' preference.
+    _tiles.bootstrap_offline_tiles(app)
+except Exception as e:
+    logger.warning("Tiles bootstrap skipped: %s", e)
 
 try:
     for r in app.url_map.iter_rules():

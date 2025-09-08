@@ -10,6 +10,55 @@
       <a href="{{ url_for('comms.comms_index') }}" class="button small" style="padding:.25rem .5rem; border:1px solid #ccc; border-radius:.4rem; text-decoration:none; font-size:.9rem;">
         Communications Log
       </a>
+      <button id="btn-locate-flight" type="button" class="button small"
+              style="padding:.25rem .5rem; border:1px solid #2b6; color:#084; background:#eaf9f1; border-radius:.4rem; font-size:.9rem; cursor:pointer;">
+        Locate Flight
+      </button>
+    </div>
+    <!-- Recent locate requests (quick access) -->
+    <div class="locates-card" style="background:#fff;border:1px solid #ddd;border-radius:.5rem;padding:.5rem .75rem; margin-bottom:.5rem;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+        <strong>Recent locate requests (showing latest 3)</strong>
+        <a href="/locates" style="font-size:.9rem;">View all</a>
+      </div>
+      <table style="width:100%;border-collapse:collapse;margin-top:.4rem;">
+        <thead>
+          <tr>
+            <th style="text-align:left;font-size:.85rem;border-bottom:1px solid #eee;padding:6px 6px;">Tail</th>
+            <th style="text-align:left;font-size:.85rem;border-bottom:1px solid #eee;padding:6px 6px;">Requested</th>
+            <th style="text-align:left;font-size:.85rem;border-bottom:1px solid #eee;padding:6px 6px;">Status</th>
+            <th style="text-align:left;font-size:.85rem;border-bottom:1px solid #eee;padding:6px 6px;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in (recent_locates or []) %}
+          <tr data-locate-id="{{ r.id }}">
+            <td style="padding:6px 6px;"><strong>{{ (r.tail or '')|upper }}</strong></td>
+            <td style="padding:6px 6px;">{{ r.requested_at_utc or '—' }}</td>
+            <td style="padding:6px 6px;">
+              {% if r.latest_sample_ts_utc %}
+                <span style="display:inline-block;padding:2px 6px;border-radius:8px;font-size:12px;border:1px solid #cfead9;background:#eaf8ef;">responded</span>
+                <span class="muted" style="font-size:12px;">{{ r.latest_sample_ts_utc }}</span>
+              {% else %}
+                <span style="display:inline-block;padding:2px 6px;border-radius:8px;font-size:12px;border:1px solid #ddd;">pending</span>
+              {% endif %}
+            </td>
+            <td style="padding:6px 6px; display:flex; gap:.5rem; align-items:center;">
+              <a href="/locates?tail={{ (r.tail or '')|upper }}">Open map</a>
+              <button
+                class="js-delete-locate"
+                data-delete-url="{{ url_for('supervisor.locates_delete', locate_id=r.id) }}"
+                style="padding:.2rem .45rem;border:1px solid #c33;background:#fee;color:#a00;border-radius:.35rem;cursor:pointer;">
+                🗑 Delete
+              </button>
+            </td>
+          </tr>
+          {% endfor %}
+          {% if not (recent_locates or []) %}
+          <tr><td colspan="4" class="muted" style="padding:6px 6px;">No recent requests.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
     </div>
     <div id="supervisor-counts-body"><!-- counts load here --></div>
   </div>
@@ -29,6 +78,29 @@
     <!-- recent flights table will be injected here -->
   </div>
 </div>
+
+  <!-- Locate Flight Modal -->
+  <div id="locate-modal" class="modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:5000;">
+    <div class="modal-card" style="max-width:440px; margin:10vh auto; background:#fff; border-radius:.5rem; box-shadow:0 12px 40px rgba(0,0,0,.2); overflow:hidden;">
+      <div style="padding:.75rem 1rem; border-bottom:1px solid #eee; font-weight:600;">Initiate Locate</div>
+      <form id="locate-form" style="padding:1rem;">
+        <label for="locate-tail" style="display:block; font-size:.9rem; color:#333; margin-bottom:.35rem;">Tail number (e.g., N428K7)</label>
+        <input id="locate-tail" name="tail" type="text" placeholder="N123AB" autocomplete="off"
+               style="width:100%; padding:.5rem .6rem; border:1px solid #ccc; border-radius:.35rem; font-size:1rem; letter-spacing:.5px; text-transform:uppercase;" />
+        <div id="locate-hint" class="muted" style="margin-top:.5rem; font-size:.85rem;">
+          Sends an <em>AOCT flight query</em> to all mapped Winlink callsigns.
+          <div style="margin-top:.35rem; padding:.4rem .5rem; background:#fff7e6; border:1px solid #f0c36d; color:#7a4b00; border-radius:.35rem; font-size:.85rem;">
+            <strong>Heads-up:</strong> This will queue a <em>mass email</em> to all mapped callsigns.
+          </div>
+        </div>
+        <div id="locate-result" style="display:none; margin-top:.75rem; font-size:.9rem;"></div>
+        <div style="display:flex; gap:.5rem; justify-content:flex-end; margin-top:1rem;">
+          <button type="button" id="locate-cancel" class="button" style="padding:.4rem .7rem; border:1px solid #ccc; background:#fafafa; border-radius:.35rem; cursor:pointer;">Cancel</button>
+          <button type="submit" id="locate-send" class="button" style="padding:.4rem .7rem; border:1px solid #2b6; background:#25d366; color:#073; border-radius:.35rem; cursor:pointer;">Send</button>
+        </div>
+      </form>
+    </div>
+  </div>
 
 <script>
   async function loadSupervisorCounts(){
@@ -50,5 +122,137 @@
   setInterval(loadSupervisorCounts, 30000);
   setInterval(loadSupervisorRecent, 30000);
   setInterval(loadInventoryOverview, 60000);
+
+  // ───── Locate Flight modal wiring ────────────────────────────────────────
+  (function(){
+    const modal  = document.getElementById('locate-modal');
+    const openBtn= document.getElementById('btn-locate-flight');
+    const cancel = document.getElementById('locate-cancel');
+    const form   = document.getElementById('locate-form');
+    const input  = document.getElementById('locate-tail');
+    const send   = document.getElementById('locate-send');
+    const result = document.getElementById('locate-result');
+    const hint   = document.getElementById('locate-hint');
+
+    function showModal(){
+      result.style.display = 'none';
+      result.textContent = '';
+      input.value = '';
+      modal.style.display = 'block';
+      setTimeout(()=>input.focus(), 50);
+    }
+    function hideModal(){ modal.style.display = 'none'; }
+    openBtn?.addEventListener('click', showModal);
+    cancel?.addEventListener('click', hideModal);
+    modal?.addEventListener('click', (e)=>{ if(e.target === modal) hideModal(); });
+
+    form?.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      // Block if 3 are visible already (client-side guard; server also enforces)
+      const visCount = document.querySelectorAll('.locates-card tbody tr[data-locate-id]').length;
+      if (visCount >= 3) {
+        alert('You already have 3 locate requests visible. Delete one before sending another.');
+        return;
+      }
+      const tail = (input.value || '').trim().toUpperCase();
+      if(!tail){
+        input.focus();
+        return;
+      }
+      // Required confirmation per spec
+      const ok = window.confirm("This will queue a mass email to all mapped callsigns. Proceed?");
+      if(!ok){
+        result.style.display = 'block';
+        result.style.color = '#a11';
+        result.textContent = 'Canceled.';
+        return;
+      }
+      send.disabled = true;
+      hint.textContent = 'Sending…';
+      try{
+        const resp = await fetch("{{ url_for('supervisor.locates_start') }}", {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+            'X-Requested-With': 'XMLHttpRequest',
+            'X-CSRFToken': '{{ csrf_token() }}'
+          },
+          body: new URLSearchParams({ tail })
+        });
+        // Special-case locate-limit (server-side guard)
+        if (resp.status === 409) {
+          result.style.display = 'block';
+          result.style.color = '#a11';
+          result.textContent = 'You already have 3 locate requests visible. Delete one before sending another.';
+          return;
+        }
+        const data = await resp.json().catch(()=>({ok:false, message:'Unexpected response'}));
+        result.style.display = 'block';
+        if(data.ok){
+          result.style.color = '#075e36';
+          const mapUrl = "{{ url_for('supervisor.locates_index') }}?tail=" + encodeURIComponent(tail);
+          // Count may be named differently depending on backend version:
+          // prefer recipient_count, then queued, then mapped_count, then recipients.length.
+          const count = (
+            (typeof data.recipient_count === 'number' ? data.recipient_count : null) ??
+            (typeof data.queued === 'number'          ? data.queued          : null) ??
+            (typeof data.mapped_count === 'number'    ? data.mapped_count    : null) ??
+            (Array.isArray(data.recipients)           ? data.recipients.length : null) ??
+            0
+          );
+          result.innerHTML =
+            `Locate queued for <b>${tail}</b> → <b>${count}</b> recipient${count===1?'':'s'}. ` +
+            `<div style="margin-top:.4rem">
+               <a href="/locates">See all requests</a> ·
+               <a href="${mapUrl}">Open map for ${tail}</a>
+             </div>`;
+          // Do NOT redirect; let the operator choose.
+          return;
+        } else {
+          result.style.color = '#a11';
+          result.textContent = data.message || 'Failed to send.';
+        }
+      } catch(err){
+        result.style.display = 'block';
+        result.style.color = '#a11';
+        result.textContent = 'Network error while sending.';
+      } finally {
+        hint.textContent = 'Sends an AOCT flight query to all mapped Winlink callsigns.';
+        send.disabled = false;
+      }
+    });
+  })();
+
+  // ───── Delete locate handlers (Supervisor list) ──────────────────────────
+  (function(){
+    const table = document.querySelector('.locates-card tbody');
+    if (!table) return;
+    table.addEventListener('click', async (e) => {
+      const btn = e.target.closest('.js-delete-locate');
+      if (!btn) return;
+      e.preventDefault();
+      if (!confirm('Delete this locate request?')) return;
+      const url = btn.getAttribute('data-delete-url');
+      try {
+        const resp = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'X-Requested-With': 'XMLHttpRequest',
+            'X-CSRFToken': '{{ csrf_token() }}'
+          }
+        });
+        const j = await resp.json().catch(()=>({ok:false}));
+        if (resp.ok && j.ok) {
+          const row = btn.closest('tr[data-locate-id]');
+          if (row) row.remove();
+          if (window.showToast) window.showToast('Locate deleted.', 'info');
+        } else {
+          alert(j.message || 'Failed to delete locate.');
+        }
+      } catch (err) {
+        alert('Network error while deleting.');
+      }
+    });
+  })();
 </script>
 {% endblock %}

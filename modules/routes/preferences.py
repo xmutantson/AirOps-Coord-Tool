@@ -1,6 +1,7 @@
 
 from markupsafe import escape
 import sqlite3
+import os
 
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
 from modules.utils.http import http_post_json
@@ -152,6 +153,54 @@ def preferences():
                     set_preference(key, 'yes' if val else 'no')
 
             flash("WinLink mappings and CC addresses saved.", "success")
+            return redirect(url_for('preferences.preferences'))
+
+        # ── Flight Locate & Offline Maps (DB-backed) ───────────────
+        if (
+            'adsb_base_url' in request.form or
+            'adsb_stream_url' in request.form or
+            'aoct_auto_reply_flight' in request.form or
+            'adsb_poll_enabled' in request.form or
+            'adsb_poll_interval_s' in request.form or
+            'map_tiles_path' in request.form or
+            'map_offline_seed' in request.form
+        ):
+            # ADS-B base URL (allow blank)
+            if 'adsb_base_url' in request.form:
+                set_preference('adsb_base_url', (request.form.get('adsb_base_url','') or '').strip())
+            # ADS-B JSON-lines stream URL (tcp://host:port or http(s)://…)
+            if 'adsb_stream_url' in request.form:
+                set_preference('adsb_stream_url', (request.form.get('adsb_stream_url','') or '').strip())
+            # AOCT: auto-reply to *Flight Query* with latest sighting
+            if 'aoct_auto_reply_flight' in request.form:
+                ar = 'yes' if (request.form.get('aoct_auto_reply_flight','yes').strip().lower() == 'yes') else 'no'
+                set_preference('aoct_auto_reply_flight', ar)
+            # Local ADS-B poller toggle
+            if 'adsb_poll_enabled' in request.form:
+                pe = 'yes' if (request.form.get('adsb_poll_enabled','no').strip().lower() == 'yes') else 'no'
+                set_preference('adsb_poll_enabled', pe)
+            # Poller interval (clamp to >=1s)
+            if 'adsb_poll_interval_s' in request.form:
+                raw = (request.form.get('adsb_poll_interval_s','') or '').strip()
+                try:
+                    n = max(1, int(float(raw)))
+                except Exception:
+                    n = 10
+                set_preference('adsb_poll_interval_s', str(n))
+            # Map tiles path: blank ⇒ revert to derived default (delete row)
+            if 'map_tiles_path' in request.form:
+                mpath = (request.form.get('map_tiles_path','') or '').strip()
+                if mpath:
+                    set_preference('map_tiles_path', mpath)
+                else:
+                    with sqlite3.connect(DB_FILE) as c:
+                        c.execute("DELETE FROM preferences WHERE name='map_tiles_path'")
+            # One-time offline seed flag
+            if 'map_offline_seed' in request.form:
+                ovs = 'yes' if (request.form.get('map_offline_seed','yes').strip().lower() == 'yes') else 'no'
+                set_preference('map_offline_seed', ovs)
+
+            flash("ADS-B & Map preferences saved.", "success")
             return redirect(url_for('preferences.preferences'))
 
         # ── Unlock / lock admin mode ────────────────────
@@ -366,6 +415,16 @@ def preferences():
     auto_broadcast_interval_min = (get_preference('auto_broadcast_interval_min') or '0')
     auto_reply_enabled = (get_preference('auto_reply_enabled') or 'yes')
 
+    # Flight Locate + Maps
+    adsb_base_url           = get_preference('adsb_base_url') or ''
+    adsb_stream_url         = get_preference('adsb_stream_url') or ''
+    aoct_auto_reply_flight  = (get_preference('aoct_auto_reply_flight') or 'yes')
+    adsb_poll_enabled       = (get_preference('adsb_poll_enabled') or 'no')
+    adsb_poll_interval_s    = (get_preference('adsb_poll_interval_s') or '10')
+    map_tiles_path          = (get_preference('map_tiles_path') or '')
+    map_offline_seed        = (get_preference('map_offline_seed') or 'yes')
+    map_tiles_default       = os.path.join(os.path.dirname(DB_FILE), 'tiles')
+
     return render_template(
         'preferences.html',
         default_origin=default_origin,
@@ -395,5 +454,14 @@ def preferences():
         origin_lon=origin_lon,
         # Remote-Airport prefs
         auto_broadcast_interval_min=auto_broadcast_interval_min,
-        auto_reply_enabled=auto_reply_enabled
+        auto_reply_enabled=auto_reply_enabled,
+        # Flight Locate + Maps
+        adsb_base_url=adsb_base_url,
+        adsb_stream_url=adsb_stream_url,
+        aoct_auto_reply_flight=aoct_auto_reply_flight,
+        adsb_poll_enabled=adsb_poll_enabled,
+        adsb_poll_interval_s=adsb_poll_interval_s,
+        map_tiles_path=map_tiles_path,
+        map_offline_seed=map_offline_seed,
+        map_tiles_default=map_tiles_default
     )
