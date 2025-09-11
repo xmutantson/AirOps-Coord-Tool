@@ -1,0 +1,614 @@
+- route_prefix: "/admin"
+  title: "Admin Console"
+  body_md: |
+    # Admin Console
+
+    Global configuration, maintenance, and destructive tools.
+
+    ## Entering Admin Mode
+    Open the Admin screen and enter the passphrase shown in the UI (verbatim). This intentionally requires a deliberate action and doesn't need a separate memorized password. Use **Exit Admin Mode** when done.
+
+    ---
+
+    ## Core settings
+    - **Default origin**, **Embedded site URL/name/mode (iframe/proxy)**, **Debug logs**.
+    - **Wargame mode** toggle: Enables training dashboards and resets training tables when used. The banner turns yellow. Turn it **off** when operations are real.
+
+    ---
+
+    ## Winlink / Radio
+    - **CMS credentials** (up to three callsigns + passwords).
+    - **Configure PAT** helper applies settings stored in the webapp's database to PAT.
+    - Mappings for destination **Airport -> Callsign** live in **Preferences**.
+
+    ---
+
+    ## Security & sessions
+    - **Change app password**: Updates the login password. Existing sessions **remain** valid until you choose to revoke them.
+    - **Invalidate all sessions**: Immediately logs out **everyone**, including you.
+
+    ---
+
+    ## Data & maintenance
+    - **Export all**: One-click export of CSVs plus printable HTML for ICS-214/ICS-309.
+    - **Reset database**: Wipes and re-initializes all data. Use with extreme care.
+      - Help articles are shipped with the image and will be **re-seeded** on next boot if the help table is empty.
+      - All operational data (flights, inventory, logs) will be lost.
+
+    ---
+
+    ## Good practice
+    - Toggle **Wargame mode off** immediately when training is over.
+    - Before **Reset database**, take a host-level DB snapshot/backup if anything must be preserved.
+
+- route_prefix: "/comms"
+  title: "Communications Log"
+  body_md: |
+    # Communications Log
+
+    Free-form log for **all** operational communications - radio, Winlink, phone, in-person - so ICS-309 reflects reality.
+
+    ## Purpose
+    - Central place to capture comms beyond automated Winlink traffic.
+    - AOCT auto-inserts system events for Winlink messages; operators add everything else.
+
+    ## Add an entry
+    1. Open **Comms Log**.
+    2. Fill: *time (UTC)*, *channel/medium*, *to/from*, *subject/summary*, and *notes*.
+    3. Save. The row appears immediately.
+
+    **Timezone:** Entries are recorded/displayed in **UTC**; the form auto populates the current time/date.
+
+    ## Usage notes
+    - Anyone can add/delete entries (open system; no audit trail).
+    - Entries feed the **ICS-309** export with system-generated items.
+    - Keep entries concise and factual; include flight code/tail when relevant.
+
+- route_prefix: "/"
+  title: "Dashboard - Live Flight Board"
+  body_md: |
+    # Dashboard - Live Flight Board
+    **Audience:** All operators and supervisors
+    **Purpose:** Live flight board for all current and recent flights at this airport.
+
+    ## What you see
+    - **Code** - AOCT flight code (OOOMMDDYYDDDHHMM). Click the **code** or the **[edit pencil]** to edit the flight.
+    - **Status** - `In-flight` or `Landed`.
+    - **Tail** - Aircraft registration (painted on the airframe).
+    - **Dist (NM)** - Great-circle distance from *your* airport, if an ADS-B feed is configured and aircraft is in range.
+    - **Pilot / Pax** - Optional; filled when known.
+    - **Origin / Dep** - Departure airport and time.
+    - **Destination / ETA / Arrived** - Planned destination and ETA; once arrived, the arrival time is shown.
+    - **Cargo Type / Lbs** - From RampBoss manifests.
+    - **Remarks** - Free text from RampBoss.
+
+    ## Colors & priority
+    - **Yellow row** -> Radio action pending (needs sending/ack flow).
+    - **Red row** -> Missing Winlink callsign mapping for the destination airport.
+    - Default theme color -> No special action required.
+    - Red background anywhere in the app means the server has disconnected from the session and may be offline.
+
+    ## Filters
+    Top filters accept comma-separated values for **airport codes** and/or **tail numbers**.
+
+    ## Refresh behavior
+    - Table auto-refreshes every **30 seconds**.
+    - **Dist (NM)** value greys out after **5 minutes** without new ADS-B data.
+
+    ## Empty state
+    A header may show with no rows. That's normal if no flights match the current filters or none are active yet.
+
+    ## Tips
+    - Clicking anywhere on the row does **not** open it; click the **flight code** (or the pencil) to edit.
+    - Wargame banner: when training mode is on, the site banner turns **yellow**. You can still operate the board, but for **real events** ask an admin to turn Wargame **off** first to avoid mixing training and real data.
+
+- route_prefix: "/edit_flight"
+  title: "Edit Flight - Post-Creation Corrections"
+  body_md: |
+    # Edit Flight - Post-Creation Corrections
+
+    ## What's editable
+    Everything, including ETA and arrival time.
+
+    ## Arrival completion
+    - **Inbound to us:** RampBoss logs inbound flight  **arrival**; Radio notifies remote.
+    - **Landing elsewhere:** Marked complete when a remote Winlink message is ingested.
+
+    ## Corrections after send
+    Editing after radio operators **send** does **not** push updates to other airports.
+    - To correct: **Delete & re-create/re-send** (add a "correction" remark), or edit flight and have Radio send a **free-text correction** to other sites.
+
+    ## Notes
+    Distance columns come from ADS-B live data; Radio/Ramp pages don't accept manual distance.
+
+- route_prefix: "/preferences"
+  title: "Preferences"
+  body_md: |
+    # Preferences
+
+    Configure **local device options** (cookies) and **site-wide settings** (database).
+
+    ## What this page is for
+    Quickly tailor units, filtering, and display on your device, and set a few global behaviors that affect everyone (radio/ADS-B/broadcast).
+
+    ---
+
+    ## Device (per-browser) options
+    Stored in cookies - they affect only this device:
+    - **Airport code format**: Show ICAO/IATA/FAA style in tables/forms.
+    - **Mass unit**: Pounds or kilograms (display only; the database stores pounds).
+    - **Distance unit**: NM/SM/KM (display only; the database is natively in nm).
+    - **Hide "TBD" cells in tables**: Blank not-yet-known values for cleaner views.
+    - **Sort by entry sequence**: Prefer chronological event order in some tables, defaults to 'sent/not sent' with 'inflight/landed' sub-priority
+    - **Your callsign**: Used where a personal callsign is needed in the UI.
+    - **Include "TEST" line in outgoing Winlink**: Appends a test indicator to generrated Air Ops messages.
+    - **Only show unsent Ramp Boss flights**: Hides rows already acted on by Radio.
+
+    **Rounding:** UIs show one decimal place when needed; raw DB values are kept at full precision.
+
+    ---
+
+    ## Site-wide (database) settings
+    These apply to the whole site/airport:
+    - **Default origin**: Pre-fill for outbound flight creation. This should be your current airport's code (icao 4 digit code preferred).
+    - **Inbound manifest autoscan**: Enable/disable automatic detection of structured manifests. Plugs into Advanced Cargo under Ramp Boss flows.
+    - **Inventory auto-broadcast interval**: Off / 15 / 30 / 60 minutes. Sends mass emails containing your inventory to other mapped airports (see below).
+    - **AOCT cargo query auto-reply**: Enables automatic CSV replies via PAT winlink to AOCT inventory queries.
+    - **AOCT flight query auto-reply (latest sighting)**: Auto-respond with the latest ADS-B sighting info.
+    - **Enable local ADS-B poller** and **Poll interval**: Turn on/off the local reader and set how often to poll.
+    - **ADS-B JSON stream URL (port 30154)**: Where the app fetches local aircraft sightings for locate/flight status features.
+    - **Map tiles path** & **Seed low-zoom tiles on first boot**: Local map tile cache behavior. Used in locate flight tool (supervisor).
+    - **Airport Winlink call-sign mappings**: Destination airport -> callsign (1:1). Also **CC addresses** and **Include CC on AOCT messages**.
+    - **NetOps feeder** options: uploads to NetOpsTool, authentication + settings.
+
+    > **Note:** Winlink credentials and PAT configuration live under **Admin**, not here.
+
+    ---
+
+    ## Tips
+    - Unit prefs are visual only - operations logic still uses canonical pounds in the backend.
+    - If you don't see ADS-B distances/locates updating, verify the **JSON stream URL** and that the local poller + embed url as tar1090 is correct.
+
+- route_prefix: "/queued_flights"
+  title: "Queued Flights - Staging & Send"
+  body_md: |
+    # Queued Flights - Staging & Send
+
+    ## Purpose
+    Staging area for outbound flights before send; holds inventory reservations.
+
+    ## Behavior
+    - Actions per row: **Edit**, **Delete**, **Send**.
+    - Drafts do **not** expire (manual cleanup).
+    - Inventory tied to a queued manifest is **withheld** from on-hand counts. We consider it "on the plane" to avoid double counting it.
+
+    ## Edit queued flight
+    - All fields editable.
+    - **Save to Queue** returns flight to queue system with edits applied.
+    - **Send Now** publishes to Radio and sets timestamps; **one-way** (cannot undo/pull a flight back).
+
+- route_prefix: "/radio"
+  title: "Radio - Outgoing/Incoming over Winlink"
+  body_md: |
+    # Radio - Outgoing/Incoming over Winlink
+
+    ## Purpose
+    Action list for radio traffic: send flight updates, ingest incoming, keep the information pipeline moving.
+
+    ## Top Controls
+    - **Stop/Start Winlink Polling** - toggles the background fetch/send job. Default: **running** if possible. Turn **off** during exercises if you want to avoid automatic sending of tabletop wargame traffic.
+    - **Start/Stop Auto Winlink Send** - when **on**, auto-sends **all** queued outbox messages via PAT/Winlink. 1-minute scheduled job.
+    - **Winlink Inbox** - inbox viewer. Option to **hide parsable** (AOCT cargo/flight, AirOps) so you see only human-actionable messages. Here because PAT will pull messages off CMS if polling, and radio may need to act on messages. Unread indicator present on the button as well as per-message in the inbox (red text/ball).
+
+    ## Outgoing Flights List
+    Shows flights requiring action (defaults to **not yet sent**; preference exists to show sent too).
+
+    Row actions:
+    - **Send via Winlink** - one-off send for this flight via PAT.
+    - **Mark Sent** - you sent it *outside* AOCT (e.g., Winlink Express). Removes from task list. Use only after confirming the message has left your station and successfully arrived at another (first hop OK).
+
+    ## Logging Incoming (from any Winlink client)
+    **Log Incoming Winlink Message** - paste the full message. AOCT parses AOCT/AirOps formats and applies updates (e.g., mark remote arrivals).
+
+    ## CONOPS / Transport Preference
+    Prefer the least-constrained working path: **Internet -> Mobile/Starlink -> VHF (gateway) -> HF**. Manual **Send via Winlink** is for when auto-send is off. Sends via PAT.
+
+    ## Failure / Recovery
+    - **PAT fails/unavailable:** Copy **subject & body verbatim**, send with external client, then **Mark Sent** after verifying first hop.
+    - **Inbox clutter:** Toggle **hide parsable**.
+    - **Exercises:** Stop polling to keep the inbox fully manual.
+
+    ## Quick procedures
+    - **Shift start:** Ensure **Polling ON** -> decide **Auto Send** policy -> open **Inbox** (optionally hide parsable).
+    - **Send a flight:** Row -> **Send via Winlink** (or rely on Auto Send). If PAT fails, copy/paste verbatim in external client, then **Mark Sent**.
+    - **Log incoming:** Paste full message to **Log Incoming**; verify expected state change posted/handle any triggered actions.
+
+- route_prefix: "/ramp_boss"
+  title: "RampBoss - Intake, Queuing & Manifests"
+  body_md: |
+    # RampBoss - Intake, Queuing & Manifests
+
+    ## Purpose
+    Create outbound flights, mark inbound arrivals, build cargo manifests (scanner or manual), and decide when to **Send Now** vs **Add to Queue**.
+
+    ## Direction
+    - **Outbound:** Create flight + cargo; **Send Now** or **Add to Queue**.
+    - **Inbound:** Mark arrival; arrival time auto-set. May offer to injest cargo if a structured manifest is detected.
+
+    ## Flight Code
+    Format: `OOOMMDDYYDDDHHMM` (origin/date/destination/time). Optional; use **Extract** to prefill when available. Use 3 letter airport codes here.
+
+    ## ETA / Travel Time
+    For **Outbound**, ETA = **Send timestamp** + **Travel Time** (hh:mm).
+
+    ## Cargo tools
+    - **Running Total** - quick calculator for planning weights.
+    - **Advanced Inventory Entry**
+      - **Scanner:** single-shot scans; supports **Add**/**Remove**.
+      - **USB tip:** scanners act as keyboards; on-screen keyboard may hide on phones/tablets.
+      - **Advanced Manifest detection:** if tail lookup yields a structured remarks manifest, map any missing categories, then **Apply** once.
+      - **Avoid double counting:** If you **Apply** a manifest to Inventory here, do **not** send the same pile to Inventory to log again.
+
+    ## Inventory coupling & reaper
+    - Draft manifest items immediately **reserve** inventory (pending flag).
+    - Advanced Cargo **Done** commits inventory (pending->final).
+    - Reaper clears **abandoned** drafts after ~15 min of inactivity (timer resets on each addition).
+
+    ## Send options
+    - **Send Now:** Use at **wheels-up**. Posts to Radio immediately and timestamps flight.
+    - **Add to Queue:** Stage while loading/organizing. Reserves inventory until sent or deleted.
+
+    ## Pitfalls
+    - Don't double-count between Ramp and Inventory after applying a manifest.
+
+- route_prefix: "/locates"
+  title: "Supervisor - Locate Flight"
+  body_md: |
+    # AOCT Help - Supervisor & Locate Flight
+
+    ## Purpose
+    Ask all airports where a specific **tail** was last seen using their ADS-B receivers and Winlink. Use when a flight was **expected but didn't arrive**.
+
+    > Keep traffic minimal. Try the external ADS-B map's filtering first for routine awareness.
+
+    ## Access & behavior
+    - Anyone can create/delete; no role gate, no audit trail. **Deletes are hard.**
+    - Lives under **Supervisor** (quick action) and **/locates** (full list + per-tail map).
+    - Empty state shows just the table header.
+
+    ## End-to-end
+    1. Submit **Tail** (e.g., `N123AB`).
+    2. AOCT emails all mapped airport mailboxes via **Winlink**.
+    3. Remote sites check local ADS-B/records; reply if they have data; otherwise stay silent.
+    4. When a reply is ingested, status becomes **Responded**; after acting, **Delete** to clear.
+
+    ## Duplicates
+    Allowed but **discouraged**; duplicates waste space in the request table. If you see two, refresh **/locates** and delete one.
+
+    ## Good practice
+    - One tail per request.
+    - Don't spam; use ADS-B tools first. If there's too much air traffic to locate your tail of interest, use the filters or the contact list.
+
+- route_prefix: "/supervisor"
+  title: "Supervisor Overview"
+  body_md: |
+    # Supervisor Overview
+
+    ## What this page is for
+    A single place for the supervisor to **see what's happening right now** and jump to the next action. You'll see live flight activity, quick counts, an embedded ADS-B situational view (when configured), and shortcuts into supervisor tools (Staff, Comms Log, Locate Flight).
+
+    **Who uses this page?** Anyone can open it, but it's meant for the **Supervisor (IC/OSC/Ramp coordination lead)** during ops or exercises.
+
+    ---
+
+    ## Layout at a glance
+    - **Toolbar (top-left):**
+      **Staff**  |  **Comms Log** | **Locate Flight**
+      Use these to manage staffing, log communications, or open a locate request.
+    - **Flight Counts:** Rolling totals of key states (e.g., in-flight, landed, pending-send). Counts update as the table updates.
+    - **Live Flight Table:** Operational list similar to Dashboard with status, tail, origin/destination, times, cargo, and remarks.
+    - **ADS-B Map:** Embedded situational view if ADS-B is configured. Shows nearby tracks and helps you try the local ADS-B intercept map before you broadcast a request, if you're trying to find a wayward flight.
+    - **Priority/Recents:** Short lists for "Priority Flights".
+
+    > **Dynamic updates:** The main table and counters **auto-refresh** while the page is open. You shouldn't need to reload during normal ops.
+
+    ---
+
+    ## Using the page
+
+    ### 1) Monitor flights
+    - **Row colors match the Dashboard.**
+      - **Yellow** = radio team still needs to send message for this flight.
+      - **Red** status is hidden here for clarity
+    - **Edit Flight** is disabled in this view.
+
+    ### 2) Locate a flight (when truly necessary)
+    Use **Locate Flight** only when a flight is **expected but hasn't arrived** and you can't find it via your ADS-B tools.
+
+    - The button opens the locate compose flow (same as **Locates** route). Your request will go to all mapped airports.
+    - **Avoid duplicates:** If a tail already has an open locate, do **not** open another. If you see duplicates in the mini-list, open **Locates** and delete one.
+    - When a station replies with a position, the request shows **Responded**; once no longer needed, **Delete** it to clear the list.
+
+    ### 3) Staff & Comms quick access
+    - **Staff:** Clock members in/out, check 24-hour rolling totals, print/export ICS-214.
+    - **Comms Log:** Free-form entries for radio/phone/other traffic; Winlink events auto-insert so your ICS-309 captures on- and off-system activity.
+
+    ---
+
+    ## Tips & gotchas
+    - **Don't spam Locate:** First, try the ADS-B map's own filters/search to find the tail. Broadcast locates create network load across all stations.
+    - **Counts vs. table:** Counts reflect the **current flight state**; if something looks off, wait for the next auto-update or refresh once.
+    - **Exercise mode:** The site banner turns **yellow**. You can still operate, but be mindful not to transmit real traffic unintentionally.
+
+    ---
+
+    ## Configuration notes
+    - **ADS-B embed & locate plumbing** are controlled in **Preferences** (ADSB poller/stream). Once configured, the map appears automatically here.
+    - **Radio/Winlink workflow** (auto-polling/sending) is operated from the **Radio** page; this page simply reflects state and priorities.
+
+    ---
+
+    ## See also
+    - **Dashboard** - flight list focused for all operators.
+    - **Locates** - full locate queue and history.
+    - **Staff** - staffing and ICS-214 exports.
+    - **Comms Log** - free-form comms + ICS-309.
+
+- route_prefix: "/supervisor/staff"
+  title: "Staff & Shifts"
+  body_md: |
+    # Staff & Shifts
+
+    Roster and duty tracking for your incident period.
+
+    ## What you can do
+    - **Clock in / Clock out**. All staff can do this for all other staff.
+    - **Add new staff** (if someone skipped first-time setup).
+    - Review **current shift start (UTC)** and rolling **time totals**.
+
+    ## Roll-up windows
+    Use the window selector to view utilization summaries:
+    - **Last 12 h / 24 h / 72 h / All time**
+
+    Totals show how many hours an operator has been active within the window - helpful for scheduling and fatigue management.
+
+    ## ICS-214
+    From the staff page you can generate a printable **ICS-214 Activity Log** that reflects shifts and key notes.
+
+    ## Tips
+    - Expect small rounding on totals (display-only); underlying timestamps are exact.
+    - If someone forgets to clock out, anyone can clock them out on their behalf.
+
+- route_prefix: "/wargame"
+  title: "Wargame - Role Select & Training Mode"
+  body_md: |
+    # Wargame - Role Select & Training Mode
+    **Audience:** Exercise controllers, trainers, all roles during tabletop
+
+    ## How to use
+    1. Pick a role (**Radio**, **Ramp**, **Inventory**, **Supervisor**) to open its training dashboard.
+    2. Use **Supervisor (Wargame)** to adjust scenario difficulty (message rate, batching, etc.).
+
+    ## Resetting / Ending
+    - Admin toggles **Wargame OFF -> ON** to reset.
+    - Turn Wargame **OFF** after training to avoid accidental real ops under training colors.
+
+    ## Policy
+    Do **not** transmit over Winlink/RF during tabletop unless the exercise **specifically requests** it.
+
+- route_prefix: "/wargame/inventory"
+  title: "Wargame - Inventory"
+  body_md: |
+    # Wargame - Inventory
+
+    ## Purpose
+    Practice inbound receiving and outbound fulfillment using **simulated orders**.
+
+    ## What to do
+    - **Inbound** for simulated deliveries; **Outbound** for simulated requests.
+    - Scan or type; scanning is optional for tabletop.
+    - **Fix/Propagate...** works the same (preview -> apply).
+
+    ## Notes
+    Training dashboards refresh periodically; data is synthetic. Admin resets by toggling Wargame OFF->ON.
+
+- route_prefix: "/wargame/radio"
+  title: "Wargame - Radio"
+  body_md: |
+    # Wargame - Radio
+
+    ## Purpose
+    Practice handling outbound flight traffic and inbound messages using a simulated inbox/task list.
+
+    ## What you do
+    Work the **pseudo-inbox** of training messages that emulate Winlink traffic.
+
+    For each item:
+    - **Mark Sent** - default in training; no RF used.
+    - **Send via Winlink** - only if the tabletop **specifically requests** on-air testing.
+
+    ## Notes
+    UI mirrors production Radio. When training ends, ensure Wargame mode is **OFF** before resuming real ops.
+
+- route_prefix: "/wargame/ramp"
+  title: "Wargame - Ramp"
+  body_md: |
+    # Wargame - Ramp
+
+    ## Purpose
+    Practice creating outbound flights and processing inbound arrivals against **simulated requests**.
+
+    ## Flow
+    1. Review fictitious requests/arrivals.
+    2. Use **Advanced cargo entry** to add/remove items.
+       - No barcode cards? Enter items **manually**; scanner is optional.
+    3. Choose **Send Now** (immediate simulated launch). Task will not satisfy until **sent**, queue system not implemented in wargame mode.
+
+    ## Behaviors
+    Forms/validation mirror production.
+
+    ## Caution
+    Avoid double-entry with Inventory training pages if a manifest is already applied.
+
+- route_prefix: "/wargame/super"
+  title: "Wargame - Supervisor"
+  body_md: |
+    # Wargame - Supervisor
+
+    ## Purpose
+    Configure scenario difficulty and monitor team throughput across Radio, Ramp, and Inventory training views.
+
+    ## Controls
+    - **Message rate** - higher rate = harder, lower rate = easier.
+    - **Batching (visible at once)** - how many tasks surface concurrently (3 is a good default).
+
+    ## Best practices
+    Turn **Wargame OFF** after training.
+
+# Preformatted inventory-related help that was already in YAML
+- route_prefix: "/inventory"
+  title: "Inventory System - How it Works"
+  body_md: |
+    # Inventory System - How it Works
+
+    **Who this is for:** Inventory Specialists managing stockpiles at an airport.
+
+    ## Key ideas
+    - **Units:** Help examples use **pounds (lb)**. Unit switching already exists where needed.
+    - **Raw name vs Sanitized name:** Raw name is what a user typed. Sanitized name is a cleaned,
+      normalized version (e.g., casing/extra adjectives removed) so "spaghetti" and "Spaghetti" resolve to the *same* item.
+    - **Weight per Unit (WPU):** The weight of *one* unit (e.g., one case of beans). Totals are
+      computed as `WPU x Quantity`. Choose the smallest unit you intend to track consistently.
+    - **Quantities are whole numbers:** Pick a unit that matches how you count (no fractional qty).
+    - **Edit vs Fix/Propagate**
+      - **Edit**: change a single entry; you'll *also* be offered to propagate if it makes sense.
+      - **Fix/Propagate**: start here when you *already* know a change should apply broadly.
+        Supports **Category**, **Rename**, and **WPU** changes across matching rows/items.
+    - **Deletes:** Inventory entries are **hard-delete**. Barcode DB rows are **soft-delete**
+      (restorable).
+    - **Scanner basics (USB/photo):** Many scanners act like keyboards. On phones/tablets, plugging
+      in a scanner may hide the on-screen keyboard-focus the scan input before scanning. This can usually be changed in device settings.
+
+    ## Guardrails
+    - Don't delete outbound entries created by Ramp Boss unless they are truly erroneous; doing so
+      will desync "on-hand" values from real operations.
+    - If you created a **bad barcode mapping**, fix it in **Barcode DB**; otherwise future scans
+      will keep auto-filling the wrong details.
+
+    ## Troubleshooting
+    - Totals look wrong? Check for near-duplicate names that sanitize to different strings; prefer
+      **Rename** to merge onto the correct sanitized name.
+    - Scanner entered multiples as singles? Use **Prompt qty** mode next time, or scan the same code
+      the required number of times in **Single** mode.
+
+- route_prefix: "/inventory/detail"
+  title: "Inventory Detail (Entry & Scanner)"
+  body_md: |
+    # Inventory Detail (Entry & Scanner)
+
+    **Purpose:** Record inbound deliveries and outbound pulls; correct recent entries quickly.
+
+    ## Direction
+    - **Inbound:** Free-text **Name** + **WPU**. Use when *adding* new stock.
+    - **Outbound:** Pick from existing **item/size** (current stock). Use when *removing* stock.
+
+    ## Scanner modes
+    - **Prompt qty:** Best for a stack of identical items (enter quantity once after a scan).
+    - **Single:** Behaves like a grocery checkout; scan once per unit.
+
+    ## Workflow
+    1. Set **Direction** and (if inbound) the unit **WPU**.
+    2. Scan or type the item; enter **Quantity** (whole numbers).
+    3. **Save** -> you'll see a toast and the **event log** below updates.
+    4. If you spot an error, use **Edit** for the specific row or **Fix/Propagate** for broad fixes.
+
+    ## Propagation (bulk fixes)
+    - Supports **Category**, **Rename**, **WPU**.
+    - Use **Rename** to converge near-duplicates (merges on the *sanitized* name).
+    - Changing **WPU** updates totals wherever that item/size matches.
+
+    ## Caution
+    - If you entered a wrong mapping during **unknown barcode** capture, fix it in **Barcode DB**
+      or future scans will keep using the bad defaults.
+
+- route_prefix: "/inventory/stock"
+  title: "On-Hand Stock"
+  body_md: |
+    # On-Hand Stock
+
+    **Purpose:** Expand categories to see itemized on-hand counts and totals; spot duplicates fast.
+
+    ## Bulk actions
+    - **Change category** across selected rows.
+    - **Rename** to merge duplicates (merge key is the *sanitized* name).
+    - **Change weight:** requires a **uniform WPU** across the selection.
+
+    ## Tips
+    - Use this view to find mis-categorized items (e.g., "spaghetti" under Emergency Supplies instead of Food).
+    - **Print** expands all categories for a clean hard copy of current on-hand stock.
+
+- route_prefix: "/inventory/categories"
+  title: "Categories"
+  body_md: |
+    # Categories
+
+    **Purpose:** Create categories used across entry forms, reports, and filters.
+
+    - You can **add** categories; **deleting** is disabled to avoid orphaned entries.
+    - Keep the list tight-too many categories create unwieldy dropdowns and silo data.
+    - Use clear names where possible (e.g., "Water", "Medical Supplies", "Food").
+
+- route_prefix: "/inventory/barcodes"
+  title: "Barcode Database"
+  body_md: |
+    # Barcode Database
+
+    **Purpose:** Fix or refine barcode -> item mappings so future scans auto-fill correctly.
+
+    ## Capabilities
+    - **Search & filter** by barcode/name/category; include **Show deleted**.
+    - **Soft delete / Restore:** hides a mapping without losing its history.
+    - **Reassign category**, **change WPU**, or **rename** the mapped item.
+    - **Export CSV:** downloads *exactly what you see* in the table for auditing/offline review.
+
+    ## Semantics
+    - **Alias of:** ties a barcode to another primary item entry.
+    - **Seen / Last seen:** how often and when this barcode was looked up (not quantity moved).
+
+    ## Important
+    - If you accidentally saved a wrong mapping while scanning an unknown barcode, **fix it here**.
+      Correcting inventory rows alone won't stop future scans from auto-filling the old data.
+
+- route_prefix: "/inventory/broadcast"
+  title: "Broadcast Inventory Snapshot"
+  body_md: |
+    # Broadcast Inventory Snapshot
+
+    **Purpose:** Send your site's current inventory snapshot to mapped recipients over Winlink.
+
+    ## Compose
+    - **Human / CSV / Both:** Pick the preview format. CSV is easiest for AOCT parsing and spreadsheets.
+    - **Send now:** Sends to all mapped recipients. Use sparingly.
+
+    ## Schedule
+    - Optional auto-broadcast every **15/30/60 minutes**.
+    - Recipients are pulled from **Preferences -> airport_call_mappings**.
+    - **Guidance:** Do **not** spam. In constrained RF conditions, excess automated traffic delays
+      critical flight ops. Send only as often as truly needed. Follow conops.
+
+- route_prefix: "/inventory/remote"
+  title: "Remote Airports & Snapshots"
+  body_md: |
+    # Remote Airports & Snapshots
+
+    **Purpose:** Browse latest received **snapshots** from remote airports and open details.
+
+    - A **snapshot** reflects the remote site's state **when it replied**-not a live feed.
+    - "**Generated at (UTC)**" shows when that snapshot was created.
+    - No snapshot? Compose an **AOCT Cargo Query**. Filter to needed categories to reduce traffic, if known. Blank cateogry is allowed, and will return the entire inventory stockpile snapshot.
+
+    ## Detail view
+    Opening a specific airport shows rows with **Updated/Generated (UTC)**, **Category**, **Item**, **Unit (lb)**, **Qty**, **Total (lb)**, plus a grand total.
+
+    - Judge staleness by "Generated at".
+    - If you need to discard an out-of-date/partial merge, use **Clear snapshot** and request a fresh one.

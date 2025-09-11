@@ -1,6 +1,7 @@
 # ---- compat shims for app-level globals (avoid circular imports) ----
 import sys as _sys, logging as _logging, re as _re, random as _random
 from functools import lru_cache
+from typing import List, Iterable, Optional
 
 # Safe fallbacks so static analysis and runtime don’t crash if app globals aren’t ready yet.
 SQL_TRACE = False
@@ -112,8 +113,6 @@ _hydrate_from_app()
 import random, string
 
 import uuid
-from typing import List, Iterable, Optional
-from flask_wtf.csrf import generate_csrf
 from markupsafe import escape
 import sqlite3, csv, re, os, json
 from datetime import datetime, timedelta, timezone
@@ -122,6 +121,7 @@ from urllib.request import urlopen
 from zeroconf import ServiceInfo, NonUniqueNameException
 import fcntl
 import struct
+from flask_wtf.csrf import generate_csrf
 from radio_tx import start_radio_tx
 try:
     from radio_tx import start_radio_tx
@@ -961,6 +961,14 @@ def init_db():
         # never hard-fail app init if optional module isn’t available yet
         pass
 
+    # ── Help system (ensure + seed on fresh DB) ──────────────────────────────
+    try:
+        # Always ensure help schema, migrate legacy, then seed if empty
+        ensure_help_tables()
+        seed_help_from_yaml(only_if_empty=True)
+    except Exception as e:
+        logger.warning("Help DB init skipped: %s", e)
+
 def run_migrations():
     print("🔧 running DB migrations…")
     # flights table
@@ -1142,6 +1150,13 @@ def run_migrations():
     except Exception:
         pass
 
+    # Ensure help table exists after upgrades and backfill if empty
+    try:
+        ensure_help_tables()
+        seed_help_from_yaml(only_if_empty=True)
+    except Exception as e:
+        logger.warning("Help DB migration hook skipped: %s", e)
+
     # Keep cache tidy after structural changes
     try:
         clear_airport_cache()
@@ -1244,6 +1259,134 @@ def load_airports_from_csv():
         clear_airport_cache()
     except Exception:
         pass
+
+# ── Help system tables + seeding (centralized here; single source of truth) ──
+def _project_root_dir() -> str:
+    """Return repository root assuming DB lives under a data/ sibling."""
+    data_dir = os.path.dirname(get_db_file())
+    return os.path.dirname(data_dir)
+
+def _help_seed_path() -> str:
+    return os.path.join(_project_root_dir(), "helpdocs", "help_seed.yaml")
+
+def _normalize_route_prefix(p: str) -> str:
+    p = (p or "/").strip()
+    p = re.sub(r'//+', '/', p)
+    if not p.startswith("/"):
+        p = "/" + p
+    if p != "/" and p.endswith("/"):
+        p = p[:-1]
+    return p
+
+def _migrate_legacy_help_docs_if_needed(c):
+    """
+    If an older DB has help_docs (slug/title/body_md/…)
+    and help_articles is empty, copy rows across.
+    """
+    have_docs = c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='help_docs'"
+    ).fetchone()
+    if not have_docs:
+        return
+    empty_articles = (c.execute("SELECT COUNT(*) FROM help_articles").fetchone()[0] == 0)
+    if not empty_articles:
+        return
+    rows = c.execute("""
+        SELECT slug, title, body_md, updated_at
+          FROM help_docs
+    """).fetchall()
+    for r in rows or []:
+        rp   = _normalize_route_prefix(r[0] or "/")
+        ttl  = (r[1] or "Help").strip()
+        body = r[2] or ""
+        upd  = (r[3] or datetime.utcnow().replace(tzinfo=timezone.utc).isoformat().replace("+00:00","Z"))
+        c.execute("""
+          INSERT OR IGNORE INTO help_articles
+            (route_prefix,title,body_md,is_active,seeded,version,updated_by,updated_at_utc)
+          VALUES (?,?,?,?,1,1,NULL,?)
+        """, (rp, ttl, body, 1, upd))
+
+def ensure_help_tables():
+    """
+    Create/upgrade the help_articles table used by the site-wide Help system.
+    Also migrate legacy help_docs data once, if present.
+    """
+    with sqlite3.connect(get_db_file()) as c:
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS help_articles (
+          id               INTEGER PRIMARY KEY AUTOINCREMENT,
+          route_prefix     TEXT NOT NULL UNIQUE,
+          title            TEXT NOT NULL,
+          body_md          TEXT NOT NULL,
+          is_active        INTEGER NOT NULL DEFAULT 1,
+          seeded           INTEGER NOT NULL DEFAULT 0,
+          version          INTEGER NOT NULL DEFAULT 1,
+          updated_by       TEXT,
+          updated_at_utc   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+        )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_help_prefix ON help_articles(route_prefix)")
+        # One-time legacy migration (help_docs → help_articles)
+        _migrate_legacy_help_docs_if_needed(c)
+
+def seed_help_from_yaml(only_if_empty: bool = True) -> int:
+    """
+    Load helpdocs/help_seed.yaml and insert any missing articles into help_articles.
+    Accepts either:
+      • a list of {route_prefix,title,body_md}
+      • a dict with key "docs": [{slug|path,title,md|body|content}]
+    Returns number of rows inserted.
+    """
+    path = _help_seed_path()
+    if not os.path.exists(path):
+        logger.info("Help seed not found at %s; skipping.", path)
+        return 0
+
+    with sqlite3.connect(get_db_file()) as c:
+        if only_if_empty:
+            n = c.execute("SELECT COUNT(*) FROM help_articles").fetchone()[0]
+            if n > 0:
+                return 0
+
+    try:
+        import yaml  # type: ignore
+    except Exception:
+        logger.warning("PyYAML not available; help seeding skipped.")
+        return 0
+
+    with open(path, "r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or []
+
+    # Normalize both shapes into a single list of items
+    items = []
+    if isinstance(raw, dict) and isinstance(raw.get("docs"), list):
+        for d in raw["docs"]:
+            if not isinstance(d, dict):
+                continue
+            items.append({
+                "route_prefix": d.get("route_prefix") or d.get("path") or d.get("slug"),
+                "title": d.get("title"),
+                "body_md": d.get("body_md") or d.get("md") or d.get("body") or d.get("content"),
+            })
+    elif isinstance(raw, list):
+        items = raw
+    else:
+        items = []
+
+    inserts = 0
+    nowz = datetime.utcnow().replace(tzinfo=timezone.utc).isoformat().replace("+00:00","Z")
+    with sqlite3.connect(get_db_file()) as c:
+        for it in items:
+            rp   = _normalize_route_prefix(it.get("route_prefix") or "/")
+            ttl  = (it.get("title") or "Help").strip()
+            body = it.get("body_md") or ""
+            cur = c.execute("""
+              INSERT INTO help_articles(route_prefix,title,body_md,is_active,seeded,version,updated_at_utc)
+              SELECT ?,?,?,1,1,1,?
+              WHERE NOT EXISTS (SELECT 1 FROM help_articles WHERE route_prefix=?)
+            """, (rp, ttl, body, nowz, rp))
+            inserts += cur.rowcount or 0
+    return inserts
 
 def iso8601_ceil_utc(dt: datetime | None = None) -> str:
     """

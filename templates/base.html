@@ -98,6 +98,8 @@
         <label><input type="checkbox" data-toggle-tab="ramp_boss" checked> Ramp Boss</label><br>
         <label><input type="checkbox" data-toggle-tab="queued_flights" checked> Ramp Ops</label><br>
         <label><input type="checkbox" data-toggle-tab="inventory" checked> Inventory</label><br>
+        <hr>
+        <button id="help-open" class="button button-primary">Help</button>
       </div>
     </div>
   </header>
@@ -351,5 +353,30 @@ document.addEventListener('DOMContentLoaded', loadTabPrefs);
 </script>
 
 {% block scripts %}{% endblock %}
+
+<!-- ───────── Help panel (modal/drawer) ───────── -->
+<div id="help-backdrop"></div>
+<aside id="help-panel" role="dialog" aria-modal="true" aria-labelledby="help-title">
+  <header>
+    <button id="help-close" class="button-ghost" aria-label="Close">✕</button>
+    <h2 id="help-title">Help</h2>
+    <div class="help-actions">
+      <button id="help-edit-btn"   class="button-ghost"  style="display:none;">Edit</button>
+      <button id="help-cancel-btn" class="button-ghost"  style="display:none;">Cancel</button>
+      <button id="help-save-btn"   class="button-primary" style="display:none;">Save</button>
+    </div>
+  </header>
+  <div id="help-body"></div>
+  <div id="help-edit">
+    <label style="display:block;margin-bottom:6px;">
+      Title<br>
+      <input id="help-title-input" type="text" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;">
+    </label>
+    <textarea id="help-md-input" placeholder="Write Markdown here..."></textarea>
+  </div>
+  <div style="padding:0 14px 14px; color:#666; font-size:12px;" id="help-meta"></div>
+</aside>
+<script src="{{ url_for('static', filename='js/help.js') }}"></script>
+
 </body>
 </html>
