@@ -330,14 +330,20 @@ body.preferences main.container { padding-top: 0.5rem; }
 }
 .container.preferences form {
   display: grid;
-  grid-template-columns: auto 1fr;
+  /* Keep labels from smashing inputs:
+     first column has a reasonable min and capped width so long labels wrap */
+  grid-template-columns: minmax(200px, 30ch) 1fr;
   column-gap: 1.5rem;
   row-gap: 1rem;
-  align-items: center;
+  /* top-align multi-line labels with their fields */
+  align-items: start;
 }
 .container.preferences form > label {
   grid-column: 1;
   justify-self: end;
+  text-align: right;
+  /* keep huge labels from growing past the column width */
+  max-width: 30ch;
   margin: 0;
   font-weight: bold;
 }
@@ -347,6 +353,12 @@ body.preferences main.container { padding-top: 0.5rem; }
 .container.preferences form > button[type="button"] {
   grid-column: 2;
   width: 100%;
+}
+/* Make helper notes live under the field (not in the label column) */
+.container.preferences form > small {
+  grid-column: 2;
+  margin-top: .25rem;
+  color: var(--muted);
 }
 /* Export/Import/Reset buttons row still center under controls */
 .container.preferences form + form button,

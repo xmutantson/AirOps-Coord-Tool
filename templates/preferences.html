@@ -9,35 +9,35 @@
     <!-- ── Ops / Display Prefs ─────────────────────────────── -->
     <h3>Display / Operational Prefs</h3>
 
-    <label
+    <label for="ramp_scan_adv_manifest"
       title="If Yes: on inbound Lookup Tail, parse the latest Remarks for advanced-manifest items and show the apply dialog."
     >Inbound manifest auto-scan</label>
-    <select name="ramp_scan_adv_manifest" onchange="this.form.submit()">
+    <select id="ramp_scan_adv_manifest" name="ramp_scan_adv_manifest" onchange="this.form.submit()">
       <option value="yes" {% if scan_adv_pref=='yes' %}selected{% endif %}>Yes</option>
       <option value="no"  {% if scan_adv_pref=='no'  %}selected{% endif %}>No</option>
     </select>
-    <label>Default Origin (ICAO or FAA):</label>
+    <label for="default-origin">Default Origin (ICAO or FAA):</label>
     <input
       id="default-origin"
       name="default_origin"
       value="{{ default_origin }}"
       placeholder="e.g. KSEA or SEA">
 
-    <label>Airport Code Format:</label>
-    <select name="code_format" onchange="this.form.submit()">
+    <label for="code_format">Airport Code Format:</label>
+    <select id="code_format" name="code_format" onchange="this.form.submit()">
       <option value="icao4" {% if current_code=='icao4' %}selected{% endif %}>ICAO (4-letter)</option>
       <option value="iata"  {% if current_code=='iata'  %}selected{% endif %}>IATA (3-letter)</option>
       <option value="local" {% if current_code=='local' %}selected{% endif %}>FAA/GPS/Local</option>
     </select>
 
-    <label style="margin-top:18px">Mass Unit:</label>
-    <select name="mass_unit" onchange="this.form.submit()">
+    <label style="margin-top:18px" for="mass_unit">Mass Unit:</label>
+    <select id="mass_unit" name="mass_unit" onchange="this.form.submit()">
       <option value="lbs" {% if current_mass=='lbs' %}selected{% endif %}>lbs</option>
       <option value="kg"  {% if current_mass=='kg'  %}selected{% endif %}>kg</option>
     </select>
 
-    <label style="margin-top:18px">Distance Unit:</label>
-    <select name="distance_unit" onchange="this.form.submit()">
+    <label style="margin-top:18px" for="distance_unit">Distance Unit:</label>
+    <select id="distance_unit" name="distance_unit" onchange="this.form.submit()">
       <option value="nm" {% if distance_unit=='nm' %}selected{% endif %}>nautical miles</option>
       <option value="mi" {% if distance_unit=='mi' %}selected{% endif %}>statute miles</option>
       <option value="km" {% if distance_unit=='km' %}selected{% endif %}>kilometers</option>
@@ -48,14 +48,14 @@
     <!-- ── Dashboard Prefs ────────────────────────────────── -->
     <h3>Dashboard Preferences</h3>
 
-    <label>Hide “TBD” / empty cells in tables:</label>
-    <select name="hide_tbd" onchange="document.getElementById('prefs-form').submit()">
+    <label for="hide_tbd">Hide “TBD” / empty cells in tables:</label>
+    <select id="hide_tbd" name="hide_tbd" onchange="document.getElementById('prefs-form').submit()">
       <option value="no"  {% if not hide_tbd %}selected{% endif %}>No</option>
       <option value="yes" {% if hide_tbd     %}selected{% endif %}>Yes</option>
     </select>
 
-    <label>Sort by entry sequence:</label>
-    <select name="dashboard_sort_seq" onchange="this.form.submit()">
+    <label for="dashboard_sort_seq">Sort by entry sequence:</label>
+    <select id="dashboard_sort_seq" name="dashboard_sort_seq" onchange="this.form.submit()">
       <option value="no"  {% if not sort_seq %}selected{% endif %}>Default grouping</option>
       <option value="yes" {% if sort_seq     %}selected{% endif %}>Newest first</option>
     </select>
@@ -65,7 +65,7 @@
     <!-- ── Radio-Operator Prefs ───────────────────────────── -->
     <h3>Radio Operator Prefs</h3>
 
-    <label>Your Callsign:</label>
+    <label for="cs">Your Callsign:</label>
     <input
       id="cs"
       name="operator_call"
@@ -76,14 +76,14 @@
               .addEventListener('blur', ()=>document.getElementById('prefs-form').submit());
     </script>
 
-    <label style="margin-top:18px">Include test line in outgoing Winlink?</label>
-    <select name="include_test" onchange="this.form.submit()">
+    <label style="margin-top:18px" for="include_test">Include test line in outgoing Winlink?</label>
+    <select id="include_test" name="include_test" onchange="this.form.submit()">
       <option value="yes" {% if include_test=='yes' %}selected{% endif %}>Yes</option>
       <option value="no"  {% if include_test=='no'  %}selected{% endif %}>No</option>
     </select>
 
-    <label style="margin-top:18px">Only show unsent Ramp-Boss flights?</label>
-    <select name="radio_show_unsent_only" onchange="this.form.submit()">
+    <label style="margin-top:18px" for="radio_show_unsent_only">Only show unsent Ramp-Boss flights?</label>
+    <select id="radio_show_unsent_only" name="radio_show_unsent_only" onchange="this.form.submit()">
       <option value="no"  {% if current_radio_unsent=='no'  %}selected{% endif %}>No, show all</option>
       <option value="yes" {% if current_radio_unsent=='yes' %}selected{% endif %}>Yes, only unsent</option>
     </select>
@@ -93,8 +93,8 @@
     <!-- ── Remote Airports (AOCT) ─────────────────────────── -->
     <h3>Remote Airports (AOCT)</h3>
 
-    <label>Auto-broadcast interval:</label>
-    <select name="auto_broadcast_interval_min" onchange="this.form.submit()">
+    <label for="auto_broadcast_interval_min">Auto-broadcast interval:</label>
+    <select id="auto_broadcast_interval_min" name="auto_broadcast_interval_min" onchange="this.form.submit()">
       <option value="0"
         {% if auto_broadcast_interval_min not in ['15','30','60'] %}selected{% endif %}>
         Disabled
@@ -110,8 +110,8 @@
       </option>
     </select>
 
-    <label style="margin-top:18px">Auto-reply to AOCT cargo queries?</label>
-    <select name="auto_reply_enabled" onchange="this.form.submit()">
+    <label style="margin-top:18px" for="auto_reply_enabled">Auto-reply to AOCT cargo queries?</label>
+    <select id="auto_reply_enabled" name="auto_reply_enabled" onchange="this.form.submit()">
       <option value="yes" {% if auto_reply_enabled=='yes' %}selected{% endif %}>Yes</option>
       <option value="no"  {% if auto_reply_enabled=='no'  %}selected{% endif %}>No</option>
     </select>
@@ -121,47 +121,51 @@
     <!-- ── Flight Locate & Offline Maps ─────────────────────────── -->
     <h3>Flight Locate &amp; Offline Maps</h3>
 
-    <label>ADS-B Base URL (aircraft.json):</label>
+    <label for="adsb_base_url">ADS-B Base URL (aircraft.json):</label>
     <input
+      id="adsb_base_url"
       name="adsb_base_url"
       value="{{ adsb_base_url }}"
       placeholder="http://192.168.8.x/tar1090">
 
-    <label style="margin-top:18px">ADS-B JSON stream (30154):</label>
+    <label style="margin-top:18px" for="adsb_stream_url">ADS-B JSON stream (30154):</label>
     <input
+      id="adsb_stream_url"
       name="adsb_stream_url"
       value="{{ adsb_stream_url }}"
       placeholder="tcp://ops.lan:30154">
     <small>Use <code>tcp://host:port</code> (recommended). If your setup serves JSON-lines over HTTP, use <code>http://host:port/</code>.</small>
 
-    <label style="margin-top:18px">Auto-reply to Flight Query with latest sighting?</label>
-    <select name="aoct_auto_reply_flight" onchange="this.form.submit()">
+    <label style="margin-top:18px" for="aoct_auto_reply_flight">Auto-reply to Flight Query with latest sighting?</label>
+    <select id="aoct_auto_reply_flight" name="aoct_auto_reply_flight" onchange="this.form.submit()">
       <option value="yes" {% if aoct_auto_reply_flight=='yes' %}selected{% endif %}>Yes</option>
       <option value="no"  {% if aoct_auto_reply_flight=='no'  %}selected{% endif %}>No</option>
     </select>
 
-    <label style="margin-top:18px">Enable local ADS-B poller?</label>
-    <select name="adsb_poll_enabled" onchange="this.form.submit()">
+    <label style="margin-top:18px" for="adsb_poll_enabled">Enable local ADS-B poller?</label>
+    <select id="adsb_poll_enabled" name="adsb_poll_enabled" onchange="this.form.submit()">
       <option value="no"  {% if adsb_poll_enabled!='yes' %}selected{% endif %}>No</option>
       <option value="yes" {% if adsb_poll_enabled=='yes' %}selected{% endif %}>Yes</option>
     </select>
 
-    <label>Poll interval (seconds):</label>
+    <label for="adsb_poll_interval_s">Poll interval (seconds):</label>
     <input
+      id="adsb_poll_interval_s"
       name="adsb_poll_interval_s"
       type="number" inputmode="numeric" min="1" step="1"
       value="{{ adsb_poll_interval_s }}"
       placeholder="10">
 
-    <label style="margin-top:18px">Map tiles path (directory or .mbtiles file):</label>
+    <label style="margin-top:18px" for="map_tiles_path">Map tiles path (directory or .mbtiles file):</label>
     <input
+      id="map_tiles_path"
       name="map_tiles_path"
       value="{{ map_tiles_path }}"
       placeholder="{{ map_tiles_default }}">
     <small>Leave blank to use default: <code>{{ map_tiles_default }}</code></small>
 
-    <label style="margin-top:18px">Seed low-zoom tiles on first boot?</label>
-    <select name="map_offline_seed" onchange="this.form.submit()">
+    <label style="margin-top:18px" for="map_offline_seed">Seed low-zoom tiles on first boot?</label>
+    <select id="map_offline_seed" name="map_offline_seed" onchange="this.form.submit()">
       <option value="yes" {% if map_offline_seed=='yes' %}selected{% endif %}>Yes</option>
       <option value="no"  {% if map_offline_seed=='no'  %}selected{% endif %}>No</option>
     </select>
@@ -235,35 +239,35 @@
   <h3>NetOps Feeder</h3>
   <form id="netops-form" method="POST" action="{{ url_for('preferences.preferences') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>Enable NetOps Feeder:</label>
-    <select name="netops_enabled">
+    <label for="netops_enabled">Enable NetOps Feeder:</label>
+    <select id="netops_enabled" name="netops_enabled">
       <option value="no"  {% if netops_enabled!='yes' %}selected{% endif %}>No</option>
       <option value="yes" {% if netops_enabled=='yes' %}selected{% endif %}>Yes</option>
     </select>
 
-    <label>NetOps URL:</label>
-    <input name="netops_url" value="{{ netops_url }}" placeholder="http://example.org:5250">
+    <label for="netops_url">NetOps URL:</label>
+    <input id="netops_url" name="netops_url" value="{{ netops_url }}" placeholder="http://example.org:5250">
 
-    <label>Station ID (Pelican Case):</label>
-    <input name="netops_station" value="{{ netops_station }}" placeholder="KALW" oninput="this.value=this.value.toUpperCase()">
+    <label for="netops_station">Station ID (Pelican Case):</label>
+    <input id="netops_station" name="netops_station" value="{{ netops_station }}" placeholder="KALW" oninput="this.value=this.value.toUpperCase()">
 
-    <label>Password:</label>
-    <input type="password" name="netops_password" placeholder="••••••••" autocomplete="new-password">
+    <label for="netops_password">Password:</label>
+    <input id="netops_password" type="password" name="netops_password" placeholder="••••••••" autocomplete="new-password">
     <small>Leave blank to keep existing.</small>
 
-    <label>Push Interval (seconds):</label>
-    <input name="netops_push_interval_sec"
+    <label for="netops_push_interval_sec">Push Interval (seconds):</label>
+    <input id="netops_push_interval_sec" name="netops_push_interval_sec"
            type="number" inputmode="numeric" min="1" step="1"
            value="{{ netops_push_interval_sec }}"
            placeholder="e.g. 30">
 
-    <label>Data Window (hours):</label>
-    <input name="netops_window_hours"
+    <label for="netops_window_hours">Data Window (hours):</label>
+    <input id="netops_window_hours" name="netops_window_hours"
            type="number" inputmode="numeric" min="1" step="1"
            value="{{ netops_window_hours }}"
            placeholder="e.g. 24">
 
-    <label>Origin Coordinates (lat, lon):</label>
+    <label for="origin-lat">Origin Coordinates (lat, lon):</label>
     <div style="display:flex; gap:8px; align-items:center;">
       <input id="origin-lat" name="origin_lat"
              type="number" inputmode="decimal" step="any" min="-90"  max="90"
