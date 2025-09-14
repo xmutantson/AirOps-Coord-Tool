@@ -79,8 +79,8 @@
     - **Pilot / Pax** - Optional; filled when known.
     - **Origin / Dep** - Departure airport and time.
     - **Destination / ETA / Arrived** - Planned destination and ETA; once arrived, the arrival time is shown.
-    - **Cargo Type / Lbs** - From RampBoss manifests.
-    - **Remarks** - Free text from RampBoss.
+    - **Cargo Type / Lbs** - From manifests.
+    - **Remarks** - Free text.
 
     ## Colors & priority
     - **Yellow row** -> Radio action pending (needs sending/ack flow).
@@ -111,7 +111,7 @@
     Everything, including ETA and arrival time.
 
     ## Arrival completion
-    - **Inbound to us:** RampBoss logs inbound flight  **arrival**; Radio notifies remote.
+    - **Inbound to us:** Material Handler logs inbound flight  **arrival**; Radio notifies remote.
     - **Landing elsewhere:** Marked complete when a remote Winlink message is ingested.
 
     ## Corrections after send
@@ -142,7 +142,7 @@
     - **Sort by entry sequence**: Prefer chronological event order in some tables, defaults to 'sent/not sent' with 'inflight/landed' sub-priority
     - **Your callsign**: Used where a personal callsign is needed in the UI.
     - **Include "TEST" line in outgoing Winlink**: Appends a test indicator to generrated Air Ops messages.
-    - **Only show unsent Ramp Boss flights**: Hides rows already acted on by Radio.
+    - **Only show unsent Material Handler flights**: Hides rows already acted on by Radio.
 
     **Rounding:** UIs show one decimal place when needed; raw DB values are kept at full precision.
 
@@ -151,7 +151,7 @@
     ## Site-wide (database) settings
     These apply to the whole site/airport:
     - **Default origin**: Pre-fill for outbound flight creation. This should be your current airport's code (icao 4 digit code preferred).
-    - **Inbound manifest autoscan**: Enable/disable automatic detection of structured manifests. Plugs into Advanced Cargo under Ramp Boss flows.
+    - **Inbound manifest autoscan**: Enable/disable automatic detection of structured manifests. Plugs into Advanced Cargo under Material Handler flows.
     - **Inventory auto-broadcast interval**: Off / 15 / 30 / 60 minutes. Sends mass emails containing your inventory to other mapped airports (see below).
     - **AOCT cargo query auto-reply**: Enables automatic CSV replies via PAT winlink to AOCT inventory queries.
     - **AOCT flight query auto-reply (latest sighting)**: Auto-respond with the latest ADS-B sighting info.
@@ -224,9 +224,9 @@
     - **Log incoming:** Paste full message to **Log Incoming**; verify expected state change posted/handle any triggered actions.
 
 - route_prefix: "/ramp_boss"
-  title: "RampBoss - Intake, Queuing & Manifests"
+  title: "Material Handler - Intake, Queuing & Manifests"
   body_md: |
-    # RampBoss - Intake, Queuing & Manifests
+    # Material Handler - Intake, Queuing & Manifests
 
     ## Purpose
     Create outbound flights, mark inbound arrivals, build cargo manifests (scanner or manual), and decide when to **Send Now** vs **Add to Queue**.
@@ -490,7 +490,7 @@
       in a scanner may hide the on-screen keyboard-focus the scan input before scanning. This can usually be changed in device settings.
 
     ## Guardrails
-    - Don't delete outbound entries created by Ramp Boss unless they are truly erroneous; doing so
+    - Don't delete outbound entries created by Material Handler unless they are truly erroneous; doing so
       will desync "on-hand" values from real operations.
     - If you created a **bad barcode mapping**, fix it in **Barcode DB**; otherwise future scans
       will keep auto-filling the wrong details.
