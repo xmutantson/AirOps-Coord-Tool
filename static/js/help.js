@@ -1,4 +1,5 @@
 (function(){
+  const ALLOW_EDIT = false;  // hard-disable editing for all users
   const btnOpen   = document.getElementById('help-open');
   const panel     = document.getElementById('help-panel');
   const backdrop  = document.getElementById('help-backdrop');
@@ -19,12 +20,13 @@
   function openPanel(){ backdrop.style.display='block'; panel.style.display='block'; }
   function closePanel(){ backdrop.style.display='none'; panel.style.display='none'; setEdit(false); }
   function setEdit(on){
+    if (!ALLOW_EDIT) on = false;
     editing = !!on;
-    editWrap.style.display = on ? 'block' : 'none';
-    body.style.display     = on ? 'none'  : 'block';
-    btnEdit.style.display  = (!on && current && current.editable) ? 'inline-block' : 'none';
-    btnCancel.style.display= on ? 'inline-block' : 'none';
-    btnSave.style.display  = on ? 'inline-block' : 'none';
+    editWrap.style.display  = (ALLOW_EDIT && on) ? 'block' : 'none';
+    body.style.display      = (ALLOW_EDIT && on) ? 'none'  : 'block';
+    btnEdit.style.display   = (!on && current && current.editable && ALLOW_EDIT) ? 'inline-block' : 'none';
+    btnCancel.style.display = (ALLOW_EDIT && on) ? 'inline-block' : 'none';
+    btnSave.style.display   = (ALLOW_EDIT && on) ? 'inline-block' : 'none';
   }
 
   async function fetchArticle(){
@@ -52,11 +54,12 @@
       body.innerHTML = `<pre style="white-space:pre-wrap;">${escapeHtml(current.body_md || current.raw || '')}</pre>`;
     }
     meta.textContent = (current.updated_at_utc ? `Updated: ${current.updated_at_utc}` : '');
-    btnEdit.style.display = current.editable ? 'inline-block' : 'none';
+    btnEdit.style.display = (ALLOW_EDIT && current.editable) ? 'inline-block' : 'none';
     setEdit(false);
   }
 
   function beginEdit(){
+    if (!ALLOW_EDIT) return;
     titleInp.value = current.title || '';
     // Ensure editor shows raw Markdown (alias supported by backend)
     mdInp.value    = current.body_md || current.raw || '';
@@ -64,6 +67,7 @@
   }
 
   async function saveEdit(){
+    if (!ALLOW_EDIT) return;
     const payload = {
       route_prefix: current.route_prefix || window.location.pathname,  // creating new if placeholder
       title: titleInp.value.trim() || 'Help',
@@ -117,7 +121,7 @@
   }
   if (btnClose)  btnClose.addEventListener('click', closePanel);
   if (backdrop)  backdrop.addEventListener('click', closePanel);
-  if (btnEdit)   btnEdit.addEventListener('click', beginEdit);
-  if (btnCancel) btnCancel.addEventListener('click', ()=>setEdit(false));
-  if (btnSave)   btnSave.addEventListener('click', saveEdit);
+  if (ALLOW_EDIT && btnEdit)   btnEdit.addEventListener('click', beginEdit);
+  if (ALLOW_EDIT && btnCancel) btnCancel.addEventListener('click', ()=>setEdit(false));
+  if (ALLOW_EDIT && btnSave)   btnSave.addEventListener('click', saveEdit);
 })();
