@@ -56,7 +56,7 @@
     <nav class="main-nav">
       <a href="{{ url_for('supervisor.supervisor') }}"
          data-tab="supervisor"
-         class="{% if active=='supervisor' %}active{% endif %}">Airport Ops</a>
+         class="{% if active=='supervisor' %}active{% endif %}">Supervisor</a>
       <a href="{{ url_for('core.dashboard') }}"
          data-tab="dashboard"
          class="{% if active=='dashboard' %}active{% endif %}">Dashboard</a>
@@ -65,10 +65,10 @@
          class="{% if active=='radio' %}active{% endif %}">Radio</a>
       <a href="{{ url_for('ramp.ramp_boss') }}"
          data-tab="ramp_boss"
-         class="{% if active=='ramp_boss' %}active{% endif %}">Ramp Boss</a>
+         class="{% if active=='ramp_boss' %}active{% endif %}">Mat. Handling</a>
       <a href="{{ url_for('ramp.queued_flights') }}"
          data-tab="queued_flights"
-         class="{% if active=='queued_flights' %}active{% endif %}">Ramp Ops</a>
+         class="{% if active=='queued_flights' %}active{% endif %}">Ramp Queue</a>
       <a href="{{ url_for('inventory.inventory_overview') }}"
          data-tab="inventory"
          class="{% if active=='inventory' %}active{% endif %}">Inventory</a>
@@ -93,10 +93,10 @@
       <button id="nav-hamburger" aria-label="Customize Navbar">☰</button>
       <div id="nav-dropdown">
         <div>Navbar Tabs</div>
-        <label><input type="checkbox" data-toggle-tab="supervisor" checked> Airport Ops</label><br>
+        <label><input type="checkbox" data-toggle-tab="supervisor" checked> Supervisor</label><br>
         <label><input type="checkbox" data-toggle-tab="radio" checked> Radio</label><br>
-        <label><input type="checkbox" data-toggle-tab="ramp_boss" checked> Ramp Boss</label><br>
-        <label><input type="checkbox" data-toggle-tab="queued_flights" checked> Ramp Ops</label><br>
+        <label><input type="checkbox" data-toggle-tab="ramp_boss" checked> Mat. Handling</label><br>
+        <label><input type="checkbox" data-toggle-tab="queued_flights" checked> Ramp Queue</label><br>
         <label><input type="checkbox" data-toggle-tab="inventory" checked> Inventory</label><br>
         <hr>
         <button id="help-open" class="button button-primary">Help</button>
