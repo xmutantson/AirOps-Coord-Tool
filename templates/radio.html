@@ -375,7 +375,26 @@ function normalizeHHMM(t){
       row.cargo_type,
       row.cargo_weight
     ].every(v => !v || v === 'TBD');
-    if (allBlank) rowClass = 'red-border';
+    if (allBlank) {
+      rowClass = 'red-border';
+      // If this is the first failure, open correction modal.
+      if (!window._corrPending) {
+        if (window.openCorrectionExamples) window.openCorrectionExamples();
+      } else {
+        // Second failure after a manual correction attempt — alert and clear fields.
+        try {
+          alert('Message failed to parse after manual correction. Clearing input.');
+          const sEl = document.querySelector('#incoming-form input[name="subject"]');
+          const bEl = document.querySelector('#incoming-form textarea[name="body"]');
+          if (sEl) sEl.value = '';
+          if (bEl) { bEl.value = ''; bEl.dispatchEvent(new Event('input', {bubbles:true})); }
+        } catch (_) {}
+        window._corrPending = false;
+      }
+    } else {
+      // Parsed successfully — clear any pending correction flag so the next failure re-opens the modal.
+      if (window._corrPending) window._corrPending = false;
+    }
 
     feedbackBox.innerHTML = `
       <table id="incoming-feedback">
@@ -535,5 +554,9 @@ async function refreshUnreadBadge(){
 refreshUnreadBadge();
 setInterval(refreshUnreadBadge, 30000);
 </script>
+
+{# Manual-correction modal + client script #}
+{% include 'partials/_correction_modal.html' %}
+<script src="{{ url_for('static', filename='js/radio_correction.js') }}"></script>
 
 {% endblock %}

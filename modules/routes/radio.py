@@ -257,7 +257,9 @@ def radio():
         subj_norm = _normalize_subject(subj)
 
         # --- AOCT FLIGHT REPLY (manual paste) --------------------------------
-        if subj_norm.lower() == 'aoct flight reply':
+        # Accept variations like "AOCT Flight Reply: QHD811" or with extra text after.
+        # Using a case-insensitive prefix match keeps behavior aligned with real-world emails.
+        if re.match(r'(?i)^\s*aoct\s+flight\s+reply\b', subj_norm):
             # audit row
             with sqlite3.connect(current_app.config['DB_FILE']) as c:
                 c.execute("""

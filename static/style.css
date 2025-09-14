@@ -704,6 +704,42 @@ body.cw-active .ramp-form-container > :not(#cargo-tools-panel) { display: none !
   width: 80%; max-width: 600px; position: relative;
   z-index: 1; /* keep above .modal .backdrop so it doesn't get blurred */
 }
+.modal-window { max-height: 85vh; overflow: auto; }
+/* ---- Correction modal specific tweaks ---- */
+.corr-window { max-width: 1080px; }
+.corr-columns {
+  display: grid;
+  grid-template-columns: 1fr 1.25fr;
+  gap: 0.8rem;
+}
+.corr-left .radio-content-box textarea[readonly] {
+  background: #f9f9f9;
+  color: #444;
+}
+.corr-tabs {
+  display: flex; flex-wrap: wrap; gap: .4rem; margin: .25rem 0 .5rem;
+}
+.corr-tabs .corr-tab { padding: .35rem .6rem; }
+.corr-forms .grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: .5rem .8rem;
+}
+.corr-forms label { display: block; font-size: .9rem; color: var(--muted); }
+.corr-forms input, .corr-forms select, .corr-forms textarea {
+  width: 100%;
+  margin-top: .25rem;
+  padding: .5rem;
+  border: 1px solid #ccc;
+  border-radius: var(--radius);
+}
+.corr-right .radio-content-box textarea {
+  min-height: 8rem;
+}
+@media (max-width: 900px) {
+  .corr-columns { grid-template-columns: 1fr; }
+}
+
 .modal-window .close-modal {
   position: absolute; top: .5rem; right: .5rem;
   background: none; border: none; font-size: 1.2rem; cursor: pointer;

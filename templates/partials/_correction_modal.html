@@ -1,0 +1,142 @@
+<!-- Manual Correction modal: two-pane layout (left = original; right = builder) -->
+<div id="correction-modal" class="modal" style="display:none;">
+  <div class="modal-window corr-window">
+    <button type="button" class="close-modal" id="corr-close" title="Close">×</button>
+    <h3 style="margin:0 0 .5rem;">Manual Correction</h3>
+
+    <div class="corr-columns">
+      <!-- LEFT: original message -->
+      <div class="corr-left">
+        <div class="radio-content-box">
+          <label class="muted">Original Subject</label>
+          <textarea id="corr-orig-subject" rows="2" readonly style="width:100%;"></textarea>
+        </div>
+        <div class="radio-content-box">
+          <label class="muted">Original Body</label>
+          <textarea id="corr-orig-body" rows="12" readonly style="width:100%;"></textarea>
+        </div>
+      </div>
+
+      <!-- RIGHT: examples, forms, composer -->
+      <div class="corr-right">
+        <!-- Tabs -->
+        <div id="corr-tabs" class="corr-tabs">
+          <button type="button" class="corr-tab btn" data-kind="airops_flight">AirOps Flight</button>
+          <button type="button" class="corr-tab btn" data-kind="aoct_cargo_snapshot">AOCT Cargo Snapshot</button>
+          <button type="button" class="corr-tab btn" data-kind="aoct_cargo_query">AOCT Cargo Query</button>
+          <button type="button" class="corr-tab btn" data-kind="aoct_flight_reply">AOCT Flight Reply</button>
+          <button type="button" class="corr-tab btn" data-kind="aoct_flight_query">AOCT Flight Query</button>
+        </div>
+
+        <!-- Per-type form panels (only one visible at a time; JS toggles) -->
+        <div class="corr-forms">
+
+          <!-- AirOps Flight -->
+          <fieldset class="corr-form" data-kind="airops_flight">
+            <legend>AirOps Flight Fields</legend>
+            <div class="grid">
+              <label>Tail<input type="text" id="af_tail"></label>
+              <label>From<input type="text" id="af_from"></label>
+              <label>To<input type="text" id="af_to"></label>
+              <label>Takeoff HHMM<input type="text" id="af_dep"></label>
+              <label>ETA HHMM<input type="text" id="af_eta"></label>
+              <label>Cargo Type(s)<input type="text" id="af_ct"></label>
+              <label>Cargo Weight (e.g. “240 lbs”)<input type="text" id="af_cw"></label>
+              <label>Flight Code<input type="text" id="af_code"></label>
+              <label>Remarks<textarea id="af_rem" rows="2"></textarea></label>
+            </div>
+          </fieldset>
+
+          <!-- AOCT Cargo Snapshot (reply/status) -->
+          <fieldset class="corr-form" data-kind="aoct_cargo_snapshot" style="display:none;">
+            <legend>AOCT Cargo Snapshot</legend>
+            <div class="grid">
+              <label>Subject
+                <select id="acs_subject">
+                  <option value="AOCT cargo reply">AOCT cargo reply</option>
+                  <option value="AOCT cargo status">AOCT cargo status</option>
+                </select>
+              </label>
+              <label>Airport<input type="text" id="acs_airport" placeholder="KXXX"></label>
+              <label>Generated At (ISO8601 Z)<input type="text" id="acs_ts" placeholder="2025-09-02T05:56:43Z"></label>
+              <label>Units
+                <select id="acs_units">
+                  <option value="pounds">pounds</option>
+                </select>
+              </label>
+              <label>Items + CSV (paste list and optional CSV block below)
+                <textarea id="acs_payload" rows="10" placeholder="Category&#10;  * name - 1.0 lb x 2 = 2.0 lb&#10;&#10;CSV&#10;airport,category,..."></textarea>
+              </label>
+            </div>
+          </fieldset>
+
+          <!-- AOCT Cargo Query -->
+          <fieldset class="corr-form" data-kind="aoct_cargo_query" style="display:none;">
+            <legend>AOCT Cargo Query</legend>
+            <div class="grid">
+              <label>Airport<input type="text" id="acq_airport" placeholder="KXXX"></label>
+              <label>Categories (comma-sep)<input type="text" id="acq_categories" placeholder="FOOD, WATER"></label>
+              <label>CSV
+                <select id="acq_csv">
+                  <option value="YES">YES</option>
+                  <option value="NO">NO</option>
+                </select>
+              </label>
+            </div>
+          </fieldset>
+
+          <!-- AOCT Flight Reply -->
+          <fieldset class="corr-form" data-kind="aoct_flight_reply" style="display:none;">
+            <legend>AOCT Flight Reply</legend>
+            <div class="grid">
+              <label>Tail<input type="text" id="afr_tail" placeholder="QHD811"></label>
+              <label>Lat, Lon<input type="text" id="afr_pos" placeholder="46.3192,-119.8526"></label>
+              <label>Track (deg)<input type="text" id="afr_track"></label>
+              <label>GS (kt)<input type="text" id="afr_gs"></label>
+              <label>Alt (ft)<input type="text" id="afr_alt"></label>
+              <label>Sample TS (Z)<input type="text" id="afr_ts" placeholder="2025-09-05T19:47:54Z"></label>
+              <label>Receiver Airport<input type="text" id="afr_airport" placeholder="KALW"></label>
+              <label>Receiver Call<input type="text" id="afr_call" placeholder="KG7VSN"></label>
+              <label>Source<input type="text" id="afr_source" placeholder="TAR1090"></label>
+            </div>
+          </fieldset>
+
+          <!-- AOCT Flight Query -->
+          <fieldset class="corr-form" data-kind="aoct_flight_query" style="display:none;">
+            <legend>AOCT Flight Query</legend>
+            <div class="grid">
+              <label>Tail<input type="text" id="afq_tail" placeholder="N54321"></label>
+              <label>From Airport<input type="text" id="afq_from" placeholder="KXXX"></label>
+              <label>CSV
+                <select id="afq_csv">
+                  <option value="NO">NO</option>
+                  <option value="YES">YES</option>
+                </select>
+              </label>
+            </div>
+          </fieldset>
+        </div>
+
+        <!-- Composer preview (what will be re-parsed) -->
+        <div class="radio-content-box">
+          <label class="muted">Composed Subject</label>
+          <textarea id="corr-subject" rows="2" style="width:100%;"></textarea>
+        </div>
+        <button type="button" id="corr-copy-subject">Copy Subject</button>
+        <span id="corr-fb-subj" class="copy-feedback"></span>
+
+        <div class="radio-content-box" style="margin-top:.75rem;">
+          <label class="muted">Composed Body</label>
+          <textarea id="corr-body" rows="10" style="width:100%;"></textarea>
+        </div>
+        <button type="button" id="corr-copy-body">Copy Body</button>
+        <span id="corr-fb-body" class="copy-feedback"></span>
+
+        <div class="actions" style="margin-top:1rem; display:flex; gap:.5rem; justify-content:flex-end;">
+          <button type="button" id="corr-insert" class="btn btn-secondary">Insert into Form</button>
+          <button type="button" id="corr-reparse" class="btn btn-primary">Build &amp; Re-parse</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
