@@ -4,6 +4,7 @@ set -e
 SECRET_PATH=/run/secrets/flask_secret
 DW_CFG=/etc/direwolf.conf
 DW_LOG=/var/log/direwolf.log
+DATA_DIR=${AOCT_DATA_DIR:-data}
 
 # 1) generate flask_secret if missing
 if [ ! -f "$SECRET_PATH" ]; then
@@ -12,6 +13,29 @@ if [ ! -f "$SECRET_PATH" ]; then
   openssl rand -hex 32 > "$SECRET_PATH"
   chmod 600 "$SECRET_PATH"
 fi
+
+# 1.5) Ensure videos directories exist for all help topics
+echo "Ensuring help video directories…"
+mkdir -p "$DATA_DIR/videos"
+python3 - <<'PY' || true
+import os, re
+SEED='helpdocs/help_seed.yaml'
+DATA=os.environ.get('AOCT_DATA_DIR','data')
+root=os.path.join(DATA,'videos'); os.makedirs(root, exist_ok=True)
+try:
+    y=open(SEED,'r',encoding='utf-8').read()
+except Exception:
+    print("WARN: cannot read", SEED); raise SystemExit(0)
+routes=re.findall(r'^\s*-\s*route_prefix:\s*"(.*?)"', y, flags=re.M)
+def slug(p):
+    import re
+    s=p.strip().strip('/').lower()
+    s=re.sub(r'[^a-z0-9_-]+','-',s)
+    return s or 'root'
+slugs=sorted({slug(r) for r in routes})
+for s in slugs: os.makedirs(os.path.join(root,s), exist_ok=True)
+print("Help video dirs ready for:", ", ".join(slugs))
+PY
 
 # 2) auto‐detect the “real” LAN IP if not overridden
 if [ -z "$HOST_LAN_IP" ] && [ -z "$HOST_LAN_IFACE" ]; then

@@ -1,7 +1,8 @@
-import os, json, time
+import os, json, time, re, mimetypes
 from datetime import datetime, timezone
 from urllib.parse import unquote
 from flask import Blueprint, request, jsonify, session
+from flask import send_from_directory, abort
 from markupsafe import escape
 
 import sqlite3 as _sqlite
@@ -294,3 +295,51 @@ def api_put_article():
 @bp.post("/api/article")
 def api_post_article():
     return api_put_article()
+
+# ─────────────────────────────────────────────────────────────
+# Video attachments (read-only, per help topic)
+
+ALLOWED_VIDEO_EXTS = {'.mp4', '.m4v', '.mov', '.webm', '.avi', '.mkv'}
+
+def _data_root():
+    # same directory as the DB file
+    from modules.utils.common import get_db_file
+    return os.path.dirname(get_db_file())
+
+def _videos_root():
+    return os.path.join(_data_root(), "videos")
+
+def _slugify_topic(path_or_slug: str) -> str:
+    slug = (path_or_slug or "").lower().strip().strip("/")
+    slug = re.sub(r"[^a-z0-9_-]+", "-", slug)
+    return slug or "root"
+
+def _find_single_video(topic_dir: str) -> str | None:
+    if not os.path.isdir(topic_dir):
+        return None
+    files = []
+    for name in os.listdir(topic_dir):
+        if name.startswith("."):
+            continue
+        full = os.path.join(topic_dir, name)
+        if os.path.islink(full) or not os.path.isfile(full):
+            continue
+        ext = os.path.splitext(name)[1].lower()
+        if ext in ALLOWED_VIDEO_EXTS:
+            files.append(name)
+    if len(files) == 1:
+        return files[0]
+    return None
+
+@bp.get("/video/<slug>")
+def help_video(slug):
+    # Serve the single allowed video for this help topic (if present)
+    slug = _slugify_topic(slug)
+    topic_dir = os.path.join(_videos_root(), slug)
+    fname = _find_single_video(topic_dir)
+    if not fname:
+        abort(404)
+    mime = mimetypes.guess_type(fname)[0] or "application/octet-stream"
+    resp = send_from_directory(topic_dir, fname, mimetype=mime, as_attachment=False, conditional=True)
+    resp.headers["X-Video-Filename"] = fname
+    return resp

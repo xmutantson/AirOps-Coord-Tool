@@ -1,4 +1,5 @@
 (function(){
+  const VIDEO_PROBE_TIMEOUT_MS = 3000;
   const ALLOW_EDIT = false;  // hard-disable editing for all users
   const btnOpen   = document.getElementById('help-open');
   const panel     = document.getElementById('help-panel');
@@ -16,6 +17,45 @@
 
   let current = null; // {route_prefix,title,body_md,version,updated_at_utc,editable,not_found?}
   let editing = false;
+
+  function _slugifyRoute(p){
+    return (p||'').toLowerCase()
+      .replace(/^\/+/, '').replace(/\/+$/, '')
+      .replace(/[^a-z0-9_-]/g, '-') || 'root';
+  }
+
+  async function injectVideoLink(topicPath){
+    // Ensure a single placeholder exists under the title
+    let holder = document.getElementById('help-video-holder');
+    if (!holder){
+      holder = document.createElement('div');
+      holder.id = 'help-video-holder';
+      holder.className = 'help-video-link';
+      holder.style.margin = '8px 14px';
+      holder.textContent = 'Training video not found in persistent data directory.';
+      titleEl.insertAdjacentElement('afterend', holder);
+    }else{
+      holder.textContent = 'Training video not found in persistent data directory.';
+    }
+
+    // Probe for a video; on success, replace with a link
+    try{
+      const slug = _slugifyRoute(topicPath);
+      const ctrl = new AbortController();
+      const tid  = setTimeout(()=>ctrl.abort(), VIDEO_PROBE_TIMEOUT_MS);
+      const r    = await fetch(`/help/video/${encodeURIComponent(slug)}`, { method:'HEAD', cache:'no-store', signal: ctrl.signal });
+      clearTimeout(tid);
+      if (!r.ok) return;
+      const fname = r.headers.get('X-Video-Filename') || 'training-video';
+      const a = document.createElement('a');
+      a.href = `/help/video/${encodeURIComponent(slug)}`;
+      a.textContent = `Download video: ${fname}`;
+      a.setAttribute('rel','noopener');
+      holder.replaceChildren(a);
+    }catch(_e){
+      // leave the "not found" message
+    }
+  }
 
   function openPanel(){ backdrop.style.display='block'; panel.style.display='block'; }
   function closePanel(){ backdrop.style.display='none'; panel.style.display='none'; setEdit(false); }
@@ -56,6 +96,8 @@
     meta.textContent = (current.updated_at_utc ? `Updated: ${current.updated_at_utc}` : '');
     btnEdit.style.display = (ALLOW_EDIT && current.editable) ? 'inline-block' : 'none';
     setEdit(false);
+    // Always show the placeholder and probe for a topic video
+    injectVideoLink(current.route_prefix || window.location.pathname);
   }
 
   function beginEdit(){
