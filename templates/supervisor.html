@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block title %}Supervisor – Aircraft Ops{% endblock %}
 {% block content %}
 <div class="supervisor-dashboard" style="margin-top:1rem; height: calc(100vh - 6rem);">
   <div id="supervisor-counts" class="supervisor-panel">
@@ -16,50 +17,7 @@
       </button>
     </div>
     <!-- Recent locate requests (quick access) -->
-    <div class="locates-card" style="background:#fff;border:1px solid #ddd;border-radius:.5rem;padding:.5rem .75rem; margin-bottom:.5rem;">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
-        <strong>Recent locate requests (showing latest 3)</strong>
-        <a href="/locates" style="font-size:.9rem;">View all</a>
-      </div>
-      <table style="width:100%;border-collapse:collapse;margin-top:.4rem;">
-        <thead>
-          <tr>
-            <th style="text-align:left;font-size:.85rem;border-bottom:1px solid #eee;padding:6px 6px;">Tail</th>
-            <th style="text-align:left;font-size:.85rem;border-bottom:1px solid #eee;padding:6px 6px;">Requested</th>
-            <th style="text-align:left;font-size:.85rem;border-bottom:1px solid #eee;padding:6px 6px;">Status</th>
-            <th style="text-align:left;font-size:.85rem;border-bottom:1px solid #eee;padding:6px 6px;">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for r in (recent_locates or []) %}
-          <tr data-locate-id="{{ r.id }}">
-            <td style="padding:6px 6px;"><strong>{{ (r.tail or '')|upper }}</strong></td>
-            <td style="padding:6px 6px;">{{ r.requested_at_utc or '—' }}</td>
-            <td style="padding:6px 6px;">
-              {% if r.latest_sample_ts_utc %}
-                <span style="display:inline-block;padding:2px 6px;border-radius:8px;font-size:12px;border:1px solid #cfead9;background:#eaf8ef;">responded</span>
-                <span class="muted" style="font-size:12px;">{{ r.latest_sample_ts_utc }}</span>
-              {% else %}
-                <span style="display:inline-block;padding:2px 6px;border-radius:8px;font-size:12px;border:1px solid #ddd;">pending</span>
-              {% endif %}
-            </td>
-            <td style="padding:6px 6px; display:flex; gap:.5rem; align-items:center;">
-              <a href="/locates?tail={{ (r.tail or '')|upper }}">Open map</a>
-              <button
-                class="js-delete-locate"
-                data-delete-url="{{ url_for('supervisor.locates_delete', locate_id=r.id) }}"
-                style="padding:.2rem .45rem;border:1px solid #c33;background:#fee;color:#a00;border-radius:.35rem;cursor:pointer;">
-                🗑 Delete
-              </button>
-            </td>
-          </tr>
-          {% endfor %}
-          {% if not (recent_locates or []) %}
-          <tr><td colspan="4" class="muted" style="padding:6px 6px;">No recent requests.</td></tr>
-          {% endif %}
-        </tbody>
-      </table>
-    </div>
+    <div id="supervisor-locates-card"><!-- loads via AJAX --></div>
     <div id="supervisor-counts-body"><!-- counts load here --></div>
   </div>
   <div id="supervisor-map" class="supervisor-panel">
@@ -81,22 +39,67 @@
 
   <!-- Locate Flight Modal -->
   <div id="locate-modal" class="modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:5000;">
-    <div class="modal-card" style="max-width:440px; margin:10vh auto; background:#fff; border-radius:.5rem; box-shadow:0 12px 40px rgba(0,0,0,.2); overflow:hidden;">
+    <div class="modal-card" style="max-width:680px; margin:6vh auto; background:#fff; border-radius:.5rem; box-shadow:0 12px 40px rgba(0,0,0,.2); overflow:hidden;">
       <div style="padding:.75rem 1rem; border-bottom:1px solid #eee; font-weight:600;">Initiate Locate</div>
       <form id="locate-form" style="padding:1rem;">
-        <label for="locate-tail" style="display:block; font-size:.9rem; color:#333; margin-bottom:.35rem;">Tail number (e.g., N428K7)</label>
-        <input id="locate-tail" name="tail" type="text" placeholder="N123AB" autocomplete="off"
-               style="width:100%; padding:.5rem .6rem; border:1px solid #ccc; border-radius:.35rem; font-size:1rem; letter-spacing:.5px; text-transform:uppercase;" />
-        <div id="locate-hint" class="muted" style="margin-top:.5rem; font-size:.85rem;">
-          Sends an <em>AOCT flight query</em> to all mapped Winlink callsigns.
-          <div style="margin-top:.35rem; padding:.4rem .5rem; background:#fff7e6; border:1px solid #f0c36d; color:#7a4b00; border-radius:.35rem; font-size:.85rem;">
-            <strong>Heads-up:</strong> This will queue a <em>mass email</em> to all mapped callsigns.
+        <!-- Step 1: collect tail -->
+        <div id="locate-step1">
+          <label for="locate-tail" style="display:block; font-size:.9rem; color:#333; margin-bottom:.35rem;">Tail number (e.g., N428K7)</label>
+          <input id="locate-tail" name="tail" type="text" placeholder="N123AB" autocomplete="off"
+                 style="width:100%; padding:.5rem .6rem; border:1px solid #ccc; border-radius:.35rem; font-size:1rem; letter-spacing:.5px; text-transform:uppercase;" />
+          <div id="locate-hint" class="muted" style="margin-top:.5rem; font-size:.85rem;">
+            Builds an <em>AOCT flight query</em> you can copy/paste if offline,
+            or send via PAT Winlink now if online.
+          </div>
+          <div style="display:flex; gap:.5rem; justify-content:flex-end; margin-top:1rem;">
+            <button type="button" id="locate-cancel" class="button" style="padding:.4rem .7rem; border:1px solid #ccc; background:#fafafa; border-radius:.35rem; cursor:pointer;">Cancel</button>
+            <button type="submit" id="locate-preview" class="button" style="padding:.4rem .7rem; border:1px solid #2b6; background:#25d366; color:#073; border-radius:.35rem; cursor:pointer;">Continue</button>
           </div>
         </div>
-        <div id="locate-result" style="display:none; margin-top:.75rem; font-size:.9rem;"></div>
-        <div style="display:flex; gap:.5rem; justify-content:flex-end; margin-top:1rem;">
-          <button type="button" id="locate-cancel" class="button" style="padding:.4rem .7rem; border:1px solid #ccc; background:#fafafa; border-radius:.35rem; cursor:pointer;">Cancel</button>
-          <button type="submit" id="locate-send" class="button" style="padding:.4rem .7rem; border:1px solid #2b6; background:#25d366; color:#073; border-radius:.35rem; cursor:pointer;">Send</button>
+
+        <!-- Step 2: offline-friendly confirmation screen -->
+        <div id="locate-step2" style="display:none;">
+          <div class="muted" style="font-size:.9rem; margin-bottom:.5rem;">
+            <strong>Confirmation:</strong> Copy the subject/body below to send manually if the internet is down.
+            When you’re back online, you can also send via PAT Winlink from here.
+          </div>
+          <div style="display:grid; grid-template-columns: 130px 1fr; gap:.5rem 1rem; align-items:center;">
+            <label style="font-weight:600;">Tail</label>
+            <div id="locate-confirm-tail" style="font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;"></div>
+
+            <label style="font-weight:600;">Subject</label>
+            <div style="display:flex; gap:.5rem; align-items:center;">
+              <input id="locate-confirm-subject" readonly
+                     style="flex:1; padding:.5rem .6rem; border:1px solid #ccc; border-radius:.35rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;">
+              <button type="button" id="copy-subject" class="button"
+                      style="padding:.35rem .55rem; border:1px solid #ccc; background:#fafafa; border-radius:.35rem; cursor:pointer;">Copy subject</button>
+              <span id="copy-subject-fb" class="copy-feedback">✓ Copied</span>
+            </div>
+
+            <label style="font-weight:600; align-self:start;">Body</label>
+            <div>
+              <textarea id="locate-confirm-body" readonly
+                        style="width:100%; min-height:14rem; padding:.6rem; border:1px solid #ccc; border-radius:.35rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; white-space:pre;"></textarea>
+              <div style="display:flex; gap:.5rem; justify-content:flex-end; margin-top:.5rem;">
+                <button type="button" id="copy-body" class="button"
+                        style="padding:.35rem .55rem; border:1px solid #ccc; background:#fafafa; border-radius:.35rem; cursor:pointer;">Copy body</button>
+                <span id="copy-body-fb" class="copy-feedback">✓ Copied</span>
+              </div>
+            </div>
+          </div>
+
+          <details style="margin-top:.5rem;">
+            <summary class="muted">Recipients info</summary>
+            <div id="locate-recipient-summary" class="muted" style="margin-top:.25rem;"></div>
+            <div id="locate-recipients" class="muted" style="margin-top:.25rem; max-height:8rem; overflow:auto; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;"></div>
+          </details>
+
+          <div id="locate-result" style="display:none; margin-top:.75rem; font-size:.9rem;"></div>
+          <div style="display:flex; gap:.5rem; justify-content:flex-end; margin-top:1rem;">
+            <button type="button" id="locate-back" class="button" style="padding:.4rem .7rem; border:1px solid #ccc; background:#fafafa; border-radius:.35rem; cursor:pointer;">Back</button>
+            <button type="button" id="locate-send-online" class="button" style="padding:.4rem .7rem; border:1px solid #2b6; background:#25d366; color:#073; border-radius:.35rem; cursor:pointer;">Send via PAT now</button>
+            <button type="button" id="locate-close" class="button" style="padding:.4rem .7rem; border:1px solid #ccc; background:#fafafa; border-radius:.35rem; cursor:pointer;">Close</button>
+          </div>
         </div>
       </form>
     </div>
@@ -119,20 +122,40 @@
   loadSupervisorCounts();
   loadSupervisorRecent();
   loadInventoryOverview();
+  async function loadSupervisorLocates(){
+    const resp = await fetch("{{ url_for('supervisor.supervisor_recent_locates_partial') }}");
+    document.getElementById("supervisor-locates-card").innerHTML = await resp.text();
+  }
+  loadSupervisorLocates();
   setInterval(loadSupervisorCounts, 30000);
   setInterval(loadSupervisorRecent, 30000);
   setInterval(loadInventoryOverview, 60000);
+  setInterval(loadSupervisorLocates, 30000);
 
   // ───── Locate Flight modal wiring ────────────────────────────────────────
   (function(){
-    const modal  = document.getElementById('locate-modal');
-    const openBtn= document.getElementById('btn-locate-flight');
-    const cancel = document.getElementById('locate-cancel');
-    const form   = document.getElementById('locate-form');
-    const input  = document.getElementById('locate-tail');
-    const send   = document.getElementById('locate-send');
-    const result = document.getElementById('locate-result');
-    const hint   = document.getElementById('locate-hint');
+    const modal    = document.getElementById('locate-modal');
+    const openBtn  = document.getElementById('btn-locate-flight');
+    const cancel   = document.getElementById('locate-cancel');
+    const form     = document.getElementById('locate-form');
+    const input    = document.getElementById('locate-tail');
+    const result   = document.getElementById('locate-result');
+    const hint     = document.getElementById('locate-hint');
+
+    // Step containers
+    const step1    = document.getElementById('locate-step1');
+    const step2    = document.getElementById('locate-step2');
+    // Step 2 fields & controls
+    const confTail   = document.getElementById('locate-confirm-tail');
+    const confSubj   = document.getElementById('locate-confirm-subject');
+    const confBody   = document.getElementById('locate-confirm-body');
+    const copySubj   = document.getElementById('copy-subject');
+    const copyBody   = document.getElementById('copy-body');
+    const backBtn    = document.getElementById('locate-back');
+    const closeBtn   = document.getElementById('locate-close');
+    const sendOnline = document.getElementById('locate-send-online');
+    const rcptSummary= document.getElementById('locate-recipient-summary');
+    const rcptList   = document.getElementById('locate-recipients');
 
     function showModal(){
       result.style.display = 'none';
@@ -140,35 +163,110 @@
       input.value = '';
       modal.style.display = 'block';
       setTimeout(()=>input.focus(), 50);
+      // Reset steps
+      step1.style.display = 'block';
+      step2.style.display = 'none';
     }
     function hideModal(){ modal.style.display = 'none'; }
     openBtn?.addEventListener('click', showModal);
     cancel?.addEventListener('click', hideModal);
     modal?.addEventListener('click', (e)=>{ if(e.target === modal) hideModal(); });
 
+    // Step 1 → Step 2 (build preview; no network send required)
     form?.addEventListener('submit', async (e)=>{
       e.preventDefault();
-      // Block if 3 are visible already (client-side guard; server also enforces)
-      const visCount = document.querySelectorAll('.locates-card tbody tr[data-locate-id]').length;
-      if (visCount >= 3) {
-        alert('You already have 3 locate requests visible. Delete one before sending another.');
-        return;
-      }
       const tail = (input.value || '').trim().toUpperCase();
       if(!tail){
         input.focus();
         return;
       }
-      // Required confirmation per spec
-      const ok = window.confirm("This will queue a mass email to all mapped callsigns. Proceed?");
-      if(!ok){
+      hint.textContent = 'Preparing preview…';
+      try{
+        const resp = await fetch("{{ url_for('supervisor.locates_preview') }}", {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+            'X-Requested-With': 'XMLHttpRequest',
+            'X-CSRFToken': '{{ csrf_token() }}'
+          },
+          body: new URLSearchParams({ tail })
+        });
+        const data = await resp.json().catch(()=>({ok:false, message:'Unexpected response'}));
+        if(!resp.ok || !data.ok){
+          window.showToast?.(data.message || 'Failed to build preview','error',3000);
+          return;
+        }
+        // Fill confirmation fields
+        confTail.textContent = tail;
+        confSubj.value = data.subject || '';
+        confBody.value = data.body || '';
+        // recipients
+        const mapped = Number(data.mapped_count || 0);
+        const cc     = Number(data.cc_count || 0);
+        const total  = Number(data.recipient_count || data.queued || (data.recipients?.length || (mapped + cc)));
+        rcptSummary.textContent = `Mapped: ${mapped} · CC: ${cc} · Total: ${total}`;
+        rcptList.textContent = (data.recipients || []).join(', ');
+        // Refresh the Recent locate requests card so the new row appears
+        try { await loadSupervisorLocates(); } catch(_){}
+        // Switch to step 2
+        step1.style.display = 'none';
+        step2.style.display = 'block';
+      } catch(err){
+        window.showToast?.('Error preparing preview','error',3000);
+      } finally {
+        hint.textContent = 'Builds an AOCT flight query you can copy/paste if offline, or send via PAT Winlink now if online.';
+      }
+    });
+
+    // Copy helpers
+    function flashButton(btn, label='Copied'){
+      const orig = btn.textContent;
+      btn.textContent = `✔ ${label}`;
+      setTimeout(()=>{ btn.textContent = orig; }, 900);
+    }
+    copySubj?.addEventListener('click', async ()=>{
+      try {
+        await navigator.clipboard.writeText(confSubj.value || '');
+        flashButton(copySubj, 'Copied');
+        const fb = document.getElementById('copy-subject-fb');
+        if (fb) { fb.classList.add('visible'); setTimeout(()=>fb.classList.remove('visible'), 1000); }
+        window.showToast?.('Subject copied','success',900);
+      } catch(e){}
+    });
+    copyBody?.addEventListener('click', async ()=>{
+      try {
+        await navigator.clipboard.writeText(confBody.value || '');
+        flashButton(copyBody, 'Copied');
+        const fb = document.getElementById('copy-body-fb');
+        if (fb) { fb.classList.add('visible'); setTimeout(()=>fb.classList.remove('visible'), 1000); }
+        window.showToast?.('Body copied','success',900);
+      } catch(e){}
+    });
+
+    // Back to step 1
+    backBtn?.addEventListener('click', ()=>{
+      step2.style.display = 'none';
+      step1.style.display = 'block';
+      setTimeout(()=>input.focus(), 50);
+    });
+    // Close modal from step 2
+    closeBtn?.addEventListener('click', hideModal);
+
+    // Send via Winlink now (online path)
+    sendOnline?.addEventListener('click', async ()=>{
+      const tail = (input.value || '').trim().toUpperCase();
+      if(!tail){ return; }
+      // Client-side guard: at most 3 visible
+      const visCount = document.querySelectorAll('.locates-card tbody tr[data-locate-id]').length;
+      if (visCount >= 3) {
         result.style.display = 'block';
         result.style.color = '#a11';
-        result.textContent = 'Canceled.';
+        result.textContent = 'You already have 3 locate requests visible. Delete one before sending another.';
         return;
       }
-      send.disabled = true;
-      hint.textContent = 'Sending…';
+      result.style.display = 'block';
+      result.style.color = '#333';
+      result.textContent = 'Sending…';
       try{
         const resp = await fetch("{{ url_for('supervisor.locates_start') }}", {
           method: 'POST',
@@ -179,20 +277,16 @@
           },
           body: new URLSearchParams({ tail })
         });
-        // Special-case locate-limit (server-side guard)
         if (resp.status === 409) {
-          result.style.display = 'block';
+          const j = await resp.json().catch(()=>({}));
           result.style.color = '#a11';
-          result.textContent = 'You already have 3 locate requests visible. Delete one before sending another.';
+          result.textContent = j.message || 'Limit reached (max 3).';
           return;
         }
-        const data = await resp.json().catch(()=>({ok:false, message:'Unexpected response'}));
-        result.style.display = 'block';
+        const data = await resp.json().catch(()=>({ok:false}));
         if(data.ok){
           result.style.color = '#075e36';
           const mapUrl = "{{ url_for('supervisor.locates_index') }}?tail=" + encodeURIComponent(tail);
-          // Count may be named differently depending on backend version:
-          // prefer recipient_count, then queued, then mapped_count, then recipients.length.
           const count = (
             (typeof data.recipient_count === 'number' ? data.recipient_count : null) ??
             (typeof data.queued === 'number'          ? data.queued          : null) ??
@@ -206,28 +300,24 @@
                <a href="/locates">See all requests</a> ·
                <a href="${mapUrl}">Open map for ${tail}</a>
              </div>`;
-          // Do NOT redirect; let the operator choose.
-          return;
+          // Refresh counts and locates card so the UI reflects the send
+          try { await loadSupervisorCounts(); } catch(e){}
+          try { await loadSupervisorLocates(); } catch(e){}
         } else {
           result.style.color = '#a11';
           result.textContent = data.message || 'Failed to send.';
         }
       } catch(err){
-        result.style.display = 'block';
         result.style.color = '#a11';
         result.textContent = 'Network error while sending.';
-      } finally {
-        hint.textContent = 'Sends an AOCT flight query to all mapped Winlink callsigns.';
-        send.disabled = false;
       }
     });
   })();
 
   // ───── Delete locate handlers (Supervisor list) ──────────────────────────
   (function(){
-    const table = document.querySelector('.locates-card tbody');
-    if (!table) return;
-    table.addEventListener('click', async (e) => {
+    // Delegate so clicks still work after the card refreshes via AJAX
+    document.addEventListener('click', async (e) => {
       const btn = e.target.closest('.js-delete-locate');
       if (!btn) return;
       e.preventDefault();
@@ -243,8 +333,8 @@
         });
         const j = await resp.json().catch(()=>({ok:false}));
         if (resp.ok && j.ok) {
-          const row = btn.closest('tr[data-locate-id]');
-          if (row) row.remove();
+          // Refresh the card so indexes and status stay accurate
+          try { await loadSupervisorLocates(); } catch(e){}
           if (window.showToast) window.showToast('Locate deleted.', 'info');
         } else {
           alert(j.message || 'Failed to delete locate.');

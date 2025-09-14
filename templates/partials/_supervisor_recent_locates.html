@@ -1,0 +1,44 @@
+<div class="locates-card" style="background:#fff;border:1px solid #ddd;border-radius:.5rem;padding:.5rem .75rem; margin-bottom:.5rem;">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+    <strong>Recent locate requests (showing latest 3)</strong>
+    <a href="/locates" style="font-size:.9rem;">View all</a>
+  </div>
+  <table style="width:100%;border-collapse:collapse;margin-top:.4rem;">
+    <thead>
+      <tr>
+        <th style="text-align:left;font-size:.85rem;border-bottom:1px solid #eee;padding:6px 6px;">Tail</th>
+        <th style="text-align:left;font-size:.85rem;border-bottom:1px solid #eee;padding:6px 6px;">Requested</th>
+        <th style="text-align:left;font-size:.85rem;border-bottom:1px solid #eee;padding:6px 6px;">Status</th>
+        <th style="text-align:left;font-size:.85rem;border-bottom:1px solid #eee;padding:6px 6px;">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in (recent_locates or []) %}
+      <tr data-locate-id="{{ r.id }}">
+        <td style="padding:6px 6px;"><strong>{{ (r.tail or '')|upper }}</strong></td>
+        <td style="padding:6px 6px;">{{ r.requested_at_utc or '—' }}</td>
+        <td style="padding:6px 6px;">
+          {% if r.latest_sample_ts_utc %}
+            <span style="display:inline-block;padding:2px 6px;border-radius:8px;font-size:12px;border:1px solid #cfead9;background:#eaf8ef;">responded</span>
+            <span class="muted" style="font-size:12px;">{{ r.latest_sample_ts_utc }}</span>
+          {% else %}
+            <span style="display:inline-block;padding:2px 6px;border-radius:8px;font-size:12px;border:1px solid #ddd;">pending</span>
+          {% endif %}
+        </td>
+        <td style="padding:6px 6px; display:flex; gap:.5rem; align-items:center;">
+          <a href="/locates?tail={{ (r.tail or '')|upper }}">Open map</a>
+          <button
+            class="js-delete-locate"
+            data-delete-url="{{ url_for('supervisor.locates_delete', locate_id=r.id) }}"
+            style="padding:.2rem .45rem;border:1px solid #c33;background:#fee;color:#a00;border-radius:.35rem;cursor:pointer;">
+            🗑 Delete
+          </button>
+        </td>
+      </tr>
+      {% endfor %}
+      {% if not (recent_locates or []) %}
+      <tr><td colspan="4" class="muted" style="padding:6px 6px;">No recent requests.</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>

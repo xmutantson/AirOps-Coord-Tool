@@ -29,6 +29,18 @@ def supervisor():
     """)
     return render_template('supervisor.html', active='supervisor', recent_locates=recent_locates)
 
+@bp.route('/_supervisor_recent_locates')
+def supervisor_recent_locates_partial():
+    """AJAX partial: latest 3 locate requests with live status."""
+    recent_locates = dict_rows("""
+        SELECT id, tail, requested_at_utc, requested_by,
+               latest_sample_ts_utc, latest_from_airport, latest_from_call
+          FROM flight_locates
+         ORDER BY id DESC
+         LIMIT 3
+    """)
+    return render_template('partials/_supervisor_recent_locates.html', recent_locates=recent_locates)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Flight Locate (fan-out Flight Query)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -72,6 +84,76 @@ def _cc_calls() -> set[str]:
     mycall = (get_preference('winlink_callsign_1') or '').strip().upper()
     cc_set.discard(mycall)
     return cc_set
+
+@bp.post('/locates/preview', endpoint='locates_preview')
+def locates_preview():
+    """
+    Build (but do not send yet) the AOCT Flight Query for offline/manual use,
+    AND create the locate record so it appears in “Recent locate requests”.
+    Returns JSON: { ok, locate_id, requested_at_utc, subject, body, recipients[], mapped_count, cc_count, recipient_count }.
+    - NO PAT/scheduler requirement
+    - DOES insert into flight_locates (limit 3 enforced)
+    """
+    payload = request.get_json(silent=True) or {}
+    tail = (
+        request.values.get('tail') or
+        request.values.get('tail_number') or
+        payload.get('tail') or
+        payload.get('tail_number') or
+        ''
+    ).strip().upper()
+
+    if not tail:
+        return jsonify({'ok': False, 'message': 'Tail is required.'}), 400
+
+    # Enforce: at most 3 visible locates
+    try:
+        with sqlite3.connect(DB_FILE) as c:
+            cur = c.execute("SELECT COUNT(*) FROM flight_locates")
+            cur_count = int(cur.fetchone()[0] or 0)
+    except Exception:
+        cur_count = 0
+    if cur_count >= 3:
+        return jsonify({
+            'ok': False,
+            'code': 'locate_limit',
+            'message': 'You already have 3 locate requests visible. Delete one before creating another.',
+            'limit': 3,
+            'count': cur_count
+        }), 409
+
+    # Build subject/body exactly as the live path would
+    origin = canonical_airport_code(get_preference('default_origin') or '')
+    body   = build_aoct_flight_query_body(tail, origin or '')
+    subject = "AOCT flight query"
+
+    mapped_set = _all_mapped_callsigns()
+    cc_set     = _cc_calls()
+    recipients = sorted(mapped_set)
+
+    # Create the locate now so it appears in the recent list
+    requested_by = (request.cookies.get('operator_call') or get_preference('winlink_callsign_1') or 'OPERATOR').upper()
+    req_ts = iso8601_ceil_utc()
+    with sqlite3.connect(DB_FILE) as c:
+        c.execute("""
+          INSERT INTO flight_locates(tail, requested_at_utc, requested_by)
+          VALUES (?,?,?)
+        """, (tail, req_ts, requested_by))
+        locate_id = int(c.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+    return jsonify({
+        'ok': True,
+        'locate_id': locate_id,
+        'requested_at_utc': req_ts,
+        'tail': tail,
+        'subject': subject,
+        'body': body,
+        # counts surfaced so UI can display either mapped-only or total
+        'mapped_count': len(mapped_set),
+        'cc_count': len(cc_set),
+        'recipient_count': len(mapped_set) + len(cc_set),
+        'recipients': recipients,
+    })
 
 @bp.post('/locates/start', endpoint='locates_start')
 def locates_start():
