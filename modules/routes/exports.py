@@ -1,5 +1,5 @@
 
-import sqlite3, csv, io, zipfile, json, os
+import sqlite3, csv, io, zipfile, json, os, re
 
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
 from app import DB_FILE
@@ -37,6 +37,10 @@ def export_all_csv():
             filters = {"window": "24h", "direction": "any", "method": "", "q": ""}
         comm_csv = _generate_communications_csv_text(filters)
         zf.writestr('communications.csv', comm_csv)
+
+        # --- flight_cargo.csv (itemized cargo per outbound flight) ---
+        cargo_csv = _generate_flight_cargo_csv_text(filters)
+        zf.writestr('flight_cargo.csv', cargo_csv)
 
         # --- flights.csv (canonical flight data export) ---
         flights_csv = _generate_flights_csv_text(filters)
@@ -568,16 +572,22 @@ def _generate_flights_csv_text(filters: dict | None = None) -> str:
     try:
         has = dict_rows("SELECT name FROM sqlite_master WHERE type='table' AND name='flight_history' LIMIT 1")
         if not has:
-            out = io.StringIO(); csv.writer(out).writerow(_csv_header_flights())
+            out = io.StringIO()
+            w = csv.DictWriter(out, fieldnames=_csv_header_flights())
+            w.writeheader()
             return out.getvalue()
     except Exception:
-        out = io.StringIO(); csv.writer(out).writerow(_csv_header_flights())
+        out = io.StringIO()
+        w = csv.DictWriter(out, fieldnames=_csv_header_flights())
+        w.writeheader()
         return out.getvalue()
 
     rows = _fetch_flight_rows(f, limit=500000)
     out = io.StringIO()
-    w = csv.writer(out)
-    w.writerow(_csv_header_flights())
+    headers = _csv_header_flights()
+    # DictWriter ensures columns align with header; missing fields render as blanks.
+    w = csv.DictWriter(out, fieldnames=headers, extrasaction='ignore')
+    w.writeheader()
 
     for r in rows:
         ts = _normalize_flat(r.get("ts"))
@@ -596,10 +606,185 @@ def _generate_flights_csv_text(filters: dict | None = None) -> str:
         remarks    = _csv_safe(_normalize_flat(data.get("remarks", "")))
         flightcode = _csv_safe(_normalize_flat(data.get("flight_code", "")))
         operator   = _csv_safe(_normalize_flat(data.get("operator_call", "")))
-        w.writerow([
-            _csv_safe(ts), direction, tail, origin, dest, tko, eta,
-            cargo, weight, remarks, flightcode, operator
-        ])
+        w.writerow({
+            "Timestamp": _csv_safe(ts),
+            "Direction": direction,
+            "Tail#":     tail,
+            "From":      origin,
+            "To":        dest,
+            "T/O":       tko,
+            "ETA":       eta,
+            "Cargo":     cargo,
+            "Weight":    weight,
+            "Remarks":   remarks,
+            "FlightCode": flightcode,
+            "Operator":   operator,
+        })
+    return out.getvalue()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Flight Cargo CSV
+#   • Purpose: log cargo that went OUT by air, itemized.
+#   • Name in ZIP: flight_cargo.csv
+#   • Columns: Timestamp, Tail#, Origin, Dest, Item, Qty, Weight
+#   • Sources (in priority order):
+#       1) Normalized rows in flight_cargo (if table exists / rows present)
+#       2) Parsed "Manifest: …" text from flights.cargo_type/remarks
+#   • Window filter: same as other exports (COMM_WINDOWS), based on flights.timestamp
+# ─────────────────────────────────────────────────────────────────────────────
+
+_CARGO_HEADERS = ["Timestamp","Tail#","Origin","Dest","Item","Qty","Weight"]
+
+def _first_history_ts(flight_id: int) -> str:
+    """
+    Fallback to earliest flight_history timestamp if flights.timestamp is NULL.
+    Uses the same dynamic expression as _flight_ts_expr().
+    """
+    try:
+        tsx = _flight_ts_expr()
+        rows = dict_rows(
+            f"SELECT MIN({tsx}) AS ts FROM flight_history WHERE flight_id=?",
+            (flight_id,)
+        )
+        return (rows[0].get("ts") or "") if rows else ""
+    except Exception:
+        return ""
+
+def _parse_manifest_items(txt: str) -> list[dict]:
+    """
+    Parse strings like:
+      'Manifest: spaghetti 1.5 lb×3; spaghetti sauce 2 lb×6;'
+    Tolerates 'x' or '×', optional unit (lb|lbs|kg). Returns list of dicts:
+      {item, qty (int), weight (float, lbs)}
+    """
+    if not txt:
+        return []
+    s = txt.strip()
+    # Only look at the substring after "Manifest:" if present
+    m = re.search(r'manifest\s*:\s*(.*)$', s, re.IGNORECASE)
+    if m:
+        s = m.group(1)
+    parts = [p.strip() for p in re.split(r'[;,\n]+', s) if p.strip()]
+    out = []
+    for part in parts:
+        # Capture:  name ... <num> <unit?> [x|×] <qty>
+        # name is lazy (stops before the number)
+        rx = re.compile(
+            r'^\s*(?P<name>.*?)(?<!\S)'
+            r'(?P<wpu>\d+(?:\.\d+)?)\s*'
+            r'(?P<unit>lb|lbs|kg)?\s*'
+            r'[x×]\s*'
+            r'(?P<qty>\d+)\s*$', re.IGNORECASE
+        )
+        mm = rx.match(part)
+        if not mm:
+            continue
+        name = mm.group('name').strip()
+        try:
+            wpu = float(mm.group('wpu'))
+        except Exception:
+            continue
+        unit = (mm.group('unit') or 'lb').lower()
+        try:
+            qty = int(mm.group('qty'))
+        except Exception:
+            continue
+        total = wpu * qty
+        # Normalize to pounds
+        if unit == 'kg':
+            total *= 2.20462
+        out.append({"item": name, "qty": qty, "weight": round(total, 1)})
+    return out
+
+def _rows_from_flight_cargo_table(fid: int) -> list[dict]:
+    """
+    Try to read normalized items from flight_cargo (if present).
+    Returns list of dicts with keys: item, qty, weight (lbs).
+    """
+    try:
+        rows = dict_rows("""
+          SELECT
+            IFNULL(sanitized_name,'')        AS name,
+            IFNULL(quantity,0)               AS qty,
+            COALESCE(total_weight,
+                     CASE
+                       WHEN weight_per_unit IS NOT NULL AND quantity IS NOT NULL
+                       THEN weight_per_unit * quantity
+                       ELSE NULL
+                     END)                    AS total_w
+            FROM flight_cargo
+           WHERE flight_id=?
+        """, (fid,))
+    except Exception:
+        return []
+    out = []
+    for r in rows:
+        name = (r.get("name") or "").strip()
+        try:
+            qty = int(r.get("qty") or 0)
+        except Exception:
+            qty = 0
+        try:
+            tw = float(r.get("total_w") or 0.0)
+        except Exception:
+            tw = 0.0
+        if name and qty > 0 and tw > 0:
+            out.append({"item": name, "qty": qty, "weight": round(tw, 1)})
+    return out
+
+def _generate_flight_cargo_csv_text(filters: dict | None = None) -> str:
+    f = filters or {"window": "24h", "direction": "any", "method": "", "q": ""}
+    hours = COMM_WINDOWS[f["window"]]
+    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat() if hours is not None else None
+
+    # Pull outbound flights within window
+    where = "WHERE LOWER(IFNULL(direction,''))='outbound'"
+    params = []
+    if since:
+        where += " AND IFNULL(timestamp,'') >= ?"
+        params.append(since)
+    flights = dict_rows(f"""
+      SELECT id, IFNULL(timestamp,'') AS ts,
+             IFNULL(tail_number,'') AS tail_number,
+             IFNULL(airfield_takeoff,'') AS origin,
+             IFNULL(airfield_landing,'') AS dest,
+             IFNULL(cargo_type,'') AS cargo_type,
+             IFNULL(remarks,'')    AS remarks
+        FROM flights
+        {where}
+       ORDER BY ts ASC, id ASC
+    """, tuple(params))
+
+    out = io.StringIO()
+    w = csv.DictWriter(out, fieldnames=_CARGO_HEADERS)
+    w.writeheader()
+
+    for fl in flights:
+        fid    = fl["id"]
+        ts     = (fl.get("ts") or "") or _first_history_ts(fid)
+        tail   = _csv_safe((fl.get("tail_number") or "").strip())
+        origin = _csv_safe((fl.get("origin") or "").strip())
+        dest   = _csv_safe((fl.get("dest") or "").strip())
+
+        # Prefer normalized flight_cargo rows; else parse any "Manifest:" text
+        items = _rows_from_flight_cargo_table(fid)
+        if not items:
+            manifest_txt = " ".join([
+                str(fl.get("cargo_type") or ""),
+                str(fl.get("remarks") or ""),
+            ])
+            items = _parse_manifest_items(manifest_txt)
+
+        for it in items:
+            w.writerow({
+                "Timestamp": _csv_safe(ts),
+                "Tail#":     tail,
+                "Origin":    origin,
+                "Dest":      dest,
+                "Item":      _csv_safe(it["item"]),
+                "Qty":       it["qty"],
+                "Weight":    it["weight"],
+            })
     return out.getvalue()
 
 @bp.get('/exports/flights.csv')
