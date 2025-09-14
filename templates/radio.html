@@ -109,6 +109,22 @@ function normalizeHHMM(t){
 </script>
 
 <script>
+// Strip the standard DART footer if it was accidentally captured as remarks
+function stripDartFooter(s){
+  if (!s) return s;
+  // Truncate at the footer line (don't just delete the line).
+  const lines = String(s).split(/\r?\n/);
+  const out = [];
+  const re = /^\s*\{DART\s+Aircraft\s+Takeoff\s+Report[^}]*\}\s*$/i;
+  for (const ln of lines){
+    if (re.test(ln)) break;
+    out.push(ln);
+  }
+  return out.join('\n').trim();
+}
+</script>
+
+<script>
   // Base URL for Remote Airports page (WinLink route renders the same template)
   const REMOTE_AIRPORTS_BASE = "{{ url_for('inventory.remote_airports') }}";
 </script>
@@ -362,7 +378,7 @@ function normalizeHHMM(t){
       eta:              srvJson.eta              ?? displayEta,
       cargo_type:       srvJson.cargo_type       ?? p.cargo_type,
       cargo_weight:     srvJson.cargo_weight     ?? p.cargo_weight,
-      remarks:          srvJson.remarks          ?? rem
+      remarks:          stripDartFooter(srvJson.remarks ?? rem)
     };
 
     /* ── fallback: if everything important is blank/TBD, force RED ── */

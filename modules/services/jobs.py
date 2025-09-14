@@ -48,6 +48,28 @@ def _get_logger():
         return l
 LOG = _get_logger()
 
+# ── Sanitizers ───────────────────────────────────────────────────────────────
+_DART_FOOTER_LINE_RE = re.compile(
+    r'^\s*\{DART\s+Aircraft\s+Takeoff\s+Report[^}]*\}\s*$', re.I | re.M
+)
+
+def _truncate_at_dart_footer(text: str) -> str:
+    """Return text up to (but not including) the standard DART footer line."""
+    if not text:
+        return ''
+    out_lines = []
+    for ln in str(text).splitlines():
+        if _DART_FOOTER_LINE_RE.match(ln):
+            break
+        out_lines.append(ln)
+    return "\n".join(out_lines).rstrip()
+
+def _clean_remarks(text: str) -> str:
+    """Belt-and-suspenders: truncate at footer (not just remove it)."""
+    if not text:
+        return ''
+    return _truncate_at_dart_footer(text)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Alias helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1247,6 +1269,9 @@ def process_unparsed_winlink_messages():
 
         # run your existing parser
         parsed_data = parse_winlink(m['subject'], m['body'])
+        # sanitize remarks: treat DART footer as a hard terminator
+        parsed_data['remarks'] = _clean_remarks(parsed_data.get('remarks', ''))
+        # (optional) if parser yielded nothing but body has the block, try narrow extract later if needed
         try: LOG.info("Inbound id=%s parsed as flight update (tail=%s)", m.get('id'), parsed_data.get('tail_number'))
         except Exception: pass
 

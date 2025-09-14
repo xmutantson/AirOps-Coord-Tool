@@ -25,10 +25,11 @@ air_ops_re = re.compile(r'''
 cargo_type_re   = re.compile(r"(?im)^\s*Cargo\s*Type(?:\(s\))?\s*[.:=-]+\s*(?P<ct>.+)$")
 cargo_weight_re = re.compile(r"(?im)^\s*Total\s+Weight\s+of\s+the\s+Cargo\s*[.:=-]+\s*(?P<wgt>.+)$")
 simple_ct_re    = re.compile(r"(?im)^\s*(?:Cargo(?:\s*Type)?|Type)\s*[:=-]\s*(?P<ct>.+)$")
-#  Stop remarks before DART footer, "Attachments", a closing quote, or EOF
+#  Stop remarks before DART footer, "Attachments", a closing quote, or EOF.
+#  Use a ZERO-WIDTH LOOKAHEAD and allow empty remarks so we don't "eat to EOF"
+#  when the block is blank (classic '+?' vs '.*?' trap).
 remarks_re      = re.compile(
-    r"(?is)Additional\s+notes/comments:\s*(?P<rm>.+?)(?:\n\s*\{DART|\n\s*Attachments?:|\n\s*\"|\Z)"
-)
+    r"(?is)Additional\s+notes/comments:\s*(?P<rm>.*?)(?=\s*\{DART\s+Aircraft\s+Takeoff\s+Report|\n\s*Attachments?:|\n\s*\"|\Z)")
 # --- end regexes ---
 
 def parse_winlink(subj:str, body:str):

@@ -236,6 +236,18 @@
       {# ---------------- Prefill helper ---------------- #}
       {% set dir_prefill = d.get('direction','outbound') %}
 
+      <!-- override: always show Origin & Destination (visibility only; requiredness still follows dir) -->
+      <!-- Make this a full-width row and align to the right so it doesn't get squeezed like a form label. -->
+      <div class="rb-override"
+           style="grid-column:1 / -1; display:flex; align-items:center; justify-content:flex-end;
+                  gap:.5rem; margin:.25rem 0 .25rem; white-space:nowrap;">
+        <input type="checkbox" id="rb-od-override">
+        <label for="rb-od-override"
+               style="user-select:none; font-size:.95em; opacity:.85; margin:0;">
+          Show Origin &amp; Destination
+        </label>
+      </div>
+
       <!-- direction -->
       <label for="dir-out">Aircraft Direction*</label>
       <div class="radio-toggle">
@@ -493,9 +505,19 @@
       <div id="adv-lines" style="margin-top:1rem; display:flex; flex-wrap:wrap; gap:0.5rem;">
         <!-- chips appear here -->
       </div>
-      <button type="button" id="adv-done" disabled style="margin-top:1rem;">
-        Done
-      </button>
+      <!-- footer row: align Done + pills to the right -->
+      <div id="adv-footer-row"
+           style="display:flex; align-items:center; flex-wrap:wrap; gap:0.5rem; justify-content:flex-end; margin-top:1rem;">
+        <button type="button" id="adv-done" disabled>
+          Done
+        </button>
+        <!-- live units pill (purple) — will be placed to the RIGHT of total-weight pill -->
+        <span id="adv-units-pill"
+              style="display:inline-block; margin-top:0; padding:.2rem .6rem;
+                     border-radius:999px; background:#6a0dad; color:#fff; font-weight:600;">
+          Units: 0
+        </span>
+      </div>
     </div>
 
     <div id="rb-feedback-container"></div>
@@ -646,6 +668,7 @@
 
     function applyDirUI () {
       const dir = dirRadios.find(r => r.checked).value;
+      const showBoth = !!document.getElementById('rb-od-override')?.checked;
       /* make travel-time inputs required only when outbound */
       travelHInp.required = travelMInp.required = (dir === 'outbound');
       const hhmm = nowHHMM();
@@ -655,7 +678,7 @@
       const labDest   = document.getElementById('label-destination');
 
       if (dir === 'outbound') {          // Origin never changes for Outbound – hide it
-        originField.style.display = labOrigin.style.display = 'none';
+        originField.style.display = labOrigin.style.display = showBoth ? '' : 'none';
         destField.style.display   = labDest.style.display   = '';
         depField.value       = hhmm;
         travelRow.style.display   = '';
@@ -670,7 +693,7 @@
         if (typeof refreshFlightCode === 'function') refreshFlightCode();  // still generates for backend
       } else {
         originField.style.display = labOrigin.style.display = '';
-        destField.style.display   = labDest.style.display   = 'none';
+        destField.style.display   = labDest.style.display   = showBoth ? '' : 'none';
         depField.value       = hhmm;
         travelRow.style.display   = 'none';
         travelLabel.style.display = 'none';
@@ -683,6 +706,9 @@
         if (fcInput)  fcInput.value = '';
         if (fcStamp)  fcStamp.value = '';
       }
+      /* requiredness still follows direction even if both are visible */
+      originField.required = (dir === 'inbound');
+      destField.required   = (dir === 'outbound');
 
       /* queue button only for outbound */
       const outbound = (dir === 'outbound');
@@ -692,6 +718,8 @@
 
     }
     dirRadios.forEach(r => r.addEventListener('change', applyDirUI));
+    const odOverride = document.getElementById('rb-od-override');
+    if (odOverride) odOverride.addEventListener('change', applyDirUI);
     applyDirUI();
 
     // ───────── Flight Code helpers & events ─────────
@@ -1617,6 +1645,26 @@
   const advLines   = document.getElementById('adv-lines');
   const advDone    = document.getElementById('adv-done');
   const advMode    = document.getElementById('advanced-mode');
+  const advFooterRow = document.getElementById('adv-footer-row');
+  const advUnitsPill = document.getElementById('adv-units-pill');
+
+  /* Ensure the Units pill renders to the RIGHT of the total-weight pill.
+     If a total-weight pill exists (various ids/classes used across builds),
+     move it (and the Units pill) into the footer row in the desired order:
+       [Done] [Total-Weight Pill] [Units Pill]                                       */
+  function placeUnitsPill(){
+    try{
+      const footer = document.getElementById('adv-footer-row') || advFooterRow;
+      const units  = document.getElementById('adv-units-pill') || advUnitsPill;
+      if (!footer || !units) return;
+      const done   = document.getElementById('adv-done');
+      const weight = document.querySelector('#adv-panel #adv-total-pill, #adv-panel #adv-total, #adv-panel .adv-total-pill, #adv-panel [data-role="adv-total"]');
+      if (done   && done.parentNode   !== footer) footer.appendChild(done);
+      if (weight && weight.parentNode !== footer) footer.appendChild(weight);
+      if (units  && units.parentNode  !== footer) footer.appendChild(units);
+    }catch(_){}
+  }
+  window._rbPlaceUnitsPill = placeUnitsPill;
   // Guard C: in-flight delete lock per (name|wpu) so ❌ can't double-fire
   window.__RB_DELETING = window.__RB_DELETING || new Set();
   const rbForm     = document.getElementById('rb-form');
@@ -2253,6 +2301,22 @@
       const rmf   = document.getElementById('remarks');
       if (cw)  cw.value = total;
       if (rmf) rmf.value = buildManifestTextFromChips(chips);
+
+      /* ► NEW: total units pill (net units, signed like weight; clamped ≥0 for display) */
+      const units = chips.reduce((s,c)=>{
+        let q = Number(c.dataset.effective ?? c.dataset.qty ?? 0);
+        if (c.dataset.delta === '1') {
+          const sign = (c.dataset.deltaSign === '-1') ? -1 : 1;
+          q = sign * q;
+        }
+        return s + (Number.isFinite(q) ? q : 0);
+      }, 0);
+      const up = document.getElementById('adv-units-pill');
+      if (up) up.textContent = `Units: ${Math.max(0, units)}`;
+
+      /* Keep pill order correct (Done | Total-lbs | Units) */
+      try { window._rbPlaceUnitsPill && window._rbPlaceUnitsPill(); } catch(_){}
+
       // ► Keep Cargo Type in sync with chip categories when available.
       try {
         const cargoField = document.getElementById('cargo_type');
@@ -2857,6 +2921,7 @@
       /* ensure manifest id exists for scans; load any existing chips */
       try { if (window._rbScanEnsure) window._rbScanEnsure(); } catch(_){}
       try { if (window._rbScanRefresh) await window._rbScanRefresh(); } catch(_){}
+      try { window._rbPlaceUnitsPill && window._rbPlaceUnitsPill(); } catch(_){}
     } finally {
       advStarting = false;
     }

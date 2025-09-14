@@ -584,6 +584,7 @@ def inventory_broadcast():
                            current_interval=cur,
                            broadcast_warnings=warnings,
                            recipient_count=len(recipients),
+                           recipients=recipients,
                            active='inventory')
 
 @bp.route('/broadcast/preview', methods=['POST'])

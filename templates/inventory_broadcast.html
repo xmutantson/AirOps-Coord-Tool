@@ -6,6 +6,9 @@
   <!-- CSRF token for AJAX posts -->
   <meta name="csrf-token" content="{{ csrf_token() }}">
 
+  <!-- Recipients array for offline/manual use (safe even if undefined in view) -->
+  <script id="recipients-json" type="application/json">{{ (recipients or [])|tojson }}</script>
+
   {% if broadcast_warnings %}
     <div style="background:#fff3cd;border:1px solid #ffe69c;color:#664d03;padding:.6rem .8rem;border-radius:.5rem;margin-bottom:.75rem;">
       <strong>Heads up:</strong>
@@ -21,6 +24,7 @@
     <button id="btn-human"    type="button">Human</button>
     <button id="btn-csv"      type="button">CSV</button>
     <button id="btn-both"     type="button">Both</button>
+    <button id="btn-send-manual" type="button" class="btn" title="Open a copy-ready Subject/Body with recipients for offline sending">Send manually</button>
     <button id="btn-send-now" type="button" class="btn danger" title="Immediately sends the full snapshot to all mapped recipients">Send now to recipients</button>
   </div>
 
@@ -32,6 +36,48 @@
     <div>
       <label class="muted">CSV preview</label>
       <textarea id="preview-csv" rows="16" style="width:100%;"></textarea>
+    </div>
+  </div>
+
+  <!-- ── Manual Send Modal (copy-ready) ───────────────────────────────────── -->
+  <div id="manual-modal" class="modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:5000;">
+    <div class="modal-card" style="max-width:820px; margin:6vh auto; background:#fff; border-radius:.6rem; box-shadow:0 16px 44px rgba(0,0,0,.25); overflow:hidden;">
+      <div style="padding:.75rem 1rem; border-bottom:1px solid #eee; font-weight:600;">Broadcast — manual send</div>
+      <div style="padding:1rem;">
+        <p class="muted" style="margin-top:0">
+          Copy the <strong>Subject</strong> and <strong>Body</strong> to send this broadcast without PAT (e.g., via Winlink client).
+          Recipients are listed below.
+        </p>
+        <div style="display:grid; grid-template-columns: 130px 1fr; gap:.6rem 1rem; align-items:center;">
+          <label style="font-weight:600;">Subject</label>
+          <div style="display:flex; gap:.5rem; align-items:center;">
+            <input id="manual-subject" readonly
+                   style="flex:1; padding:.55rem .6rem; border:1px solid #ccc; border-radius:.4rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;">
+            <button type="button" id="manual-copy-subj" class="button"
+                    style="padding:.35rem .6rem; border:1px solid #ccc; background:#fafafa; border-radius:.35rem; cursor:pointer;">Copy subject</button>
+            <span id="manual-fb-subj" class="copy-feedback">✓ Copied</span>
+          </div>
+
+          <label style="font-weight:600; align-self:start;">Body</label>
+          <div>
+            <textarea id="manual-body" readonly
+                      style="width:100%; min-height:18rem; padding:.65rem; border:1px solid #ccc; border-radius:.4rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; white-space:pre;"></textarea>
+            <div style="display:flex; gap:.5rem; justify-content:flex-end; margin-top:.5rem;">
+              <button type="button" id="manual-copy-body" class="button"
+                      style="padding:.35rem .6rem; border:1px solid #ccc; background:#fafafa; border-radius:.35rem; cursor:pointer;">Copy body</button>
+              <span id="manual-fb-body" class="copy-feedback">✓ Copied</span>
+            </div>
+          </div>
+
+          <label style="font-weight:600; align-self:start;">Recipients</label>
+          <div>
+            <div id="manual-recips" class="muted" style="max-height:10rem; overflow:auto; padding:.5rem .6rem; border:1px dashed #ddd; border-radius:.4rem; background:#fafafa; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;"></div>
+          </div>
+        </div>
+        <div style="display:flex; gap:.5rem; justify-content:flex-end; margin-top:1rem;">
+          <button type="button" id="manual-close" class="button" style="padding:.45rem .8rem; border:1px solid #ccc; background:#fafafa; border-radius:.4rem; cursor:pointer;">Close</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -109,19 +155,81 @@
     });
 
     // Test button: actually send via PAT (requires WinLink polling running)
-    document.getElementById('btn-test').addEventListener('click', async () => {
-      try {
-        const resp = await postForm("{{ url_for('inventory.broadcast_test_send') }}");
-        const data = await resp.json().catch(()=>({}));
-        if (!resp.ok || !data.success) {
-          alert(data.message || "Failed to send test message.");
-          return;
+    // (Guarded: some deployments don't render a test button.)
+    const testBtn = document.getElementById('btn-test');
+    if (testBtn) {
+      testBtn.addEventListener('click', async () => {
+        try {
+          const resp = await postForm("{{ url_for('inventory.broadcast_test_send') }}");
+          const data = await resp.json().catch(()=>({}));
+          if (!resp.ok || !data.success) {
+            alert(data.message || "Failed to send test message.");
+            return;
+          }
+          alert(`Test message sent via PAT to ${data.to || 'your callsign'}.`);
+        } catch (e) {
+          console.error(e); alert("Failed to send test message.");
         }
-        alert(`Test message sent via PAT to ${data.to || 'your callsign'}.`);
-      } catch (e) {
-        console.error(e);
-        alert("Failed to send test message.");
-      }
+      });
+    }
+
+    // ── Send Manually (copy-ready) modal wiring ────────────────────────────
+    const btnManual = document.getElementById('btn-send-manual');
+    const modal     = document.getElementById('manual-modal');
+    const closeBtn  = document.getElementById('manual-close');
+    const subjEl    = document.getElementById('manual-subject');
+    const bodyEl    = document.getElementById('manual-body');
+    const rcEl      = document.getElementById('manual-recips');
+    const btnCS     = document.getElementById('manual-copy-subj');
+    const btnCB     = document.getElementById('manual-copy-body');
+
+    function showManual(){ modal.style.display = 'block'; }
+    function hideManual(){ modal.style.display = 'none'; }
+    closeBtn.addEventListener('click', hideManual);
+    modal.addEventListener('click', (e)=>{ if (e.target === modal) hideManual(); });
+
+    function copyToClipboard(text, fbElId){
+      return (navigator.clipboard?.writeText(text) || Promise.reject()).then(()=>{
+        const fb = document.getElementById(fbElId);
+        if (fb){ fb.classList.add('visible'); setTimeout(()=>fb.classList.remove('visible'), 1000); }
+      }).catch(()=>{
+        // Fallback
+        const ta = document.createElement('textarea');
+        ta.value = text; ta.style.position='fixed'; ta.style.opacity='0';
+        document.body.appendChild(ta); ta.focus(); ta.select();
+        try { document.execCommand('copy'); } catch(_){}
+        document.body.removeChild(ta);
+        const fb = document.getElementById(fbElId);
+        if (fb){ fb.classList.add('visible'); setTimeout(()=>fb.classList.remove('visible'), 1000); }
+      });
+    }
+    btnCS.addEventListener('click', ()=> copyToClipboard(subjEl.value || '', 'manual-fb-subj'));
+    btnCB.addEventListener('click', ()=> copyToClipboard(bodyEl.value || '', 'manual-fb-body'));
+
+    async function getRecipients(){
+      // Prefer embedded JSON if the view provided it
+      try {
+        const tag = document.getElementById('recipients-json');
+        if (tag){
+          const data = JSON.parse(tag.textContent || '[]');
+          if (Array.isArray(data) && data.length) return data;
+        }
+      } catch (_){}
+      // Fallback: nothing configured
+      return [];
+    }
+
+    btnManual.addEventListener('click', async ()=>{
+      // Ensure preview is current ("Both")
+      await load('both');
+      // Subject/body mirror the auto-broadcast path
+      subjEl.value = 'AOCT cargo status';
+      const human = document.getElementById('preview-human').value || '';
+      const csv   = document.getElementById('preview-csv').value   || '';
+      bodyEl.value = (human.trim() + (csv.trim() ? "\n\n" + csv.trim() : "")).trim();
+      const recips = await getRecipients();
+      rcEl.textContent = recips.length ? recips.join(', ') : 'No recipients configured.';
+      showManual();
     });
 
     // Send-now button: confirmation then full broadcast

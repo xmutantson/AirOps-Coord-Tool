@@ -53,7 +53,7 @@
         lines.push("");
         lines.push("Additional notes/comments:");
         if ((d.code || '').trim()) lines.push(`  Flight Code: ${d.code.trim()}`);
-        lines.push(`  ${d.rem || ''}`);
+        if ((d.rem || '').trim()) lines.push(`  ${d.rem.trim()}`);
         lines.push("");
         lines.push("{DART Aircraft Takeoff Report, rev. 2024-05-14}");
         return { subject, body: lines.join('\n') };

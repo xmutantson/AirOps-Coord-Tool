@@ -28,22 +28,19 @@ def export_all_csv():
     with zipfile.ZipFile(mem_zip, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
         conn = sqlite3.connect(DB_FILE)
 
-        # --- communications.csv (authoritative; v2 schema) ---
-        # Reuse the same filters used by ICS-309 endpoints if provided.
-        # Defaults to last 24h when not specified (same as ICS-309 UI default).
-        try:
-            filters = parse_comm_filters(request)
-        except Exception:
-            filters = {"window": "24h", "direction": "any", "method": "", "q": ""}
-        comm_csv = _generate_communications_csv_text(filters)
+        # ► Export-All should always be ALL TIME for data files.
+        filters_all = {"window": "all", "direction": "any", "method": "", "q": ""}
+
+        # --- communications.csv (authoritative; v2 schema, ALL TIME) ---
+        comm_csv = _generate_communications_csv_text(filters_all)
         zf.writestr('communications.csv', comm_csv)
 
         # --- flight_cargo.csv (itemized cargo per outbound flight) ---
-        cargo_csv = _generate_flight_cargo_csv_text(filters)
+        cargo_csv = _generate_flight_cargo_csv_text(filters_all)
         zf.writestr('flight_cargo.csv', cargo_csv)
 
         # --- flights.csv (canonical flight data export) ---
-        flights_csv = _generate_flights_csv_text(filters)
+        flights_csv = _generate_flights_csv_text(filters_all)
         zf.writestr('flights.csv', flights_csv)
 
         # --- inventory_entries.csv ---
@@ -69,20 +66,20 @@ def export_all_csv():
             ])
         zf.writestr('inventory_entries.csv', buf.getvalue())
 
-        # ── Add ICS-309 (last 24h) as a single-file HTML into the ZIP ──
+        # ── Add ICS-309 (ALL TIME) as a single-file HTML into the ZIP ──
         def _ics_ctx_for_zip():
-            f = {"window": "24h", "direction": "any", "method": "", "q": ""}
+            f = {"window": "all", "direction": "any", "method": "", "q": ""}
             return _ics309_context_from_filters(f)
         ics_ctx = _ics_ctx_for_zip()
         ics_html = render_template("ics309_standalone.html", **ics_ctx)
-        zf.writestr('ics309_last24h.html', ics_html)
+        zf.writestr('ics309_all.html', ics_html)
 
-        # ── Add ICS-214 (last 24h) as a single-file HTML using saved header prefs ──
+        # ── Add ICS-214 (ALL TIME) as a single-file HTML using saved header prefs ──
         try:
             from modules.routes.staff import _ics214_context as _ics214_context
-            ics214_ctx  = _ics214_context("24h")
+            ics214_ctx  = _ics214_context("all")
             ics214_html = render_template("ics214_standalone.html", **ics214_ctx)
-            zf.writestr('ics214_last24h.html', ics214_html)
+            zf.writestr('ics214_all.html', ics214_html)
         except Exception:
             # Don’t fail the whole export if staff data isn’t present
             pass
@@ -493,7 +490,8 @@ def export_communications_csv():
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Flights CSV (new, non-legacy shape)
-#   • Source of truth: flight_history.data (JSON)
+#   • Primary source: flights table (current canonical flight rows)
+#   • Fallback: flight_history.data (JSON) if flights table missing/empty
 #   • Columns: Timestamp, Direction, Tail#, From, To, T/O, ETA, Cargo, Weight,
 #              Remarks, FlightCode, Operator
 #   • Accepts same filters as communications: window=12h|24h|72h|all, direction=in|out|any, q=
@@ -522,14 +520,21 @@ def _sql_for_flight_filters(f):
     """
     where, params = [], []
     tsx = _flight_ts_expr()
+    # Normalize timestamp comparison: compare only the first 19 chars
+    # (YYYY-MM-DDTHH:MM:SS) so naive vs "+00:00"/"Z" strings don't kill matches.
+    tsx_norm = f"substr({tsx},1,19)"
     hours = COMM_WINDOWS[f["window"]]
     if hours is not None:
-        since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
-        where.append(f"{tsx} >= ?"); params.append(since)
-    # Direction is stored in JSON; accept 'in'/'out'
-    if f["direction"] in ("in", "out"):
+        since = (datetime.utcnow() - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%S")
+        where.append(f"{tsx_norm} >= ?")
+        params.append(since)
+    # Direction in flight history is 'inbound'/'outbound'; accept comms-style too.
+    dir_raw = (f.get("direction") or "").lower()
+    if dir_raw in ("in", "out", "inbound", "outbound"):
+        dir_map = {"in": "inbound", "out": "outbound"}
+        dir_val = dir_map.get(dir_raw, dir_raw)
         where.append("LOWER(IFNULL(json_extract(data,'$.direction'),'')) = ?")
-        params.append(f["direction"])
+        params.append(dir_val)
     # Basic free-text over a few useful JSON fields
     if f["q"]:
         like = f"%{f['q']}%"
@@ -544,6 +549,66 @@ def _sql_for_flight_filters(f):
         params += [like, like, like, like, like, like]
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
     return tsx, where_sql, params
+
+def _sql_for_flights_table_filters(f):
+    """
+    Build WHERE and params for the flights table.
+    Normalizes timestamp comparison so 'YYYY-MM-DD HH:MM:SS' and 'YYYY-MM-DDTHH:MM:SS'
+    both match against the same 'since' string.
+    """
+    where, params = [], []
+    # Normalize to 'YYYY-MM-DDTHH:MM:SS' for comparison
+    tsx = "substr(REPLACE(IFNULL(timestamp,''),' ','T'),1,19)"
+    hours = COMM_WINDOWS[f["window"]]
+    if hours is not None:
+        # Use UTC and clip to seconds (avoid lexicographic mismatches)
+        since = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        where.append(f"{tsx} >= ?")
+        params.append(since)
+    # Direction in flights is 'inbound'/'outbound'; accept 'in'/'out' too.
+    dir_raw = (f.get("direction") or "").lower()
+    if dir_raw in ("in", "out", "inbound", "outbound"):
+        dir_map = {"in": "inbound", "out": "outbound"}
+        dir_val = dir_map.get(dir_raw, dir_raw)
+        where.append("LOWER(IFNULL(direction,'')) = ?")
+        params.append(dir_val)
+    # Basic free-text over tail, origin/dest, remarks, cargo_type, flight_code
+    q = (f.get("q") or "").strip()
+    if q:
+        like = f"%{q}%"
+        where.append("("
+                     "IFNULL(tail_number,'') LIKE ? OR "
+                     "IFNULL(airfield_takeoff,'') LIKE ? OR "
+                     "IFNULL(airfield_landing,'') LIKE ? OR "
+                     "IFNULL(remarks,'') LIKE ? OR "
+                     "IFNULL(cargo_type,'') LIKE ? OR "
+                     "IFNULL(flight_code,'') LIKE ?"
+                     ")")
+        params += [like, like, like, like, like, like]
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    return where_sql, params
+
+def _fetch_flights_table_rows(f, limit=500000):
+    where_sql, params = _sql_for_flights_table_filters(f)
+    sql = f"""
+      SELECT id,
+             IFNULL(timestamp,'')            AS ts,
+             IFNULL(direction,'')            AS direction,
+             IFNULL(tail_number,'')          AS tail_number,
+             IFNULL(airfield_takeoff,'')     AS origin,
+             IFNULL(airfield_landing,'')     AS dest,
+             IFNULL(takeoff_time,'')         AS takeoff_time,
+             IFNULL(eta,'')                  AS eta,
+             IFNULL(cargo_type,'')           AS cargo_type,
+             IFNULL(cargo_weight,'')         AS cargo_weight,
+             IFNULL(remarks,'')              AS remarks,
+             IFNULL(flight_code,'')          AS flight_code
+        FROM flights
+        {where_sql}
+    ORDER BY ts ASC, id ASC
+       LIMIT ?
+    """
+    return dict_rows(sql, tuple(params) + (limit,))
 
 def _fetch_flight_rows(f, limit=500000):
     tsx, where_sql, params = _sql_for_flight_filters(f)
@@ -568,28 +633,58 @@ def _normalize_flat(s):
 
 def _generate_flights_csv_text(filters: dict | None = None) -> str:
     f = filters or {"window": "24h", "direction": "any", "method": "", "q": ""}
-    # If the table doesn't exist, return just the header to stay safe
-    try:
-        has = dict_rows("SELECT name FROM sqlite_master WHERE type='table' AND name='flight_history' LIMIT 1")
-        if not has:
-            out = io.StringIO()
-            w = csv.DictWriter(out, fieldnames=_csv_header_flights())
-            w.writeheader()
-            return out.getvalue()
-    except Exception:
-        out = io.StringIO()
-        w = csv.DictWriter(out, fieldnames=_csv_header_flights())
-        w.writeheader()
-        return out.getvalue()
-
-    rows = _fetch_flight_rows(f, limit=500000)
     out = io.StringIO()
     headers = _csv_header_flights()
-    # DictWriter ensures columns align with header; missing fields render as blanks.
     w = csv.DictWriter(out, fieldnames=headers, extrasaction='ignore')
     w.writeheader()
 
-    for r in rows:
+    # 1) Primary: read from flights table (covers Queue→Send-created flights)
+    rows_f = []
+    try:
+        has_flights = dict_rows("SELECT name FROM sqlite_master WHERE type='table' AND name='flights' LIMIT 1")
+        if has_flights:
+            rows_f = _fetch_flights_table_rows(f, limit=500000)
+    except Exception:
+        rows_f = []
+
+    wrote_any = False
+    for fl in rows_f:
+        fid   = fl.get("id")
+        ts    = _normalize_flat(fl.get("ts") or "") or _first_history_ts(int(fid)) if fid is not None else ""
+        w.writerow({
+            "Timestamp":  _csv_safe(ts),
+            "Direction":  _csv_safe(_normalize_flat(fl.get("direction",""))),
+            "Tail#":      _csv_safe(_normalize_flat(fl.get("tail_number",""))),
+            "From":       _csv_safe(_normalize_flat(fl.get("origin",""))),
+            "To":         _csv_safe(_normalize_flat(fl.get("dest",""))),
+            "T/O":        _csv_safe(_normalize_flat(fl.get("takeoff_time",""))),
+            "ETA":        _csv_safe(_normalize_flat(fl.get("eta",""))),
+            "Cargo":      _csv_safe(_normalize_flat(fl.get("cargo_type",""))),
+            "Weight":     _csv_safe(_normalize_flat(fl.get("cargo_weight",""))),
+            "Remarks":    _csv_safe(_normalize_flat(fl.get("remarks",""))),
+            "FlightCode": _csv_safe(_normalize_flat(fl.get("flight_code",""))),
+            # Operator isn't stored on flights; leave blank for now.
+            "Operator":   _csv_safe(""),
+        })
+        wrote_any = True
+
+    if wrote_any:
+        return out.getvalue()
+
+    # 2) Fallback: legacy path via flight_history JSON (older databases)
+    try:
+        has_hist = dict_rows("SELECT name FROM sqlite_master WHERE type='table' AND name='flight_history' LIMIT 1")
+    except Exception:
+        has_hist = []
+    if not has_hist:
+        return out.getvalue()  # header only, safe fallback
+
+    rows_h = _fetch_flight_rows(f, limit=500000)
+    out = io.StringIO()
+    w = csv.DictWriter(out, fieldnames=headers, extrasaction='ignore')
+    w.writeheader()
+
+    for r in rows_h:
         ts = _normalize_flat(r.get("ts"))
         try:
             data = json.loads(r.get("data") or "{}")

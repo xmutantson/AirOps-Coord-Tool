@@ -1492,3 +1492,50 @@ table.wg-radio-table tr.read { opacity: .8; }
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 }
 #help-body .help-md img { max-width: 100%; height: auto; }
+/* ───────────────────────────────────────────────────────────────────────────
+   Advanced Cargo Entry/Edit (ADV Panel only)
+   - Narrow the panel so controls don't stretch across the screen
+   - Stack the ADV Line Form fields vertically (Category / Item / Size / Qty)
+   NOTE: scoped to #adv-panel so the main Ramp Boss form is unaffected.
+   Supports either #adv-line-form (id) or .adv-line-form (class).
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* Make the ADV panel itself narrower on desktop; keep mobile friendly */
+#adv-panel {
+  width: min(820px, 95vw);
+}
+
+/* Stack the line editor fields into a single column */
+#adv-panel .adv-line-form,
+#adv-panel #adv-line-form {
+  display: grid !important;
+  grid-template-columns: 1fr;
+  gap: .6rem;
+  align-items: start;
+}
+
+/* If the template reused a “lookup-row” flex row inside the line form, disable it here */
+#adv-panel .adv-line-form .lookup-row,
+#adv-panel #adv-line-form .lookup-row {
+  display: block !important;
+}
+
+/* Make inputs/selects fill the available column width cleanly */
+#adv-panel .adv-line-form select,
+#adv-panel .adv-line-form input[type="text"],
+#adv-panel .adv-line-form input[type="number"],
+#adv-panel #adv-line-form select,
+#adv-panel #adv-line-form input[type="text"],
+#adv-panel #adv-line-form input[type="number"] {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Keep the “Add” button compact and aligned at the top of the stack */
+#adv-panel .adv-line-form .add-line,
+#adv-panel #adv-line-form .add-line,
+#adv-panel .adv-line-form button[type="submit"],
+#adv-panel #adv-line-form button[type="submit"] {
+  width: auto;
+  align-self: start;
+}
