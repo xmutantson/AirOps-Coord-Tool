@@ -1502,7 +1502,7 @@ def edit_queued_flight(qid):
     # GET → render Ramp-Boss with a ‘draft’ object for pre-fill
     return render_template('ramp_boss.html',
                            draft=draft,
-                           active='ramp_boss',
+                           active='queued_flights',
                            advanced_data={})   # chips fetched by JS as usual
 
 @bp.route('/edit_flight/<int:fid>', methods=['GET','POST'])
