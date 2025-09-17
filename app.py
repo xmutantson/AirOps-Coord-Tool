@@ -28,6 +28,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from zeroconf import Zeroconf
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.schedulers.base import STATE_RUNNING
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Path safety: ensure /app (this file’s dir) is importable as a top-level package
@@ -414,6 +415,7 @@ for _mod in (
     "modules.routes_inventory.barcodes",
     "modules.routes_inventory.scan",
     "modules.routes_inventory.propagate",
+    "modules.routes_inventory.requests",
 ):
     _safe_import(_mod)
 
@@ -480,6 +482,7 @@ for _name in (
     "wargame_start_ramp_inbound",
     "get_wargame_role_epoch",
     "configure_netops_feeders",
+    "configure_cargo_reconciler_job",
 ):
     if hasattr(_jobs, _name):
         setattr(_sys.modules[__name__], _name, getattr(_jobs, _name))
@@ -494,6 +497,27 @@ try:
 except Exception as e:
     try:
         logger.warning("NetOps feeder not configured: %s", e)
+    except Exception:
+        pass
+
+# Configure the cargo-request reconciler on startup (idempotent).
+try:
+    if hasattr(_jobs, "configure_cargo_reconciler_job"):
+        _jobs.configure_cargo_reconciler_job()
+except Exception as e:
+    try:
+        logger.warning("Cargo reconciler not configured: %s", e)
+    except Exception:
+        pass
+
+# Ensure the APScheduler is running (safe if already started).
+try:
+    if getattr(scheduler, "state", None) != STATE_RUNNING:
+        scheduler.start()
+        logger.info("BackgroundScheduler started.")
+except Exception as e:
+    try:
+        logger.warning("Scheduler start skipped: %s", e)
     except Exception:
         pass
 

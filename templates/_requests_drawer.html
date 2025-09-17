@@ -1,0 +1,28 @@
+{# Floating Action Button + Drawer for Cargo Requests #}
+<button id="fabRequests" class="fab-requests" aria-label="Open cargo requests" title="Cargo Requests">
+  Requests <span id="fabRequestsBadge" class="badge">0</span>
+</button>
+
+<div id="reqOverlay" class="req-overlay hidden" aria-hidden="true"></div>
+
+<aside id="reqDrawer" class="req-drawer" aria-hidden="true" aria-label="Cargo requests drawer">
+  <div class="req-drawer-header">
+    <div class="req-group-title">Cargo Requests</div>
+    <div class="req-group-actions">
+      <button id="reqRefresh" class="button small" type="button">Refresh</button>
+      <button id="reqClose" class="req-close" type="button" aria-label="Close">✕</button>
+    </div>
+  </div>
+  <div class="req-body">
+    <form id="reqQuickAdd" class="lookup-row" style="margin-bottom:.6rem">
+      <input name="airport" type="text" placeholder="Airport (e.g., KELN)" required />
+      <input name="name" type="text" placeholder="Item name (e.g., water)" required />
+      <input name="weight_lb" type="number" step="0.1" min="0.1" placeholder="Weight (lb)" required />
+      <button class="button small" type="submit">Add</button>
+    </form>
+
+    <div id="reqGroups">
+      <div class="req-empty">Loading…</div>
+    </div>
+  </div>
+</aside>

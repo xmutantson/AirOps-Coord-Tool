@@ -5,10 +5,10 @@
   <div id="supervisor-counts" class="supervisor-panel">
     <!-- small tool links bar (top-left tile) -->
     <div class="panel-toolbar" style="display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; margin-bottom:.5rem;">
-      <a href="{{ url_for('staff.staff_list') }}" class="button small" style="padding:.25rem .5rem; border:1px solid #ccc; border-radius:.4rem; text-decoration:none; font-size:.9rem;">
+      <a href="{{ url_for('staff.staff_list', window='all') }}" class="button small" style="padding:.25rem .5rem; border:1px solid #ccc; border-radius:.4rem; text-decoration:none; font-size:.9rem;">
         Staff
       </a>
-      <a href="{{ url_for('comms.comms_index') }}" class="button small" style="padding:.25rem .5rem; border:1px solid #ccc; border-radius:.4rem; text-decoration:none; font-size:.9rem;">
+      <a href="{{ url_for('comms.comms_index', window='all') }}" class="button small" style="padding:.25rem .5rem; border:1px solid #ccc; border-radius:.4rem; text-decoration:none; font-size:.9rem;">
         Communications Log
       </a>
       <button id="btn-locate-flight" type="button" class="button small"

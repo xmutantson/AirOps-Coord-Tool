@@ -905,6 +905,8 @@ def init_db():
             assigned_tail    TEXT
           )
         """)
+        # ── Cargo Requests (aggregated, production feature) ────────────────
+        _create_tables_cargo_requests(c)
         # ── winlink messages table ───────────────────────────
         c.execute("""
             CREATE TABLE IF NOT EXISTS winlink_messages (
@@ -1079,7 +1081,9 @@ def run_migrations():
             created_at       TEXT    NOT NULL
           )
         """)
-    
+        # Ensure Cargo Requests tables/indexes exist on upgraded DBs
+        _create_tables_cargo_requests(c)
+
     # flight_cargo gained a NOT-NULL session_id
     ensure_column("flight_cargo", "session_id", "TEXT NOT NULL DEFAULT ''")
     # queued_flights gained dest + travel_time (if DB predates them)
@@ -1573,6 +1577,30 @@ def _create_tables_wargame_ramp_requests(c):
         manifest         TEXT,
         satisfied_at     TEXT
       )""")
+
+def _create_tables_cargo_requests(c):
+    """
+    Schema for Cargo Requests (aggregated per-airport, per-sanitized item).
+    - One row per (airport_canon, sanitized_name).
+    - requested_lb grows as new requests are manually parsed/added.
+    - fulfilled_lb grows as landed flight manifests are applied.
+    - If fulfilled_lb >= requested_lb, the line is deleted (auto-close).
+    """
+    c.execute("""
+      CREATE TABLE IF NOT EXISTS cargo_requests (
+        airport_canon   TEXT NOT NULL,
+        sanitized_name  TEXT NOT NULL,
+        requested_lb    REAL NOT NULL DEFAULT 0,
+        fulfilled_lb    REAL NOT NULL DEFAULT 0,
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL,
+        last_source_id  TEXT,
+        PRIMARY KEY (airport_canon, sanitized_name)
+      )
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_cargo_req_airport ON cargo_requests(airport_canon)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_cargo_req_remaining ON cargo_requests(airport_canon, requested_lb, fulfilled_lb)")
+
 
 def get_preference(name: str) -> str | None:
     """Fetch a single preference value (or sensible default if not set)."""
@@ -3015,6 +3043,256 @@ def _parse_manifest(manifest: str):
             'qty': int(m.group('qty'))
         })
     return items
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cargo Requests — Core Helpers (aggregated per airport)
+# ─────────────────────────────────────────────────────────────────────────────
+def ensure_cargo_request_tables() -> None:
+    """Public idempotent creator for Cargo Requests tables."""
+    with sqlite3.connect(get_db_file()) as c:
+        _create_tables_cargo_requests(c)
+
+def _now_iso_z() -> str:
+    try:
+        return iso8601_ceil_utc()
+    except Exception:
+        from datetime import datetime, timezone
+        return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00","Z")
+
+def cr_sanitize_item(name: str) -> str:
+    """Normalize an item name for request aggregation (uses sanitize_name)."""
+    return (sanitize_name(name) or "").strip().lower()
+
+def cr_upsert_requests(airport: str, items: list[dict], *, source_email_id: str | None = None) -> int:
+    """
+    Merge a batch of requests into cargo_requests for an airport.
+    `items` = [{'name': 'spaghetti', 'weight_lb': 120.0}, ...]
+    Returns number of rows inserted or updated.
+    """
+    ensure_cargo_request_tables()
+    ap = canonical_airport_code(airport or "")
+    if not ap or not items:
+        return 0
+    # fold duplicates by sanitized name
+    agg: dict[str, float] = {}
+    for it in items:
+        nm = cr_sanitize_item(it.get("name", ""))
+        if not nm:
+            continue
+        try:
+            w = float(it.get("weight_lb") or 0.0)
+        except Exception:
+            w = 0.0
+        if w <= 0:
+            continue
+        agg[nm] = round(agg.get(nm, 0.0) + w, 1)
+    if not agg:
+        return 0
+
+    ts = _now_iso_z()
+    n = 0
+    with sqlite3.connect(get_db_file()) as c:
+        for nm, w in agg.items():
+            cur = c.execute("""
+              INSERT INTO cargo_requests(airport_canon, sanitized_name, requested_lb, fulfilled_lb, created_at, updated_at, last_source_id)
+              VALUES (?,?,?,?,?,?,?)
+              ON CONFLICT(airport_canon, sanitized_name) DO UPDATE SET
+                requested_lb = cargo_requests.requested_lb + excluded.requested_lb,
+                updated_at   = excluded.updated_at,
+                last_source_id = COALESCE(excluded.last_source_id, cargo_requests.last_source_id)
+            """, (ap, nm, w, 0.0, ts, ts, source_email_id)).rowcount
+            n += 1 if (cur or 0) >= 0 else 0
+        # Auto-prune lines that are already fully satisfied (edge case)
+        c.execute("""
+          DELETE FROM cargo_requests
+           WHERE airport_canon=? AND fulfilled_lb >= requested_lb
+        """, (ap,))
+    return n
+
+def cr_get_overview() -> list[dict]:
+    """
+    Overview for the RampBoss FAB badge and drawer list.
+    Returns: [{'airport': 'ABC', 'open_items': 7, 'remaining_lb': 1234.5}, ...]
+    """
+    ensure_cargo_request_tables()
+    rows = dict_rows("""
+      SELECT airport_canon AS airport,
+             COUNT(*) AS open_items,
+             ROUND(SUM(MAX(requested_lb - fulfilled_lb, 0.0)), 1) AS remaining_lb
+        FROM cargo_requests
+       WHERE requested_lb > fulfilled_lb
+       GROUP BY airport_canon
+       ORDER BY remaining_lb DESC, airport
+    """)
+    # SQLite MAX() over scalar literal needs CASE; re-compute in Python for safety
+    out = []
+    for r in rows:
+        rem = float(r.get("remaining_lb") or 0.0)
+        if rem <= 0:
+            # Defensive: filter any non-open aggregates
+            continue
+        out.append({
+            "airport": r.get("airport") or "",
+            "open_items": int(r.get("open_items") or 0),
+            "remaining_lb": round(rem, 1),
+        })
+    return out
+
+def cr_get_airport_items(airport: str) -> list[dict]:
+    """
+    Detailed list for a single airport:
+    [{'name': 'spaghetti', 'requested_lb': 200.0, 'fulfilled_lb': 150.0, 'remaining_lb': 50.0}, ...]
+    """
+    ensure_cargo_request_tables()
+    ap = canonical_airport_code(airport or "")
+    if not ap:
+        return []
+    rows = dict_rows("""
+      SELECT sanitized_name, requested_lb, fulfilled_lb
+        FROM cargo_requests
+       WHERE airport_canon=?
+       ORDER BY sanitized_name
+    """, (ap,))
+    out = []
+    for r in rows:
+        req = float(r.get("requested_lb") or 0.0)
+        ful = float(r.get("fulfilled_lb") or 0.0)
+        out.append({
+            "name": r.get("sanitized_name") or "",
+            "requested_lb": round(req, 1),
+            "fulfilled_lb": round(ful, 1),
+            "remaining_lb": round(max(req - ful, 0.0), 1)
+        })
+    return out
+
+def cr_delete_item(airport: str, name: str) -> None:
+    """Manual delete of a single line item for an airport (spec: with confirmation in UI)."""
+    ensure_cargo_request_tables()
+    ap = canonical_airport_code(airport or "")
+    nm = cr_sanitize_item(name or "")
+    if not ap or not nm:
+        return
+    with sqlite3.connect(get_db_file()) as c:
+        c.execute("DELETE FROM cargo_requests WHERE airport_canon=? AND sanitized_name=?", (ap, nm))
+
+def cr_delete_airport(airport: str) -> None:
+    """Manual delete of all requests for an airport (spec: with confirmation in UI)."""
+    ensure_cargo_request_tables()
+    ap = canonical_airport_code(airport or "")
+    if not ap:
+        return
+    with sqlite3.connect(get_db_file()) as c:
+        c.execute("DELETE FROM cargo_requests WHERE airport_canon=?", (ap,))
+
+def _cr_apply_weights(ap: str, weights_by_name: dict[str, float]) -> dict:
+    """
+    Core: apply delivered weights to open requests at airport `ap`.
+    Returns summary: {'credited_lb': float, 'closed_items': int, 'remaining_items': int}
+    """
+    if not weights_by_name:
+        return {"credited_lb": 0.0, "closed_items": 0, "remaining_items": 0}
+    credited = 0.0
+    closed = 0
+    with sqlite3.connect(get_db_file()) as c:
+        for nm, delivered in weights_by_name.items():
+            if delivered <= 0:
+                continue
+            # Fetch current line
+            row = c.execute("""
+              SELECT requested_lb, fulfilled_lb
+                FROM cargo_requests
+               WHERE airport_canon=? AND sanitized_name=?
+               LIMIT 1
+            """, (ap, nm)).fetchone()
+            if not row:
+                continue  # no open request for this item
+            req, ful = float(row[0] or 0.0), float(row[1] or 0.0)
+            remain = max(req - ful, 0.0)
+            if remain <= 0:
+                # already satisfied; clean just in case
+                c.execute("DELETE FROM cargo_requests WHERE airport_canon=? AND sanitized_name=?", (ap, nm))
+                closed += 1
+                continue
+            add = min(delivered, remain)
+            credited += add
+            new_ful = round(ful + add, 1)
+            ts = _now_iso_z()
+            c.execute("""
+              UPDATE cargo_requests
+                 SET fulfilled_lb = ?,
+                     updated_at   = ?
+               WHERE airport_canon=? AND sanitized_name=?
+            """, (new_ful, ts, ap, nm))
+            # Fully satisfied? delete the row
+            if new_ful >= req:
+                c.execute("DELETE FROM cargo_requests WHERE airport_canon=? AND sanitized_name=?", (ap, nm))
+                closed += 1
+        # After line deletes, count remaining
+        rem = c.execute("SELECT COUNT(*) FROM cargo_requests WHERE airport_canon=?", (ap,)).fetchone()[0]
+    return {"credited_lb": round(credited, 1), "closed_items": int(closed), "remaining_items": int(rem)}
+
+def cr_apply_manifest_to_requests(airport: str, *, manifest_text: str | None = None, manifest_rows: list[dict] | None = None) -> dict:
+    """
+    Apply a landed flight's cargo against open requests for an airport.
+    - If `manifest_rows` provided, expect [{'name':str,'size_lb':float,'qty':int}, ...]
+    - Else, if `manifest_text` provided, parse via _parse_manifest(...).
+    Returns summary dict from _cr_apply_weights(...).
+    """
+    ensure_cargo_request_tables()
+    ap = canonical_airport_code(airport or "")
+    if not ap:
+        return {"credited_lb": 0.0, "closed_items": 0, "remaining_items": 0}
+    rows = manifest_rows or []
+    if not rows and manifest_text:
+        try:
+            rows = _parse_manifest(manifest_text) or []
+        except Exception:
+            rows = []
+    weights: dict[str, float] = {}
+    for r in rows:
+        nm = cr_sanitize_item(r.get("name", ""))
+        if not nm:
+            continue
+        try:
+            size = float(r.get("size_lb") or 0.0)
+            qty = int(r.get("qty") or 0)
+            w = round(size * qty, 1)
+        except Exception:
+            w = 0.0
+        if w <= 0:
+            continue
+        weights[nm] = round(weights.get(nm, 0.0) + w, 1)
+    return _cr_apply_weights(ap, weights)
+
+def cr_apply_flight_id(flight_id: int) -> dict:
+    """
+    Convenience: look up a flight's destination + manifest and credit requests.
+    Prefers `flight_cargo` rows (direction='out') when present; falls back to
+    parsing `flights.remarks` via _parse_manifest. No-ops if destination missing.
+    """
+    ensure_cargo_request_tables()
+    if not flight_id:
+        return {"credited_lb": 0.0, "closed_items": 0, "remaining_items": 0}
+    with sqlite3.connect(get_db_file()) as c:
+        c.row_factory = sqlite3.Row
+        f = c.execute("""
+          SELECT airfield_landing AS dest, remarks
+            FROM flights WHERE id=? LIMIT 1
+        """, (flight_id,)).fetchone()
+        if not f:
+            return {"credited_lb": 0.0, "closed_items": 0, "remaining_items": 0}
+        dest = (f["dest"] or "").strip().upper()
+        if not dest:
+            return {"credited_lb": 0.0, "closed_items": 0, "remaining_items": 0}
+        # Prefer explicit flight_cargo rows if any exist
+        cargo = c.execute("""
+          SELECT sanitized_name AS name, weight_per_unit AS size_lb, quantity AS qty
+            FROM flight_cargo
+           WHERE flight_id=? AND direction='out'
+        """, (flight_id,)).fetchall()
+        rows = [dict(r) for r in cargo] if cargo else None
+        text = None if rows else (f["remarks"] or "")
+    return cr_apply_manifest_to_requests(dest, manifest_text=text, manifest_rows=rows or [])
 
 def _create_inventory_batch(direction: str, manifest: str, created_at: str | None = None):
     """Insert a batch + items; return batch_id."""

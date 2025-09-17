@@ -11,6 +11,13 @@ except Exception:
     def wargame_finish_ramp_inbound(*args, **kwargs):
         return None
 
+# Cargo-request reconciler — soft import (no-op if unavailable)
+try:
+    from modules.services.jobs import cargo_request_reconciler as _cargo_reconciler_tick
+except Exception:
+    def _cargo_reconciler_tick():
+        return None
+
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
 from modules.utils.common import parse_adv_manifest, guess_category_id_for_name, new_manifest_session_id, sanitize_name
 from app import publish_inventory_event
@@ -461,6 +468,14 @@ def ramp_boss():
             # Close Ramp inbound SLA (arrival was handled)
             if action != 'update_ignored':
                 wargame_finish_ramp_inbound(fid)
+
+                # Fire cargo-request reconciliation immediately so matching
+                # cargo_requests are satisfied right away (in addition to the
+                # background minute job).
+                try:
+                    _cargo_reconciler_tick()
+                except Exception:
+                    pass
 
         # ── at this point we have `fid` of the row we inserted/updated ──
         # fetch it back in full

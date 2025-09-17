@@ -16,7 +16,7 @@ def export_csv():
     try:
         filters = parse_comm_filters(request)
     except Exception:
-        filters = {"window": "24h", "direction": "any", "method": "", "q": ""}
+        filters = {"window": "all", "direction": "any", "method": "", "q": ""}
     csv_text = _generate_communications_csv_text(filters)
     buf = io.BytesIO(csv_text.encode('utf-8-sig'))  # Excel-friendly BOM
     return send_file(buf, mimetype='text/csv', as_attachment=True, download_name='communications.csv')
@@ -351,7 +351,12 @@ def _ics309_context_from_filters(f):
     return ctx
 
 def _ics309_context():
-    return _ics309_context_from_filters(parse_comm_filters(request))
+    # Default to ALL TIME when no explicit ?window= is provided,
+    # so a direct visit to /comms/ics309 also shows full history by default.
+    f = parse_comm_filters(request)
+    if "window" not in request.args or (request.args.get("window") or "").strip() == "":
+        f["window"] = "all"
+    return _ics309_context_from_filters(f)
 
 @bp.get("/comms/ics309")
 def comms_ics309():
@@ -463,7 +468,7 @@ def _row_comm_v2(r: dict) -> list:
 
 def _generate_communications_csv_text(filters: dict | None = None) -> str:
     """Build CSV text for communications.csv (v2 schema, no flight fields)."""
-    f = filters or {"window": "24h", "direction": "any", "method": "", "q": ""}
+    f = filters or {"window": "all", "direction": "any", "method": "", "q": ""}
     rows = _fetch_comm_rows(f, limit=500000)  # generous cap for on-demand export
     out = io.StringIO()
     w = csv.writer(out)
@@ -478,7 +483,7 @@ def export_communications_csv():
     try:
         filters = parse_comm_filters(request)
     except Exception:
-        filters = {"window": "24h", "direction": "any", "method": "", "q": ""}
+        filters = {"window": "all", "direction": "any", "method": "", "q": ""}
     csv_text = _generate_communications_csv_text(filters)
     buf = io.BytesIO(csv_text.encode('utf-8-sig'))  # Excel-friendly BOM
     return send_file(
@@ -561,8 +566,10 @@ def _sql_for_flights_table_filters(f):
     tsx = "substr(REPLACE(IFNULL(timestamp,''),' ','T'),1,19)"
     hours = COMM_WINDOWS[f["window"]]
     if hours is not None:
-        # Use UTC and clip to seconds (avoid lexicographic mismatches)
-        since = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        # Use UTC and subtract the window hours; clip to seconds (avoid lexicographic mismatches)
+        since = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime(
+            "%Y-%m-%dT%H:%M:%S"
+        )
         where.append(f"{tsx} >= ?")
         params.append(since)
     # Direction in flights is 'inbound'/'outbound'; accept 'in'/'out' too.
@@ -632,7 +639,7 @@ def _normalize_flat(s):
     return str(s).replace("\r", " ").replace("\n", " ").strip()
 
 def _generate_flights_csv_text(filters: dict | None = None) -> str:
-    f = filters or {"window": "24h", "direction": "any", "method": "", "q": ""}
+    f = filters or {"window": "all", "direction": "any", "method": "", "q": ""}
     out = io.StringIO()
     headers = _csv_header_flights()
     w = csv.DictWriter(out, fieldnames=headers, extrasaction='ignore')
@@ -828,7 +835,7 @@ def _rows_from_flight_cargo_table(fid: int) -> list[dict]:
     return out
 
 def _generate_flight_cargo_csv_text(filters: dict | None = None) -> str:
-    f = filters or {"window": "24h", "direction": "any", "method": "", "q": ""}
+    f = filters or {"window": "all", "direction": "any", "method": "", "q": ""}
     hours = COMM_WINDOWS[f["window"]]
     since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat() if hours is not None else None
 
@@ -891,7 +898,7 @@ def export_flights_csv():
     try:
         filters = parse_comm_filters(request)
     except Exception:
-        filters = {"window": "24h", "direction": "any", "method": "", "q": ""}
+        filters = {"window": "all", "direction": "any", "method": "", "q": ""}
     csv_text = _generate_flights_csv_text(filters)
     buf = io.BytesIO(csv_text.encode('utf-8'))
     return send_file(buf, mimetype='text/csv', as_attachment=True, download_name='flights.csv')

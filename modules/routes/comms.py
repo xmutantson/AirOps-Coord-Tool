@@ -55,6 +55,11 @@ def _get_operator_label() -> str:
 @bp.route("/comms", methods=["GET"], endpoint="comms_index")
 def comms_index():
     filters = parse_comm_filters(request)
+    # Default to ALL TIME when no explicit ?window= is provided
+    # (overrides any 24h default inside parse_comm_filters on first load).
+    if "window" not in request.args or (request.args.get("window") or "").strip() == "":
+        filters["window"] = "all"
+
     rows = _rows_for_filters(filters, limit=500)
     # decorate a few view fields without mutating originals
     view_rows = []

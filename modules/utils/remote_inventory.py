@@ -26,7 +26,7 @@ INDEXES = [
 # ─────────────────────────────────────────────────────────────────────────────
 import logging
 from typing import List, Dict, Tuple, Optional
-from modules.utils.common import dict_rows, iso8601_ceil_utc, get_preference
+from modules.utils.common import dict_rows, iso8601_ceil_utc, get_preference, sanitize_name
 from datetime import datetime
 import csv
 import io
@@ -589,3 +589,21 @@ def get_layered_remote_rows(airport_canon: str) -> tuple[list[dict], dict]:
 
     meta = {"last_full_at": last_full_at, "per_category": cat_ts}
     return rows, meta
+
+def on_hand_lb_by_name(airport_canon: str) -> dict[str, float]:
+    """
+    Aggregate on-hand total pounds by sanitized item name for an airport,
+    using the layered remote_inventory_rows view.
+    """
+    rows, _ = get_layered_remote_rows(airport_canon)
+    totals: dict[str, float] = {}
+    for r in rows or []:
+        key = sanitize_name(r.get("sanitized_name") or r.get("item") or "")
+        try:
+            tot = float(r.get("total") or r.get("total_weight_lb") or 0.0)
+        except Exception:
+            tot = 0.0
+        if not key or tot <= 0:
+            continue
+        totals[key] = totals.get(key, 0.0) + tot
+    return totals

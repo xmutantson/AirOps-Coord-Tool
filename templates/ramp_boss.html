@@ -465,6 +465,18 @@
         }
       </style>
 
+      <style>
+        /* Step 6: Inventory matchability borders (preview only; no fulfillment) */
+        #adv-lines .adv-chip.match-ok {
+          border: 2px solid #2e7d32 !important;  /* solid green: enough weight in stock */
+          border-radius: 16px;
+        }
+        #adv-lines .adv-chip.match-partial {
+          border: 2px dashed #2e7d32 !important; /* dashed green: some presence but insufficient/unknown weight */
+          border-radius: 16px;
+        }
+      </style>
+
       <!-- local Inbound / Outbound toggle (mirrors the main one) -->
       <div class="radio-toggle adv-dir-toggle" style="margin-bottom:0.5rem;">
         <input type="radio" id="adv-dir-out" name="adv_direction" value="outbound">
@@ -523,6 +535,26 @@
     <div id="rb-feedback-container"></div>
   </div>
 
+  <!-- ───────── Cargo Requests FAB + Drawer ───────── -->
+  <button id="rb-req-fab"
+          class="fab-requests"
+          aria-haspopup="dialog"
+          aria-controls="rb-req-drawer"
+          title="Cargo Requests">
+    🧾
+    <span id="rb-req-badge" class="badge" aria-label="Outstanding requests">0</span>
+  </button>
+  <div id="rb-req-overlay" class="req-overlay" hidden></div>
+  <aside id="rb-req-drawer" class="req-drawer" aria-hidden="true" aria-label="Cargo Requests">
+    <div class="req-drawer-header">
+      <h3 style="margin:0;">Cargo Requests</h3>
+      <button id="rb-req-close" class="req-close" aria-label="Close">✕</button>
+    </div>
+    <div id="rb-req-body" class="req-body">
+      <div class="req-empty">Loading…</div>
+    </div>
+  </aside>
+
   <!-- ───────── Advanced-Manifest Detect Modal ───────── -->
   <div id="adv-detect-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.35);">
     <div style="background:#fff; max-width:700px; margin:8vh auto; padding:1rem; border-radius:10px;">
@@ -535,6 +567,208 @@
       <div id="adv-detect-error" style="color:#b00; margin-top:.5rem; display:none;"></div>
     </div>
   </div>
+
+  <!-- ───────── Cargo Requests Drawer JS (polls, renders, delete hooks) ───────── -->
+  <script>
+  (function cargoRequestsDrawer(){
+    // safe esc
+    const esc = (s)=> String(s ?? '')
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    // header helper (fallback if global xhrHeaders not ready)
+    const localXhrHeaders = (extra={}) => {
+      const token = document.querySelector('input[name="csrf_token"]')?.value || '';
+      const h = {'X-Requested-With':'XMLHttpRequest'};
+      if (token) { h['X-CSRFToken']=token; h['X-CSRF-Token']=token; }
+      return Object.assign(h, extra);
+    };
+    const getHeaders = window.xhrHeaders || localXhrHeaders;
+    const fmtLb = (n)=> `${Math.round(Number(n||0))} lb`;
+    const sum = (arr, pick) => arr.reduce((a,x)=> a + (Number(pick(x))||0), 0);
+    const _norm = s => String(s||'').toLowerCase()
+      .replace(/&/g,'and').replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim();
+
+    // Hub availability (Advanced inventory data) → total pounds by item name
+    function availabilityForNameLb(name){
+      const inv = (window.inventoryAdvancedData || {});
+      const avail = inv.avail || {};
+      const target = _norm(name);
+      let availLb = 0, presence = false, unknownWeight = false;
+      try{
+        for (const cid of Object.keys(avail)){
+          const byItem = avail[cid] || {};
+          for (const raw of Object.keys(byItem)){
+            if (_norm(raw) !== target) continue;
+            const sizes = byItem[raw] || {};
+            for (const sizeKey of Object.keys(sizes)){
+              const qty = Number(sizes[sizeKey] || 0);
+              if (qty <= 0) continue;
+              presence = true;
+              const wpu = Number(sizeKey);
+              if (Number.isFinite(wpu)) availLb += (wpu * qty);
+              else unknownWeight = true;
+            }
+          }
+        }
+      }catch(_){}
+      return { availLb, presence, unknownWeight };
+    }
+
+
+    const fab = document.getElementById('rb-req-fab');
+    const badge = document.getElementById('rb-req-badge');
+    const drawer = document.getElementById('rb-req-drawer');
+    const overlay = document.getElementById('rb-req-overlay');
+    const body = document.getElementById('rb-req-body');
+    const close = document.getElementById('rb-req-close');
+    let drawerOpen = false;
+    function openDrawer(){ drawer.classList.add('open'); drawer.setAttribute('aria-hidden','false'); overlay.hidden=false; drawerOpen=true; fetchSummary(); }
+    function closeDrawer(){ drawer.classList.remove('open'); drawer.setAttribute('aria-hidden','true'); overlay.hidden=true; drawerOpen=false; }
+    // FAB now shows *count of distinct requested items* across all airports
+    function updateBadgeCount(n){ if (badge) badge.textContent = String(Math.max(0, n|0)); }
+
+    fab?.addEventListener('click', openDrawer);
+    close?.addEventListener('click', closeDrawer);
+    // overlay click no longer closes the drawer (non-modal behavior)
+    document.addEventListener('keydown', (e)=>{ if(e.key==='Escape' && drawerOpen) closeDrawer(); });
+
+    function render(summary){
+      const outstandingNames = new Set();
+      // remember which airports were open so polling won't auto-collapse them
+      const previouslyOpen = new Set(
+        Array.from(body.querySelectorAll('details.req-group[open]'))
+             .map(el => el.getAttribute('data-ap') || '')
+      );
+      body.innerHTML = '';
+      const groups = summary?.airports || summary?.groups || [];
+      if (!Array.isArray(groups) || groups.length === 0){
+        body.innerHTML = '<div class="req-empty">No outstanding requests.</div>';
+        updateBadgeCount(0);
+        return;
+      }
+
+      let grandLb = 0;
+      let grandCount = 0;
+      for (const g of groups){
+        const ap = g.airport || g.code || g.id || 'UNKNOWN';
+        const items = Array.isArray(g.items) ? g.items : [];
+        const groupLb = sum(items, it => it.outstanding_lb ?? it.requested_lb ?? 0);
+        const groupCount = items.length;
+        grandLb += groupLb;
+        grandCount += groupCount;
+
+        const det = document.createElement('details');
+        det.className = 'req-group';
+        det.setAttribute('data-ap', ap);
+        det.innerHTML = `
+          <summary class="req-group-h">
+            <div class="req-group-left">
+              <div class="req-group-title">${esc(ap)}</div>
+              <div class="req-group-stats">
+                <span class="req-count">${groupCount} items</span>
+                <span class="req-weight">· ${esc(fmtLb(groupLb))}</span>
+              </div>
+            </div>
+            <div class="req-group-right">
+              <button class="button small" data-action="delete-request-airport" data-airport="${esc(ap)}">Clear Airport</button>
+            </div>
+          </summary>
+          <div class="req-items"></div>
+        `;
+
+        // restore open/closed state
+        if (previouslyOpen.has(ap)) det.open = true;
+
+        const list = det.querySelector('.req-items');
+        if (!items.length){
+          list.innerHTML = '<div class="req-empty">No items</div>';
+        } else {
+          for (const it of items){
+            const nm = it.name ?? it.item ?? it.sanitized_name ?? 'Item';
+            const out = Number(it.outstanding_lb ?? it.requested_lb ?? 0);
+            const req = Number(it.requested_lb ?? out);
+            const row = document.createElement('div');
+            row.className = 'req-row';
+            row.innerHTML = `
+              <div class="req-row-main">
+                <div class="req-row-name">${esc(nm)}</div>
+                <div class="req-row-meta">${esc(fmtLb(out))}${(req && req !== out) ? ` (of ${esc(fmtLb(req))})` : ''}</div>
+              </div>
+              <div class="req-row-actions">
+                <button class="button small" data-action="delete-request-item" data-airport="${esc(ap)}" data-name="${esc(nm)}">Clear Item</button>
+              </div>
+            `;
+            if (out > 0) outstandingNames.add(_norm(nm));
+            // Stock match borders: solid = fully satisfiable now, dashed = partial
+            const { availLb, presence, unknownWeight } = availabilityForNameLb(nm);
+            if (presence){
+              if (unknownWeight || availLb < out) row.classList.add('match-partial');
+              else if (availLb >= out)            row.classList.add('match-ok');
+            }
+            list.appendChild(row);
+          }
+        }
+        body.appendChild(det);
+      }
+      updateBadgeCount(grandCount);
+      // Expose names to Advanced panel and refresh chip borders
+      window.__REQ_NAMES = outstandingNames;
+      if (typeof window.applyMatchingBorders === 'function') window.applyMatchingBorders();
+    }
+
+    async function fetchSummary(){
+      try{
+        const r = await fetch('/inventory/requests/summary', { headers: getHeaders() });
+        if (!r.ok) throw new Error('HTTP '+r.status);
+        const j = await r.json();
+        render(j);
+      }catch(_){
+        if (drawerOpen) body.innerHTML = '<div class="req-empty">Failed to load requests.</div>';
+      }
+    }
+
+    body?.addEventListener('click', async (ev)=>{
+      const btn = ev.target.closest('button[data-action]');
+      if (!btn) return;
+      const act = btn.dataset.action;
+      try{
+        if (act === 'delete-request-airport'){
+          const ap = btn.dataset.airport;
+          await fetch('/inventory/requests/airport', {
+            method:'DELETE',
+            headers: getHeaders({'Content-Type':'application/json'}),
+            body: JSON.stringify({ airport: ap })
+          });
+        } else if (act === 'delete-request-item'){
+          const ap = btn.dataset.airport, nm = btn.dataset.name;
+          await fetch('/inventory/requests/line', {
+            method:'DELETE',
+            headers: getHeaders({'Content-Type':'application/json'}),
+            body: JSON.stringify({ airport: ap, name: nm })
+          });
+        }
+        fetchSummary();
+      }catch(err){
+        console.warn('Request delete failed', err);
+      }
+    });
+
+    // initial + poll
+    fetchSummary();
+    setInterval(fetchSummary, 30000);
+
+    // Advanced panel helper: green border on chips that fulfill a request
+    window.applyMatchingBorders = function(){
+      const chips = document.querySelectorAll('#adv-lines .adv-chip');
+      const set = (window.__REQ_NAMES instanceof Set) ? window.__REQ_NAMES : new Set();
+      chips.forEach(ch => {
+        const nm = _norm(ch.dataset.sanitized || '');
+        if (set.has(nm)) ch.classList.add('fulfill-req');
+        else ch.classList.remove('fulfill-req');
+      });
+    };
+  })();
+  </script>
 
   <!-- ───────────────── Ramp‑Boss main JS (validation, lookup, CW‑tools) ───────────────── -->
   <script>
@@ -1008,6 +1242,7 @@
       // Recompute chip total and bubble totals upward
       try { recalcChipTotal(chip); } catch(_){}
       try { if (window.refreshFromDOM) window.refreshFromDOM(); } catch(_){}
+      try { applyMatchingBorders(); } catch(_){}
     }
 
     // NEW: snapshot-safe effective update (never mutates the stored baseline qty)
@@ -1023,6 +1258,7 @@
       // Recompute chip total and bubble totals upward
       try { recalcChipTotal(chip); } catch(_){}
       try { if (window.refreshFromDOM) window.refreshFromDOM(); } catch(_){}
+      try { applyMatchingBorders(); } catch(_){}
     }
 
     /* ───────── Intercept /nudge responses to update chips immediately ───────── */
@@ -1905,6 +2141,7 @@
     try { await fetchInventory(); } catch(_){}
     try { if (window.refreshFromDOM) window.refreshFromDOM(); } catch(_){}
     try { advDirty = true; advDone.disabled = false; } catch(_){}
+    try { applyMatchingBorders(); } catch(_){}
 
     // Hint message reflecting what we just did
     try {
@@ -1974,7 +2211,125 @@
     }catch(_){}
     AVAIL_INDEX = idx;
     KNOWN_KEYS  = known;
+    try { applyMatchingBorders(); } catch(_){}
   }
+
+  /* ────────────────────────────────────────────────────────────────
+   * Step 6 — Inventory Matching Rules (Green / Green Dashed / Plain)
+   * For each requested item (by sanitized_name):
+   *   • Solid green border   → available_lb ≥ outstanding_lb
+   *   • Dashed green border  → some presence but insufficient, OR weight unknown
+   *   • No border            → no matching item in current inventory
+   * Notes:
+   *   • Preview-only indicator — does not perform fulfillment.
+   *   • Availability sourced from /inventory/_advance_data (inventoryAdvancedData).
+   *   • Outstanding considers the net request on screen (baseline ± Δ).
+   * ──────────────────────────────────────────────────────────────── */
+  function _norm(s){ return String(s||'').toLowerCase().replace(/&/g,'and').replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim(); }
+
+  function _outstandingByNameLbs(){
+    const map = new Map();
+    const chips = document.querySelectorAll('#adv-lines .adv-chip');
+    chips.forEach(ch => {
+      const name = (ch.dataset.sanitized || '').trim();
+      if (!name) return;
+      let wpu = Number(ch.dataset.wpu || NaN);
+      if (!Number.isFinite(wpu)) {
+        const wtxt = ch.querySelector('.chip-wpu')?.textContent || '';
+        const m = wtxt.match(/(\d+(?:\.\d+)?)/);
+        wpu = m ? Number(m[1]) : 0;
+      }
+      let qty = Number(ch.dataset.effective ?? ch.dataset.qty ?? NaN);
+      if (!Number.isFinite(qty)) qty = 0;
+      if (ch.dataset.delta === '1') {
+        const sgn = (ch.dataset.deltaSign === '-1') ? -1 : 1;
+        qty = sgn * qty;
+      }
+      const lbs = wpu * qty;
+      const key = _norm(name);
+      map.set(key, (map.get(key) || 0) + lbs);
+    });
+    // Only "requests" matter → clamp negatives to 0 (net inbound doesn't need stock)
+    for (const [k,v] of map.entries()){
+      map.set(k, Math.max(0, v));
+    }
+    return map;
+  }
+
+  function _availabilityForNameLbs(name){
+    // Sum across categories and sizes: qty * weight_per_unit
+    let availLb = 0;
+    let presence = false;
+    let unknownWeight = false;
+    try{
+      const target = _norm(name);
+      const avail = inventoryAdvancedData?.avail || {};
+      for (const cid of Object.keys(avail)){
+        const byItem = avail[cid] || {};
+        for (const rawName of Object.keys(byItem)){
+          if (_norm(rawName) !== target) continue;
+          const sizes = byItem[rawName] || {};
+          for (const sizeKey of Object.keys(sizes)){
+            const qty = Number(sizes[sizeKey] || 0);
+            if (qty <= 0) continue;
+            presence = true;
+            const wpu = Number(sizeKey);
+            if (Number.isFinite(wpu)) {
+              availLb += (wpu * qty);
+            } else {
+              unknownWeight = true;
+            }
+          }
+        }
+      }
+    }catch(_){}
+    return { availLb, presence, unknownWeight };
+  }
+
+  function applyMatchingBorders(){
+    // Only meaningful for outbound requests; clear borders otherwise.
+    const dirRadio = document.querySelector('input[name="adv_direction"]:checked')
+                   || document.getElementById('adv-dir-out');
+    const isOutbound = !!(dirRadio && dirRadio.value === 'outbound' && dirRadio.checked);
+    const chips = document.querySelectorAll('#adv-lines .adv-chip');
+    const clearAll = () => chips.forEach(ch => { ch.classList.remove('match-ok','match-partial'); });
+    if (!isOutbound) { clearAll(); return; }
+
+    const need = _outstandingByNameLbs();  // Map(normName → lbs)
+    // First, clear everything
+    clearAll();
+    // For each requested name with > 0 lbs outstanding, decide border class
+    for (const [n, outstandingLb] of need.entries()){
+      if (outstandingLb <= 0) continue;
+      const { availLb, presence, unknownWeight } = _availabilityForNameLbs(n);
+      let cls = null;
+      if (!presence) {
+        cls = null;                        // no border
+      } else if (unknownWeight || availLb < outstandingLb) {
+        cls = 'match-partial';             // dashed
+      } else {
+        cls = 'match-ok';                  // solid
+      }
+      // Apply to all chips of this name (across sizes)
+      document.querySelectorAll('#adv-lines .adv-chip').forEach(ch => {
+        const cName = _norm(ch.dataset.sanitized || '');
+        if (cName !== n) return;
+        if (!cls) {
+          ch.classList.remove('match-ok','match-partial');
+        } else {
+          ch.classList.remove('match-ok','match-partial');
+          ch.classList.add(cls);
+        }
+      });
+    }
+  }
+
+  // Run once on load (initial snapshot), then subsequent calls are triggered by:
+  //  • stock refresh → rebuildAvailIndex(), and
+  //  • chip edits/scan adds/removes → calls sprinkled above.
+  document.addEventListener('DOMContentLoaded', () => {
+    try { rebuildAvailIndex(); applyMatchingBorders(); } catch(_){}
+  });
 
   /* ───────── Scanner glue (build/edit outbound manifest) ───────── */
   (function setupScanner(){
@@ -2330,6 +2685,7 @@
       } catch(_) {}
       /* user has made a change via scanner → allow Done */
       if (typeof advDone !== 'undefined'){ advDone.disabled = false; }
+      try { applyMatchingBorders(); } catch(_){}
     }
 
     async function refreshChips(){
@@ -3237,6 +3593,76 @@
 
   // Also restore on explicit “Back” (already closes the panel)
   advBack.addEventListener('click', __rbRestoreLiveRefreshIfSuppressed, { once:false });
+</script>
+
+<script>
+(function installRequestsDeletionUX(){
+  if (window.__REQ_DEL_INSTALLED) return;
+  window.__REQ_DEL_INSTALLED = true;
+
+  function airportLabel(a){ return String(a||'').trim().toUpperCase(); }
+  function lineLabel(n,a){ return `${String(n||'').trim()} at ${airportLabel(a)}`; }
+
+  async function deleteLine(airport, name, rowEl){
+    const payload = {
+      airport: airport,
+      name: String(name||'').trim(),
+      sanitized_name: (rowEl?.dataset?.sanitized || '').trim() || String(name||'').trim()
+    };
+    const res = await fetch('/inventory/requests/line', {
+      method: 'DELETE',
+      headers: xhrHeaders({'Content-Type':'application/json'}),
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok){
+      try { const j = await res.json(); showToast(j?.error || 'Delete failed', 'error'); } catch(_){ showToast('Delete failed','error'); }
+      return false;
+    }
+    // Optimistic UI update: remove only this row
+    if (rowEl) rowEl.remove();
+    showToast('Request deleted', 'success');
+    return true;
+  }
+
+  async function deleteAirport(airport){
+    const res = await fetch('/inventory/requests/airport', {
+      method: 'DELETE',
+      headers: xhrHeaders({'Content-Type':'application/json'}),
+      body: JSON.stringify({ airport })
+    });
+    if (!res.ok){
+      try { const j = await res.json(); showToast(j?.error || 'Delete failed', 'error'); } catch(_){ showToast('Delete failed','error'); }
+      return false;
+    }
+    // Optimistic UI update: remove all rows for this airport (if the list is on screen)
+    const sel = `[data-request-row][data-airport="${airportLabel(airport)}"]`;
+    document.querySelectorAll(sel).forEach(el => el.remove());
+    showToast(`All requests for ${airportLabel(airport)} deleted`, 'success');
+    return true;
+  }
+
+  document.addEventListener('click', async (e) => {
+    const btnLine = e.target.closest('[data-action="delete-request-line"]');
+    if (btnLine){
+      e.preventDefault();
+      const airport = btnLine.dataset.airport || '';
+      const name    = btnLine.dataset.sanitized || btnLine.dataset.name || '';
+      if (!airport || !name){ showToast('Missing data for delete', 'error'); return; }
+      if (!confirm(`Delete request for ${name} at ${airportLabel(airport)}?`)) return;
+      const rowEl = btnLine.closest('[data-request-row]') || null;
+      await deleteLine(airport, name, rowEl);
+      return;
+    }
+    const btnAirport = e.target.closest('[data-action="delete-request-airport"]');
+    if (btnAirport){
+      e.preventDefault();
+      const airport = btnAirport.dataset.airport || '';
+      if (!airport){ showToast('Missing airport', 'error'); return; }
+      if (!confirm(`Delete all requests for ${airportLabel(airport)}?`)) return;
+      await deleteAirport(airport);
+    }
+  });
+})();
 </script>
 
 <style>

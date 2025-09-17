@@ -20,8 +20,8 @@ app = current_app  # legacy shim (matches other route files)
 _ALLOWED_WINDOWS = {"12h", "24h", "72h", "all"}
 
 def _window_arg() -> str:
-    w = (request.args.get("window") or request.form.get("window") or "24h").lower()
-    return w if w in _ALLOWED_WINDOWS else "24h"
+    w = (request.args.get("window") or request.form.get("window") or "all").lower()
+    return w if w in _ALLOWED_WINDOWS else "all"
 
 @bp.before_app_request
 def _ensure_tables_once():
@@ -177,6 +177,25 @@ def _ics214_context(window: str):
     since_iso = _iso(since)
     now_iso   = _iso(now)
 
+    # Derive a data-driven operational period when window == 'all'
+    # (otherwise the From/To header looks blank or misleading).
+    op_from_dt = since
+    op_to_dt   = now
+    if since is None:
+        try:
+            rng = dict_rows("""
+                SELECT MIN(start_utc) AS min_start,
+                       MAX(COALESCE(end_utc, start_utc)) AS max_end
+                  FROM staff_shifts
+            """)
+            if rng:
+                smin = _parse_iso(rng[0].get("min_start"))
+                smax = _parse_iso(rng[0].get("max_end"))
+                if smin: op_from_dt = smin
+                if smax: op_to_dt   = smax
+        except Exception:
+            pass
+
     # Window predicate for "resources touched this window" (unchanged: overlap)
     where_sql = ""
     params: tuple = ()
@@ -271,10 +290,10 @@ def _ics214_context(window: str):
 
     ctx = {
         "incident_name": incident_name,
-        "op_from_date": _fmt_date(since),
-        "op_from_time": _fmt_time(since),
-        "op_to_date":   _fmt_date(now),
-        "op_to_time":   _fmt_time(now),
+        "op_from_date": _fmt_date(op_from_dt),
+        "op_from_time": _fmt_time(op_from_dt),
+        "op_to_date":   _fmt_date(op_to_dt),
+        "op_to_time":   _fmt_time(op_to_dt),
         "name_field": name_field,
         "ics_position": ics_position,
         "home_agency": home_agency,

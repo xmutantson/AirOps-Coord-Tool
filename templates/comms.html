@@ -59,7 +59,7 @@
   <div>
     <label for="window">Window</label><br>
     <select id="window" name="window">
-      {% set win = (filters.window or '24h') %}
+      {% set win = (filters.window or 'all') %}
       <option value="12h" {% if win=='12h' %}selected{% endif %}>Last 12h</option>
       <option value="24h" {% if win=='24h' %}selected{% endif %}>Last 24h</option>
       <option value="72h" {% if win=='72h' %}selected{% endif %}>Last 72h</option>

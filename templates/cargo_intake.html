@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% block title %}Cargo Intake{% endblock %}
+{% block content %}
+<h2>Cargo Intake</h2>
+<div class="container">
+  <p style="color:#666; margin:.25rem 0 .75rem;">
+    Works offline for data entry. Network required only when you click <strong>Submit</strong>.
+  </p>
+
+  <!-- Standalone, SAME structure & behavior as inbox modal -->
+  <div class="card" style="padding:1rem;">
+    <div style="display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; margin-bottom:.5rem;">
+      <label for="ci-airport" style="font-weight:600;">Airport</label>
+      <input id="ci-airport" class="force-upper" placeholder="KAAA" style="min-width:12ch; text-transform:uppercase;">
+    </div>
+
+    <div>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin:.25rem 0 .5rem;">
+        <label style="font-weight:600;">Items</label>
+        <button type="button" id="ci-add-row" class="button small">+ Add item</button>
+      </div>
+      <div id="ci-rows" style="display:flex; flex-direction:column; gap:.35rem;"></div>
+    </div>
+
+    <div id="ci-status" style="margin-top:.35rem; font-size:.92em; color:#2b6; display:none;"></div>
+
+    <div style="display:flex; justify-content:flex-end; gap:.5rem; margin-top:.6rem;">
+      <button type="button" id="ci-submit" class="btn-primary">Submit</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// Optional source email id from server (Jinja inject)
+const SERVER_SOURCE_ID = {{ (source_email_id|tojson) if source_email_id is not none else 'null' }};
+
+(function(){
+  /* ───── Helpers identical to inbox modal ───── */
+  function canonAirport(s){
+    const v = String(s||'').trim().toUpperCase();
+    if (v.length===4 && (v.startsWith('K')||v.startsWith('C'))) return v;
+    if (v.length===3) return 'K' + v;
+    return v;
+  }
+  function toPounds(val, unit){
+    const v = Number(val)||0;
+    const u = String(unit||'lb').toLowerCase();
+    if (u === 'kg') return v * 2.20462;
+    if (u === 'oz') return v / 16.0;
+    return v;
+  }
+  function addRow(container, def){
+    const row = document.createElement('div');
+    row.className = 'wl-intake-row';
+    row.style.display = 'flex';
+    row.style.alignItems = 'center';
+    row.style.gap = '.5rem';
+    row.innerHTML = `
+      <input class="wl-name" placeholder="item (e.g., water)" style="flex:1 1 40%;">
+      <input class="wl-weight" type="number" step="0.1" min="0" placeholder="0" style="flex:0 0 25%;">
+      <select class="wl-unit" style="flex:0 0 20%;">
+        <option value="lb">lb</option>
+        <option value="kg">kg</option>
+        <option value="oz">oz</option>
+      </select>
+      <button type="button" class="button small wl-del" title="Remove">×</button>
+    `;
+    container.appendChild(row);
+    if (def){
+      row.querySelector('.wl-name').value = def.name || '';
+      row.querySelector('.wl-weight').value = def.value != null ? String(def.value) : '';
+      row.querySelector('.wl-unit').value = (def.unit || 'lb').toLowerCase();
+    }
+    row.querySelector('.wl-del').addEventListener('click', ()=> {
+      row.remove();
+      if (!container.querySelector('.wl-intake-row')) addRow(container);
+    });
+    return row;
+  }
+  function resetRows(container){ container.innerHTML = ''; }
+  function gatherItems(container){
+    const rows = Array.from(container.querySelectorAll('.wl-intake-row'));
+    const items = [];
+    for (const r of rows){
+      const name = (r.querySelector('.wl-name')?.value || '').trim();
+      const val  = parseFloat(r.querySelector('.wl-weight')?.value || '0');
+      const unit = (r.querySelector('.wl-unit')?.value || 'lb').toLowerCase();
+      const lbs  = toPounds(val, unit);
+      if (!name || !(lbs > 0)) continue;
+      items.push({ name, weight_lb: Math.round(lbs*10)/10 });
+    }
+    return items;
+  }
+  function forceUpperInput(el){
+    el.addEventListener('input', () => {
+      const p = el.selectionStart;
+      el.value = el.value.toUpperCase();
+      try{ el.setSelectionRange(p,p); }catch(_){}
+    });
+  }
+
+  /* ───── Page wiring ───── */
+  const apInput   = document.getElementById('ci-airport');
+  const rowsWrap  = document.getElementById('ci-rows');
+  const addRowBtn = document.getElementById('ci-add-row');
+  const submitBtn = document.getElementById('ci-submit');
+  const statusEl  = document.getElementById('ci-status');
+
+  forceUpperInput(apInput);
+
+  function parseLineToParams(line){
+    // Accept "name: 50", "name: 50 lb", "name - 50 kg", etc.
+    const m = String(line||'').match(/^\s*([A-Za-z][\w\s\-\/]{0,80}?)\s*[:\-–]\s*(\d+(?:\.\d+)?)\s*(lb|lbs|kg|oz)?\s*$/i);
+    if (!m) return null;
+    const name = m[1].trim().replace(/\s+/g,' ');
+    const val  = parseFloat(m[2]);
+    const unitRaw = (m[3]||'lb').toLowerCase();
+    const unit = unitRaw === 'lbs' ? 'lb' : unitRaw;
+    return { name, value: val, unit };
+  }
+
+  function loadFromQueryAndDraft(){
+    resetRows(rowsWrap);
+    addRow(rowsWrap); // start with one row
+
+    const q = new URLSearchParams(location.search);
+    const qAirport = (q.get('airport') || '').trim();
+    if (qAirport) apInput.value = qAirport.toUpperCase();
+
+    const qItems = q.get('items');
+    if (qItems){
+      resetRows(rowsWrap);
+      for (const line of String(qItems).split(/\r?\n/)) {
+        const p = parseLineToParams(line);
+        if (p) addRow(rowsWrap, p);
+      }
+    }
+
+    // Step-7 style session draft compatibility
+    try{
+      const raw = sessionStorage.getItem('cargo_intake_draft');
+      if (raw){
+        const draft = JSON.parse(raw);
+        if (!apInput.value && draft?.airport) apInput.value = String(draft.airport||'').toUpperCase();
+        if (Array.isArray(draft?.items)){
+          resetRows(rowsWrap);
+          for (const line of draft.items){
+            const p = parseLineToParams(line);
+            if (p) addRow(rowsWrap, p);
+          }
+        }
+        if (!window.__ci_source_id && draft?.message_id) window.__ci_source_id = String(draft.message_id);
+      }
+    }catch(_){}
+
+    // Prefer server-injected source id; else ?source_email_id= / ?message_id=
+    if (SERVER_SOURCE_ID) window.__ci_source_id = SERVER_SOURCE_ID;
+    const qsSource = (q.get('source_email_id') || q.get('message_id') || '').trim();
+    if (qsSource) window.__ci_source_id = qsSource;
+  }
+
+  async function submit(){
+    const airport = canonAirport(apInput?.value || '');
+    const items   = gatherItems(rowsWrap);
+    if (!airport){ alert('Airport is required.'); apInput?.focus(); return; }
+    if (!items.length){ alert('Add at least one item with a positive weight.'); return; }
+    const payload = { airport, items };
+    if (window.__ci_source_id) payload.source_email_id = String(window.__ci_source_id);
+    const resp = await fetch('/inventory/requests/intake', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    let j = {};
+    try { j = await resp.json(); } catch(_){}
+    if (!resp.ok || !j.ok){
+      alert(j.error || 'Failed to save cargo intake.');
+      return;
+    }
+    if (statusEl){
+      statusEl.textContent = `Saved. ${(j.added||items.length)} item(s) recorded for ${airport}.`;
+      statusEl.style.display = '';
+      setTimeout(()=>{ statusEl.style.display='none'; }, 3500);
+    }
+    // Clear rows for another entry
+    resetRows(rowsWrap);
+    addRow(rowsWrap);
+    apInput.focus();
+    // Clear the session draft since we successfully saved
+    try{ sessionStorage.removeItem('cargo_intake_draft'); }catch(_){}
+  }
+
+  addRowBtn?.addEventListener('click', ()=> addRow(rowsWrap));
+  submitBtn?.addEventListener('click', submit);
+  window.addEventListener('keydown', (ev)=>{
+    if (ev.key === 'Enter' && (document.activeElement?.classList?.contains('wl-weight'))) {
+      // convenience: Enter in weight field submits
+      ev.preventDefault(); submit();
+    }
+  });
+
+  // Initial prefill
+  loadFromQueryAndDraft();
+})();
+</script>
+{% endblock %}

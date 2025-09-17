@@ -10,6 +10,16 @@
       Hide parsable
     </label>
     <small style="color:#666;">(AOCT CARGO QUERY / STATUS / REPLY, AIR OPS:)</small>
+    <!-- Mark-all-read (ignores parsing filter; affects cookie-based read state) -->
+    <button
+      id="wlMarkAllRead"
+      class="btn-secondary" title="Mark entire inbox as read">Mark all read</button>
+    <!-- Global Cargo Intake (aligned right) -->
+    <button
+      id="wlOpenGlobalIntake"
+      class="btn-secondary"
+      style="margin-left:auto;"
+      title="Open Cargo Intake form">Cargo Intake</button>
   </div>
   <table id="wl-inbox-table" class="wg-inbox">
     <thead>
@@ -29,6 +39,7 @@
 <dialog id="winlinkMsgDialog" class="wg-modal" aria-modal="true">
   <form method="dialog" class="email-modal">
     <div id="winlinkModalDrag" class="wg-modal-header">
+      <button type="button" id="btnCargoIntake" class="wg-modal-action" title="Toggle Cargo Intake form for this message">Cargo Intake</button>
       <button type="button" id="winlinkModalClose" class="wg-modal-close" aria-label="Close">✕</button>
     </div>
     <div class="wg-modal-body email-content">
@@ -37,7 +48,56 @@
         <span id="winlinkModalSender"></span>
         &nbsp;·&nbsp;<span id="winlinkModalTimestamp"></span>
       </div>
+
+      <!-- Cargo Intake Prefill (STRUCTURED) — sits ABOVE the email body; toggled by the header button -->
+      <div id="wl-intake-panel" style="display:none; margin:.5rem 0 .75rem; border:1px solid #ddd; padding:.75rem; border-radius:.4rem;">
+        <h4 style="margin:.25rem 0 .5rem;">Cargo Intake Form</h4>
+        <div style="display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; margin-bottom:.5rem;">
+          <label for="wl-intake-airport" style="font-weight:600;">Airport</label>
+          <input id="wl-intake-airport" class="force-upper" placeholder="KAAA" style="min-width:12ch;">
+          <small id="wl-intake-airport-hint" style="color:#b25500; display:none;">airport not found; please enter manually</small>
+        </div>
+        <div>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin:.25rem 0 .5rem;">
+            <label style="font-weight:600;">Items</label>
+            <button type="button" id="wl-intake-add-row" class="button small">+ Add item</button>
+          </div>
+          <div id="wl-intake-rows" style="display:flex; flex-direction:column; gap:.35rem;"></div>
+        </div>
+        <div id="wl-intake-status" style="margin-top:.35rem; font-size:.92em; color:#2b6; display:none;"></div>
+        <div style="display:flex; justify-content:flex-end; gap:.5rem; margin-top:.6rem;">
+          <button type="button" id="wl-intake-submit" class="btn-primary">Submit Cargo Intake</button>
+        </div>
+      </div>
+
       <pre id="winlinkModalBody" class="wg-modal-pre"></pre>
+    </div>
+  </form>
+</dialog>
+
+<!-- Global (header) Cargo Intake dialog -->
+<dialog id="wlGlobalIntakeDialog" class="wg-modal" aria-modal="true">
+  <form method="dialog" class="email-modal">
+    <div class="wg-modal-header">
+      <h3 style="margin:0;">Cargo Intake</h3>
+      <button type="button" id="wlGlobalClose" class="wg-modal-close" aria-label="Close">✕</button>
+    </div>
+    <div class="wg-modal-body">
+      <div style="display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; margin-bottom:.5rem;">
+        <label for="wl-g-airport" style="font-weight:600;">Airport</label>
+        <input id="wl-g-airport" class="force-upper" placeholder="KAAA" style="min-width:12ch;">
+      </div>
+      <div>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin:.25rem 0 .5rem;">
+          <label style="font-weight:600;">Items</label>
+          <button type="button" id="wl-g-add-row" class="button small">+ Add item</button>
+        </div>
+        <div id="wl-g-rows" style="display:flex; flex-direction:column; gap:.35rem;"></div>
+      </div>
+      <div id="wl-g-status" style="margin-top:.35rem; font-size:.92em; color:#2b6; display:none;"></div>
+      <div style="display:flex; justify-content:flex-end; gap:.5rem; margin-top:.6rem;">
+        <button type="button" id="wl-g-submit" class="btn-primary">Submit Cargo Intake</button>
+      </div>
     </div>
   </form>
 </dialog>
@@ -100,10 +160,40 @@ function applyReadState(){
   });
 }
 
+/* Mark-all-read across filters:
+   - Saves current 'hide_parsable' cookie
+   - Fetches IDs with hide_parsable=no and hide_parsable=yes
+   - Unions IDs, writes WL read cookie, restores filter, refreshes table */
+async function markAllReadAcrossFilters(){
+  const prev = getCookie('hide_parsable') || 'no';
+  async function fetchIdsFor(flag){
+    // Flip cookie so backend (if it uses it) returns desired set
+    setCookie('hide_parsable', flag);
+    const r = await fetch('/winlink/inbox.json', { cache:'no-store', credentials:'same-origin' });
+    const arr = await r.json();
+    return Array.isArray(arr) ? arr.map(m => +m.id).filter(Number.isFinite) : [];
+  }
+  const ids = new Set();
+  try {
+    for (const id of await fetchIdsFor('no')) ids.add(id);
+  } catch(_) {}
+  try {
+    for (const id of await fetchIdsFor('yes')) ids.add(id);
+  } catch(_) {}
+  // Restore user preference
+  setCookie('hide_parsable', prev);
+  // Merge into WL read-cookie
+  let ranges = parseRanges(getCookie(WL_COOKIE) || '');
+  for (const id of ids) { ranges = addId(ranges, id); }
+  setCookie(WL_COOKIE, encodeRanges(ranges));
+  // Update UI and reload current view
+  applyReadState();
+  try { await loadInbox(); } catch(_){}
+}
 
+/* ───── Inbox loading ───────────────────────────────────────────── */
 let wlMsgs = [];
 async function loadInbox() {
-  // Server looks at cookie and optional query param; cookie is enough here.
   const resp = await fetch('/winlink/inbox.json');
   wlMsgs = await resp.json();
   const tb = document.querySelector('#wl-inbox-table tbody');
@@ -126,21 +216,134 @@ async function loadInbox() {
 loadInbox();
 setInterval(loadInbox, 30000);
 
+/* ───── Shared helpers ─────────────────────────────────────────── */
+function dlgOpen(d){ if (d && d.showModal) d.showModal(); else d?.setAttribute('open','open'); }
+function dlgClose(d){ if (d && d.close) d.close(); else d?.removeAttribute('open'); }
+function centerDialogEl(d){
+  if (!d) return;
+  d.style.left = '50%';
+  d.style.top = '50%';
+  d.style.transform = 'translate(-50%, -50%)';
+}
+function canonCall(s){
+  return (String(s||'').split(/[<\s@]/)[0] || '').trim().toUpperCase();
+}
+function canonAirport(s){
+  const v = String(s||'').trim().toUpperCase();
+  if (v.length===4 && (v.startsWith('K')||v.startsWith('C'))) return v;
+  if (v.length===3) return 'K' + v;
+  return v;
+}
+function toPounds(val, unit){
+  const v = Number(val)||0;
+  const u = String(unit||'lb').toLowerCase();
+  if (u === 'kg') return v * 2.20462;
+  if (u === 'oz') return v / 16.0;
+  return v;
+}
+function addRow(container, def){
+  const row = document.createElement('div');
+  row.className = 'wl-intake-row';
+  row.style.display = 'flex';
+  row.style.alignItems = 'center';
+  row.style.gap = '.5rem';
+  row.innerHTML = `
+    <input class="wl-name" placeholder="item (e.g., water)" style="flex:1 1 40%;">
+    <input class="wl-weight" type="number" step="0.1" min="0" placeholder="0" style="flex:0 0 25%;">
+    <select class="wl-unit" style="flex:0 0 20%;">
+      <option value="lb">lb</option>
+      <option value="kg">kg</option>
+      <option value="oz">oz</option>
+    </select>
+    <button type="button" class="button small wl-del" title="Remove">×</button>
+  `;
+  container.appendChild(row);
+  if (def){
+    row.querySelector('.wl-name').value = def.name || '';
+    row.querySelector('.wl-weight').value = def.value != null ? String(def.value) : '';
+    row.querySelector('.wl-unit').value = (def.unit || 'lb').toLowerCase();
+  }
+  row.querySelector('.wl-del').addEventListener('click', ()=> {
+    row.remove();
+    if (!container.querySelector('.wl-intake-row')) addRow(container);
+  });
+  return row;
+}
+function resetRows(container){ container.innerHTML = ''; }
+function gatherItems(container){
+  const rows = Array.from(container.querySelectorAll('.wl-intake-row'));
+  const items = [];
+  for (const r of rows){
+    const name = (r.querySelector('.wl-name')?.value || '').trim();
+    const val  = parseFloat(r.querySelector('.wl-weight')?.value || '0');
+    const unit = (r.querySelector('.wl-unit')?.value || 'lb').toLowerCase();
+    const lbs  = toPounds(val, unit);
+    if (!name || !(lbs > 0)) continue;
+    items.push({ name, weight_lb: Math.round(lbs*10)/10 });
+  }
+  return items;
+}
+async function submitIntake(scopeEl, opts){
+  const apEl = scopeEl.querySelector('input.force-upper');
+  const rowsEl = scopeEl.querySelector('#' + (scopeEl.id === 'wlGlobalIntakeDialog' ? 'wl-g-rows' : 'wl-intake-rows'));
+  const statusEl = scopeEl.querySelector('#' + (scopeEl.id === 'wlGlobalIntakeDialog' ? 'wl-g-status' : 'wl-intake-status'));
+  const airport = canonAirport(apEl?.value || '');
+  const items = gatherItems(rowsEl);
+  if (!airport){ alert('Airport is required.'); apEl?.focus(); return; }
+  if (!items.length){ alert('Add at least one item with a positive weight.'); return; }
+  const payload = { airport, items };
+  if (opts?.source_email_id) payload.source_email_id = String(opts.source_email_id);
+  const resp = await fetch('/inventory/requests/intake', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(payload)
+  });
+  let j = {};
+  try { j = await resp.json(); } catch(_){}
+  if (!resp.ok || !j.ok){
+    alert(j.error || 'Failed to save cargo intake.');
+    return;
+  }
+  // Inline, non-blocking status update instead of alert()
+  if (statusEl){
+    statusEl.textContent = `Saved. ${(j.added||items.length)} item(s) recorded for ${airport}.`;
+    statusEl.style.display = '';
+    setTimeout(()=>{ statusEl.style.display='none'; }, 3500);
+  }
+  // Clear rows for another entry, keep scope open
+  resetRows(rowsEl);
+  addRow(rowsEl);
+  apEl.focus();
+}
+
+/* ───── Page wiring ─────────────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded', function () {
-  // Initialize “Hide parsable” toggle from cookie/template
+  // “Hide parsable” toggle
   const hideToggle = document.getElementById('hideParsableToggle');
   const initial = (getCookie('hide_parsable') || ('{{ "yes" if hide_parsable else "no" }}')) === 'yes';
   hideToggle.checked = initial;
   hideToggle.addEventListener('change', () => {
     setCookie('hide_parsable', hideToggle.checked ? 'yes' : 'no');
-    // Optionally reflect state in URL for shareable link (no reload)
     const url = new URL(location.href);
     url.searchParams.set('hide_parsable', hideToggle.checked ? '1' : '0');
     history.replaceState({}, '', url);
-    loadInbox();   // re-fetch with new cookie in place
+    loadInbox();
   });
 
-  // Modal controls
+  // “Mark all read” — covers visible and hidden (parsable) emails
+  const markAllBtn = document.getElementById('wlMarkAllRead');
+  markAllBtn?.addEventListener('click', async () => {
+    const origText = markAllBtn.textContent;
+    markAllBtn.disabled = true;
+    markAllBtn.textContent = 'Marking…';
+    try { await markAllReadAcrossFilters(); }
+    finally {
+      markAllBtn.disabled = false;
+      markAllBtn.textContent = origText;
+    }
+  });
+
+  // Modal controls (message)
   const dlg      = document.getElementById('winlinkMsgDialog');
   const subj     = document.getElementById('winlinkModalSubject');
   const body     = document.getElementById('winlinkModalBody');
@@ -149,7 +352,21 @@ document.addEventListener('DOMContentLoaded', function () {
   const sender   = document.getElementById('winlinkModalSender');
   const ts       = document.getElementById('winlinkModalTimestamp');
 
-  // Open modal and fill content
+  // Inline intake elements
+  const panel       = document.getElementById('wl-intake-panel');
+  const apInput     = document.getElementById('wl-intake-airport');
+  const apHint      = document.getElementById('wl-intake-airport-hint');
+  const rowsWrap    = document.getElementById('wl-intake-rows');
+  const addRowBtn   = document.getElementById('wl-intake-add-row');
+  const submitBtn   = document.getElementById('wl-intake-submit');
+
+  function resetInlineIntake() {
+    panel.style.display = 'none';
+    rowsWrap.innerHTML = '';
+    apInput.value = '';
+    apHint.style.display = 'none';
+  }
+
   function openMsgModal(msg) {
     subj.textContent   = msg.subject || '(no subject)';
     body.textContent   = msg.body || '(No message body)';
@@ -158,6 +375,7 @@ document.addEventListener('DOMContentLoaded', function () {
     dlg.style.left = '50%';
     dlg.style.top  = '50%';
     dlg.style.transform = 'translate(-50%, -50%)';
+    resetInlineIntake(); // collapsed by default each time
     if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', 'open');
     window.__wlModalOpen = true;
   }
@@ -178,6 +396,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const msg = wlMsgs.find(m => String(m.id) === String(link.dataset.msgId));
     if (msg) {
       openMsgModal(msg);
+      window.__wlCurrentMsg = msg;  // cache for Cargo Intake prefill
       const row = link.closest('tr[data-id]');
       markRead(msg.id, row);
     }
@@ -219,6 +438,120 @@ document.addEventListener('DOMContentLoaded', function () {
   })();
 
   applyReadState();
+
+  // ───── Reverse mapping for airport prefill ─────
+  let WL_MAPPINGS = null; // { airport_to_call:{}, call_to_airport:{} }
+  async function loadMappings(){
+    if (WL_MAPPINGS) return WL_MAPPINGS;
+    try{
+      const r = await fetch('/winlink/mappings.json', { headers: { 'X-Requested-With':'XMLHttpRequest' } });
+      if (r.ok) WL_MAPPINGS = await r.json();
+    }catch(_){}
+    WL_MAPPINGS = WL_MAPPINGS || { airport_to_call:{}, call_to_airport:{} };
+    return WL_MAPPINGS;
+  }
+  function guessAirportFromSender(sender, maps){
+    const call = canonCall(sender);
+    const m = (maps?.call_to_airport || {});
+    if (call && m[call]) return { airport: m[call], found:true };
+    const lo = call.toLowerCase();
+    for (const k of Object.keys(m)){
+      if (k === call || k.toLowerCase() === lo) return { airport: m[k], found:true };
+    }
+    return { airport:'', found:false };
+  }
+  // Extractor: "<name>: <num> [lb|kg|oz]"
+  function extractStructuredItemsFromBody(txt){
+    const out = [];
+    const lines = String(txt||'').split(/\r?\n/);
+    for (const ln of lines){
+      const m = ln.match(/^\s*([A-Za-z][\w\s\-\/]{0,80}?)\s*:\s*(\d+(?:\.\d+)?)\s*(lb|lbs|kg|oz)?\s*$/i);
+      if (!m) continue;
+      const name = m[1].trim().replace(/\s+/g,' ');
+      const val  = parseFloat(m[2]);
+      const unitRaw = (m[3]||'lb').toLowerCase();
+      // map 'lbs' -> 'lb' to match the <select> options
+      const unit = unitRaw === 'lbs' ? 'lb' : unitRaw;
+      if (!name || !Number.isFinite(val)) continue;
+      out.push({ name, value: val, unit });
+    }
+    return out;
+  }
+
+  // ───── Inline intake toggle + submit ─────
+  const intakeBtn = document.getElementById('btnCargoIntake');
+  intakeBtn?.addEventListener('click', async () => {
+    const msg = window.__wlCurrentMsg || {};
+    // Toggle
+    if (panel.style.display === 'none' || panel.style.display === ''){
+      const maps = await loadMappings();
+      const { airport, found } = guessAirportFromSender(msg.sender || msg.callsign || '', maps);
+      apInput.value = airport || '';
+      apHint.style.display = found ? 'none' : '';
+      resetRows(rowsWrap);
+      const rows = extractStructuredItemsFromBody(msg.body || '');
+      if (rows.length){
+        for (const r of rows) addRow(rowsWrap, r);
+      } else {
+        addRow(rowsWrap);
+      }
+      panel.style.display = '';
+      setTimeout(()=> (airport && found ? rowsWrap.querySelector('.wl-name') : apInput)?.focus(), 0);
+    } else {
+      panel.style.display = 'none';
+    }
+  });
+  addRowBtn?.addEventListener('click', ()=> addRow(rowsWrap));
+  submitBtn?.addEventListener('click', ()=> submitIntake(panel, { source_email_id: (window.__wlCurrentMsg?.id || null) }));
+
+  // ───── Global (header) Cargo Intake modal wiring ─────
+  const globalIntakeBtn = document.getElementById('wlOpenGlobalIntake');
+  const gDlg = document.getElementById('wlGlobalIntakeDialog');
+  const gClose = document.getElementById('wlGlobalClose');
+  const gAirport = document.getElementById('wl-g-airport');
+  const gRows = document.getElementById('wl-g-rows');
+  const gAddRow = document.getElementById('wl-g-add-row');
+  const gSubmit = document.getElementById('wl-g-submit');
+  const gStatus = document.getElementById('wl-g-status');
+
+  globalIntakeBtn?.addEventListener('click', () => {
+    resetRows(gRows); addRow(gRows); // start with one empty row
+    gAirport.value = '';
+    gStatus.style.display = 'none';
+    // Center like the message modal and open
+    centerDialogEl(gDlg);
+    dlgOpen(gDlg);
+  });
+  gClose?.addEventListener('click', ()=> dlgClose(gDlg));
+  gAddRow?.addEventListener('click', ()=> addRow(gRows));
+  gSubmit?.addEventListener('click', ()=> submitIntake(gDlg));
+
+  // Make Global Intake dialog draggable using its header (parity with message modal)
+  (function enableGlobalIntakeDrag(){
+    if (!gDlg) return;
+    const handle = gDlg.querySelector('.wg-modal-header');
+    if (!handle) return;
+    let dragging = false, startX = 0, startY = 0, startLeft = 0, startTop = 0;
+    handle.addEventListener('mousedown', (ev) => {
+      const box = gDlg.getBoundingClientRect();
+      // convert from centered transform to absolute px before dragging
+      gDlg.style.left = box.left + 'px';
+      gDlg.style.top  = box.top  + 'px';
+      gDlg.style.transform = '';
+      dragging = true;
+      startLeft = box.left; startTop = box.top;
+      startX = ev.clientX; startY = ev.clientY;
+      ev.preventDefault();
+    });
+    window.addEventListener('mousemove', (ev) => {
+      if (!dragging) return;
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      gDlg.style.left = (startLeft + dx) + 'px';
+      gDlg.style.top  = (startTop  + dy) + 'px';
+    });
+    window.addEventListener('mouseup', () => { dragging = false; });
+  })();
 });
 </script>
 {% endblock %}

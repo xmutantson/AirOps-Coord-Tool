@@ -141,6 +141,10 @@ main.container {
   z-index: 9000;
   display: none; /* Shown when .open */
 }
+/* When JS toggles the dropdown */
+#nav-dropdown.open {
+  display: block;
+}
 
 /* Help entry inside hamburger dropdown */
 #nav-dropdown #help-open {
@@ -1539,3 +1543,154 @@ table.wg-radio-table tr.read { opacity: .8; }
   width: auto;
   align-self: start;
 }
+
+/* === Cargo Requests FAB + Drawer ===================================== */
+.fab-requests{
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 1040;
+  border: none;
+  border-radius: 999px;
+  padding: .6rem .9rem;
+  background: #0b5ed7;
+  color: #fff;
+  box-shadow: 0 6px 16px rgba(0,0,0,.2);
+  cursor: pointer;
+}
+.fab-requests .badge{
+  display: inline-block;
+  margin-left: .5rem;
+  padding: .1rem .45rem;
+  font-weight: 700;
+  border-radius: 999px;
+  background: #fff;
+  color: #0b5ed7;
+}
+
+.req-overlay{
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.35);
+  z-index: 1035;
+}
+
+.req-drawer{
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: min(380px, 92vw);
+  background: #fff;
+  box-shadow: -8px 0 24px rgba(0,0,0,.18);
+  transform: translateX(100%);
+  transition: transform .2s ease-out;
+  z-index: 1045;
+  display: flex;
+  flex-direction: column;
+}
+.req-drawer.open{ transform: translateX(0); }
+
+.req-drawer-header{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: .75rem .9rem;
+  border-bottom: 1px solid #e5e5e5;
+}
+.req-close{
+  background: none;
+  border: none;
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+
+.req-body{
+  padding: .75rem .9rem 1rem;
+  overflow: auto;
+  flex: 1 1 auto;
+}
+
+.req-group{
+  border: 1px solid #e8e8e8;
+  border-radius: .5rem;
+  margin-bottom: .6rem;
+  overflow: hidden;
+}
+.req-group-h{
+  background: #fafafa;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: .5rem .6rem;
+  border-bottom: 1px solid #eee;
+}
+.req-group-title{ font-weight: 700; }
+.req-group-actions .button.small{ padding: .15rem .45rem; font-size: .85rem; }
+
+.req-items{ padding: .45rem .6rem; }
+.req-row{
+  display: flex; align-items: center; justify-content: space-between;
+  padding: .35rem 0; border-bottom: 1px dashed #eee;
+}
+.req-row:last-child{ border-bottom: 0; }
+.req-row-name{ font-weight: 600; }
+.req-row-meta{ opacity: .75; font-size: .92rem; }
+.req-empty{ opacity: .7; padding: .25rem 0; }
+
+/* === Modal positioning guard (do not force top-left) ================== */
+.wg-modal{
+  /* allow explicit left/top + translate centering from JS */
+  position: fixed;
+}
+/* ─── Cargo Requests drawer: make rows look clickable ─────────── */
+.req-group-h {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: .45rem .6rem;
+  cursor: pointer;
+  user-select: none;
+}
+.req-group-h:hover { background: #f6f8fb; }
+
+/* caret indicator */
+details.req-group > summary.req-group-h::-webkit-details-marker { display: none; }
+details.req-group > summary.req-group-h::before {
+  content: "▸";
+  margin-right: .4rem;
+  transition: transform .16s ease;
+  opacity: .8;
+}
+details.req-group[open] > summary.req-group-h::before { transform: rotate(90deg); }
+
+/* header layout:  KELN  ·  N items  ·  X lb   … [Clear Airport] */
+.req-group-left {
+  display: inline-flex;
+  align-items: baseline;
+  gap: .6rem;
+}
+.req-group-title {
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+.req-group-stats {
+  display: inline-flex;
+  align-items: baseline;
+  gap: .4rem;
+  font-size: .92em;
+  opacity: .85;
+}
+.req-group-right { margin-left: auto; }
+
+/* non-modal: keep page interactive & undimmed while drawer is open */
+.req-overlay {
+  display: none !important;       /* no backdrop, no darkening */
+  pointer-events: none !important;
+}
+/* ───────── Cargo Requests: stock-match borders on requested rows ───────── */
+.req-row.match-ok      { border: 2px solid #2e7d32; border-radius: 10px; }
+.req-row.match-partial { border: 2px dashed #2e7d32; border-radius: 10px; }
+
+/* ───────── Advanced chips: green border ONLY when fulfilling a request ───── */
+.adv-chip.fulfill-req { border: 2px solid #2e7d32 !important; border-radius: 16px; }

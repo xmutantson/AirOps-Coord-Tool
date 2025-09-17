@@ -53,6 +53,31 @@ _DART_FOOTER_LINE_RE = re.compile(
     r'^\s*\{DART\s+Aircraft\s+Takeoff\s+Report[^}]*\}\s*$', re.I | re.M
 )
 
+def configure_cargo_reconciler_job():
+    """
+    Schedule the cargo-request reconciler to run periodically.
+    Safe to call multiple times; uses replace_existing.
+    """
+    try:
+        # interval is configurable; defaults to 60s
+        interval_s = int((get_preference("cargo_reconcile_interval_s") or "60").strip())
+    except Exception:
+        interval_s = 60
+    try:
+        scheduler.add_job(
+            cargo_request_reconciler,            # already imported by ramp as _cargo_reconciler_tick
+            "interval",
+            seconds=max(10, interval_s),
+            id="cargo_request_reconciler",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=interval_s,       # reasonable grace
+        )
+        LOG.info("Scheduled cargo_request_reconciler every %ss", max(10, interval_s))
+    except Exception as e:
+        LOG.warning("Failed to schedule cargo_request_reconciler: %s", e)
+
 def _truncate_at_dart_footer(text: str) -> str:
     """Return text up to (but not including) the standard DART footer line."""
     if not text:
@@ -415,7 +440,7 @@ def process_inbound_schedule():
     for f in candidates:
         # Filter to default origin when configured — match ANY alias (canonicalized)
         if self_alias_canons:
-            dest_canon = canonical_airport_code(f.get('airfield_landing') or '')
+            dest_canon = canonical_airport_code((f['airfield_landing'] or ''))
             if not dest_canon or dest_canon not in self_alias_canons:
                 continue
         # Must be ≥ 5 minutes old
@@ -573,6 +598,12 @@ def configure_wargame_jobs():
     # (Safe to call repeatedly; job is replace_existing=True.)
     try:
         configure_inventory_broadcast_job()
+    except Exception:
+        pass
+
+    # NEW: install cargo request reconciler (every 60s)
+    try:
+        configure_cargo_reconciler_job()
     except Exception:
         pass
 
@@ -1750,3 +1781,261 @@ def configure_inventory_broadcast_job():
     )
     if scheduler.state != STATE_RUNNING:
         scheduler.start()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Background Reconciler: Auto-satisfy cargo_requests from Flights/Manifests
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _table_exists(conn, name: str) -> bool:
+    try:
+        cur = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,))
+        return cur.fetchone() is not None
+    except Exception:
+        return False
+
+def _ensure_reconciler_state(conn):
+    """Create a one-row state table for last processed flight id."""
+    try:
+        conn.execute("""
+          CREATE TABLE IF NOT EXISTS cargo_reconciler_state(
+            id INTEGER PRIMARY KEY CHECK (id=1),
+            last_processed_flight_id INTEGER DEFAULT 0,
+            last_run_utc TEXT
+          )
+        """)
+        row = conn.execute("SELECT last_processed_flight_id FROM cargo_reconciler_state WHERE id=1").fetchone()
+        if not row:
+            conn.execute(
+                "INSERT INTO cargo_reconciler_state(id,last_processed_flight_id,last_run_utc) VALUES (1, 0, ?)",
+                (iso8601_ceil_utc(),)
+            )
+    except Exception:
+        pass
+
+def _canonical_aliases(code: str) -> list[str]:
+    """
+    Return a de-duplicated list of aliases for an airport code, including
+    the canonical form. Uppercased.
+    """
+    code = (code or "").strip().upper()
+    if not code:
+        return []
+    can = canonical_airport_code(code) or code
+    try:
+        aliases = airport_aliases(can) or []
+    except Exception:
+        aliases = [can]
+    out, seen = [], set()
+    for a in ([can] + aliases):
+        u = (a or "").strip().upper()
+        if u and u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
+def _collect_flight_items(conn, flight_id: int, remarks: str) -> dict[str, float]:
+    """
+    Return {sanitized_name: total_weight_lbs} for a flight,
+    parsed EXCLUSIVELY from the advanced "Manifest: ..." block in remarks.
+    """
+    agg: dict[str, float] = {}
+
+    # Parse advanced manifest from remarks (authoritative source for reconciliation)
+    try:
+        items = parse_adv_manifest(_clean_remarks(remarks or ''))  # [{'name','size_lb','qty'}, ...]
+    except Exception:
+        items = []
+
+    for it in items or []:
+        try:
+            nm  = sanitize_name(it.get('name') or '')
+            wpu = float(it.get('size_lb') or 0.0)
+            qty = int(it.get('qty') or 0)
+            total = max(0.0, wpu * qty)
+        except Exception:
+            continue
+        if nm and total > 0:
+            agg[nm.lower()] = agg.get(nm.lower(), 0.0) + total
+
+    return agg
+
+def cargo_request_reconciler():
+    """
+    Every 60s:
+      • Find newly-landed flights since last processed id.
+      • Determine destination airport (prefer flights.airfield_landing).
+      • Parse delivered manifest into {item, weight_lb}.
+      • Distribute weights across open cargo_requests lines (by item+airport).
+      • Delete fully-satisfied lines (fulfilled_lb >= requested_lb).
+      • Update last_processed_flight_id; idempotent across runs/restarts.
+    """
+    try:
+        with sqlite3.connect(DB_FILE, timeout=30) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout=30000;")
+            self_alias_canons = _self_alias_canons()
+
+            # Guard: only run if cargo_requests table exists
+            if not _table_exists(conn, "cargo_requests"):
+                try: LOG.info("cargo_request_reconciler: cargo_requests table not found; skipping.")
+                except Exception: pass
+                return
+
+            _ensure_reconciler_state(conn)
+            state = conn.execute(
+                "SELECT last_processed_flight_id FROM cargo_reconciler_state WHERE id=1"
+            ).fetchone()
+            last_id = int(state[0] or 0) if state else 0
+
+            # Consider only completed (landed) flights with id > last_id
+            flights = conn.execute("""
+              SELECT id,
+                     airfield_takeoff,
+                     airfield_landing,
+                     remarks,
+                     timestamp
+                FROM flights
+               WHERE IFNULL(complete,0)=1
+                 AND id > ?
+               ORDER BY id ASC
+            """, (last_id,)).fetchall()
+
+            if not flights:
+                conn.execute("UPDATE cargo_reconciler_state SET last_run_utc=? WHERE id=1", (iso8601_ceil_utc(),))
+                return
+
+            for f in flights:
+                fid  = int(f['id'])
+                takeoff = ((f['airfield_takeoff'] or '')).strip().upper()
+                dest    = ((f['airfield_landing'] or '')).strip().upper()
+                f_ts    = ((f['timestamp'] or '')).strip()
+
+                # Only credit flights that DEPARTED from our origin (alias-aware)
+                if self_alias_canons:
+                    try:
+                        takeoff_can = canonical_airport_code(takeoff) or takeoff
+                    except Exception:
+                        takeoff_can = (takeoff or '')
+                    if not takeoff_can or takeoff_can not in self_alias_canons:
+                        # advance state and skip
+                        conn.execute(
+                            "UPDATE cargo_reconciler_state SET last_processed_flight_id=?, last_run_utc=? WHERE id=1",
+                            (fid, iso8601_ceil_utc())
+                        )
+                        continue
+
+                dest_can = canonical_airport_code(dest) or dest
+                if not dest_can:
+                    conn.execute(
+                        "UPDATE cargo_reconciler_state SET last_processed_flight_id=?, last_run_utc=? WHERE id=1",
+                        (fid, iso8601_ceil_utc())
+                    )
+                    continue
+
+                # Airport match set (include aliases)
+                airport_tokens = _canonical_aliases(dest_can) or [dest_can]
+
+                # Collect delivered items for this flight
+                delivered = _collect_flight_items(conn, fid, (f['remarks'] or ''))
+                if not delivered:
+                    conn.execute(
+                        "UPDATE cargo_reconciler_state SET last_processed_flight_id=?, last_run_utc=? WHERE id=1",
+                        (fid, iso8601_ceil_utc())
+                    )
+                    continue
+
+                try:
+                    LOG.info("cargo_reconciler: flight %s dest=%s items=%d", fid, dest_can, len(delivered))
+                except Exception:
+                    pass
+
+                # Allocate delivered weights across open requests (oldest-first)
+                for item_sanitized, weight_lb in delivered.items():
+                    if weight_lb <= 0:
+                        continue
+                    remaining = float(weight_lb)
+                    ph = ",".join("?" * len(airport_tokens))
+                    params = [item_sanitized] + airport_tokens + [f_ts]
+                    rows = conn.execute(f"""
+                      SELECT
+                             airport_canon                      AS airport_key,
+                             sanitized_name                     AS name_key,
+                             UPPER(COALESCE(airport_canon,''))  AS airport,
+                             LOWER(COALESCE(sanitized_name,'')) AS item,
+                             COALESCE(requested_lb,0.0)         AS requested_lb,
+                             COALESCE(fulfilled_lb,0.0)         AS fulfilled_lb,
+                             COALESCE(created_at,'')            AS created_at
+                        FROM cargo_requests
+                       WHERE LOWER(COALESCE(sanitized_name,'')) = LOWER(?)
+                         AND UPPER(COALESCE(airport_canon,'')) IN ({ph})
+                         AND (COALESCE(created_at,'') = '' OR created_at <= ?)
+                         AND COALESCE(requested_lb,0.0) > COALESCE(fulfilled_lb,0.0)
+                       ORDER BY created_at ASC
+                    """, tuple(params)).fetchall()
+
+                    for r in rows:
+                        if remaining <= 0:
+                            break
+                        need = max(0.0, float(r['requested_lb'] or 0.0) - float(r['fulfilled_lb'] or 0.0))
+                        if need <= 0:
+                            continue
+                        alloc = remaining if remaining < need else need
+                        if alloc <= 0:
+                            continue
+                        new_fulfilled = float(r['fulfilled_lb'] or 0.0) + alloc
+                        conn.execute(
+                            "UPDATE cargo_requests "
+                            "SET fulfilled_lb=?, updated_at=? "
+                            "WHERE airport_canon=? AND sanitized_name=?",
+                            (new_fulfilled, iso8601_ceil_utc(), r['airport_key'], r['name_key'])
+                        )
+                        remaining -= alloc
+                        # Delete fully-satisfied lines
+                        if new_fulfilled + 1e-6 >= float(r['requested_lb'] or 0.0):
+                            conn.execute(
+                                "DELETE FROM cargo_requests "
+                                "WHERE airport_canon=? AND sanitized_name=?",
+                                (r['airport_key'], r['name_key'])
+                            )
+
+                # Advance state after each flight (idempotent progress)
+                conn.execute(
+                    "UPDATE cargo_reconciler_state SET last_processed_flight_id=?, last_run_utc=? WHERE id=1",
+                    (fid, iso8601_ceil_utc())
+                )
+    except Exception as e:
+        try: LOG.exception("cargo_request_reconciler failed: %s", e)
+        except Exception: pass
+
+def configure_cargo_reconciler_job():
+    """(Re)install the cargo request reconciler (interval 60s)."""
+    try:
+        scheduler.remove_job('cargo_request_reconciler')
+    except Exception:
+        pass
+    scheduler.add_job(
+        id='cargo_request_reconciler',
+        func=cargo_request_reconciler,
+        trigger='interval',
+        seconds=60,
+        replace_existing=True
+    )
+    if scheduler.state != STATE_RUNNING:
+        scheduler.start()
+
+def reconcile_requests_for_flight(_: int | None = None) -> None:
+    """
+    One-shot, synchronous reconciliation intended for use by the RampBoss
+    “Log Arrival” handler. Call this immediately after setting complete=1.
+    The function is idempotent and processes any newly-completed flights
+    with id > cargo_reconciler_state.last_processed_flight_id.
+    """
+    try:
+        cargo_request_reconciler()
+    except Exception:
+        # Never raise into the request path
+        try:
+            LOG.exception("reconcile_requests_for_flight: reconciliation failed")
+        except Exception:
+            pass
+    return

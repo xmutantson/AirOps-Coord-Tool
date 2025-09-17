@@ -194,14 +194,14 @@ def toggle_shift(staff_id: int, on_off: str | bool, source: str = "", notes: str
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _window_bounds(window: str) -> Tuple[Optional[datetime], datetime]:
-    win = (window or "24h").lower()
-    hours = _WINDOWS.get(win, 24)
+    win = (window or "all").lower()
+    hours = _WINDOWS.get(win, None)
     now = datetime.utcnow()
     if hours is None:
         return None, now
     return now - timedelta(hours=hours), now
 
-def list_staff(window: str = "24h") -> List[Dict[str, Any]]:
+def list_staff(window: str = "all") -> List[Dict[str, Any]]:
     """
     Return one row per staff with computed:
       - on_duty (bool), current_elapsed_s (if on), total_in_window_s
@@ -282,7 +282,7 @@ def list_staff(window: str = "24h") -> List[Dict[str, Any]]:
 
     return rows
 
-def export_211(window: str = "24h") -> Tuple[List[str], List[List[Any]]]:
+def export_211(window: str = "all") -> Tuple[List[str], List[List[Any]]]:
     """
     Produce an ICS-211-ish roster view from staff + current/open shift state.
     Returns (headers, rows) ready for CSV writing.
@@ -304,7 +304,7 @@ def export_211(window: str = "24h") -> Tuple[List[str], List[List[Any]]]:
         ])
     return headers, out
 
-def export_214(window: str = "24h") -> Tuple[List[str], List[List[Any]]]:
+def export_214(window: str = "all") -> Tuple[List[str], List[List[Any]]]:
     """
     Produce an ICS-214-style activity log using shift start/stop events as activities.
     Returns (headers, rows) ready for CSV writing.

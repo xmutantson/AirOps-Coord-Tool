@@ -3,6 +3,12 @@
 
 {% block content %}
 <div class="page-header-bar">
+  <style>
+    /* Turn overdue ETAs red on the dashboard only */
+    .overdue-eta {
+      color:#c00 !important; font-weight:700;
+    }
+  </style>
   <span class="page-title">
     <button type="button"
             class="print-button"
@@ -135,7 +141,11 @@
         + window.location.search
       );
       if (!resp.ok) throw new Error(resp.status);
-      document.getElementById('dashboard-table').innerHTML = await resp.text();
+      const html = await resp.text();
+      const container = document.getElementById('dashboard-table');
+      container.innerHTML = html;
+      // After the table loads, (re)compute overdue ETA highlighting
+      highlightOverdueETAs(container);
     } catch(err){
       console.error("Dashboard refresh failed:", err);
     }
@@ -143,6 +153,129 @@
   // initial + every 30s
   refreshDashboard();
   setInterval(refreshDashboard, 30000);
+
+  // ── Overdue ETA highlighter ─────────────────────────────────────────────
+  function findEtaColIndex(root){
+    const ths = root.querySelectorAll('thead th');
+    for (let i=0;i<ths.length;i++){
+      const t = (ths[i].textContent || '').toUpperCase();
+      if (t.includes('ETA')) return i;
+    }
+    return -1;
+  }
+
+  function parseEtaFromCell(td){
+    // Skip arrivals and empties
+    const raw = (td.textContent || '').trim();
+    if (!raw || raw === '----' || /\bARR\b/i.test(raw)) return null;
+    // Prefer explicit data attributes if present
+    const iso = td.getAttribute('data-eta-iso')
+               || td.getAttribute('data-eta-utc')
+               || td.getAttribute('data-eta')
+               || td.getAttribute('datetime');
+    if (iso){
+      const d = new Date(iso);
+      if (!Number.isNaN(d.getTime())) return d; // honor TZ if supplied
+    }
+    // Parse HH:MM or HHMM from visible text (local clock)
+    const m = raw.match(/\b(\d{1,2}):?(\d{2})\b/);
+    if (!m) return null;
+    const h = parseInt(m[1], 10);
+    const min = parseInt(m[2], 10);
+    if (Number.isNaN(h) || Number.isNaN(min) || h>23 || min>59) return null;
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, min, 0, 0);
+    const yest  = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, h, min, 0, 0);
+    const tomo  = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, h, min, 0, 0);
+    const MAX_FUTURE_HOURS = 18; // tweak if your ETAs regularly exceed this
+    const candidates = [yest, today, tomo];
+    // Prefer the nearest future candidate within the window
+    const future = candidates
+      .map(d => ({ d, diffH: (d - now) / 3600000 }))
+      .filter(x => x.diffH >= 0 && x.diffH <= MAX_FUTURE_HOURS)
+      .sort((a,b) => a.diffH - b.diffH);
+    if (future.length) return future[0].d;
+    // Else pick the one closest to now (handles past “ETA” values)
+    candidates.sort((a,b) => Math.abs(a - now) - Math.abs(b - now));
+    return candidates[0];
+  }
+
+  // Locate the "Status" column by header text
+  function findStatusColIndex(root){
+    const ths = root.querySelectorAll('thead th');
+    for (let i=0;i<ths.length;i++){
+      const t = (ths[i].textContent || '').toUpperCase();
+      if (t.includes('STATUS')) return i;
+    }
+    return -1;
+  }
+
+  // Determine if the row containing this ETA cell is explicitly "In Flight"
+  function isInFlightForCell(td){
+    const tr = td.closest('tr');
+    if (!tr) return false;
+    // 1) Prefer a data-status on the row or a descendant
+    let s = (tr.getAttribute('data-status') || '').trim();
+    if (!s){
+      const ds = tr.querySelector('[data-status]');
+      if (ds) s = (ds.getAttribute('data-status') || ds.textContent || '').trim();
+    }
+    // 2) A cell with a .status class
+    if (!s){
+      const st = tr.querySelector('td.status, span.status, div.status');
+      if (st) s = (st.textContent || '').trim();
+    }
+    // 3) Fallback: use the column headed "Status"
+    if (!s){
+      const table = tr.closest('table'); if (!table) return false;
+      const idx = findStatusColIndex(table);
+      if (idx >= 0 && tr.children[idx]) s = (tr.children[idx].textContent || '').trim();
+    }
+    if (!s) return false;
+    return /\bin[\s-]?flight\b/i.test(s);
+  }
+
+  function highlightOverdueETAs(root=document){
+    const now = new Date();
+    // First try explicit selectors if your row macro provides them
+    let els = root.querySelectorAll('[data-eta],[data-eta-utc],[data-eta-iso],[data-col="eta"],td.eta,span.eta,div.eta,.eta-time');
+    if (els.length){
+      els.forEach(el => {
+        const eta = parseEtaFromCell(el);
+        // Only mark if the flight is currently in flight
+        if (!isInFlightForCell(el) || !eta){
+          el.classList.remove('overdue-eta');
+          return;
+        }
+        const diffMin = (now - eta) / 60000;
+        if (diffMin >= 30) el.classList.add('overdue-eta');
+        else el.classList.remove('overdue-eta');
+      });
+      return;
+    }
+    // Fallback: find ETA column by header text and scan cells
+    const table = root.querySelector('table.ops-flight-table');
+    if (!table) return;
+    const col = findEtaColIndex(table);
+    if (col < 0) return;
+    const rows = table.querySelectorAll('tbody tr');
+    rows.forEach(tr => {
+      const tds = tr.children;
+      if (!tds || tds.length <= col) return;
+      const td = tds[col];
+      const eta = parseEtaFromCell(td);
+      // Only mark if the flight is currently in flight
+      if (!isInFlightForCell(td) || !eta){
+        td.classList.remove('overdue-eta');
+        return;
+      }
+      const diffMin = (now - eta) / 60000;
+      if (diffMin >= 30) td.classList.add('overdue-eta');
+      else td.classList.remove('overdue-eta');
+    });
+  }
+  // Keep highlighting fresh as time passes even between refreshes
+  setInterval(() => highlightOverdueETAs(document.getElementById('dashboard-table') || document), 60000);
 
   // only run if the banner is present
   const banner = document.getElementById('filter-banner');
