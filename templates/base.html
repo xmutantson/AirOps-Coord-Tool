@@ -65,7 +65,7 @@
          class="{% if active=='radio' %}active{% endif %}">Radio</a>
       <a href="{{ url_for('ramp.ramp_boss') }}"
          data-tab="ramp_boss"
-         class="{% if active=='ramp_boss' %}active{% endif %}">Mat. Handling</a>
+         class="{% if active=='ramp_boss' %}active{% endif %}">Ramp</a>
       <a href="{{ url_for('ramp.queued_flights') }}"
          data-tab="queued_flights"
          class="{% if active=='queued_flights' %}active{% endif %}">Ramp Queue</a>
@@ -95,7 +95,7 @@
         <div>Navbar Tabs</div>
         <label><input type="checkbox" data-toggle-tab="supervisor" checked> Supervisor</label><br>
         <label><input type="checkbox" data-toggle-tab="radio" checked> Radio</label><br>
-        <label><input type="checkbox" data-toggle-tab="ramp_boss" checked> Mat. Handling</label><br>
+        <label><input type="checkbox" data-toggle-tab="ramp_boss" checked> Ramp</label><br>
         <label><input type="checkbox" data-toggle-tab="queued_flights" checked> Ramp Queue</label><br>
         <label><input type="checkbox" data-toggle-tab="inventory" checked> Inventory</label><br>
         <hr>
