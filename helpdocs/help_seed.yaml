@@ -224,9 +224,9 @@
     - **Log incoming:** Paste full message to **Log Incoming**; verify expected state change posted/handle any triggered actions.
 
 - route_prefix: "/ramp_boss"
-  title: "Material Handler - Intake, Queuing & Manifests"
+  title: "Ramp - Intake, Queuing & Manifests"
   body_md: |
-    # Material Handler - Intake, Queuing & Manifests
+    # Ramp - Intake, Queuing & Manifests
 
     ## Purpose
     Create outbound flights, mark inbound arrivals, build cargo manifests (scanner or manual), and decide when to **Send Now** vs **Add to Queue**.
