@@ -295,7 +295,7 @@
     # Supervisor Overview
 
     ## What this page is for
-    A single place for the supervisor to **see what's happening right now** and jump to the next action. You'll see live flight activity, quick counts, an embedded ADS-B situational view (when configured), and shortcuts into supervisor tools (Staff, Comms Log, Locate Flight).
+    A single place for the supervisor to **see what's happening right now** and jump to the next action. You'll see live flight activity, quick counts, an embedded ADS-B situational view (when configured), and shortcuts into supervisor tools (Duty Roster, Comms Log, Locate Flight).
 
     **Who uses this page?** Anyone can open it, but it's meant for the **Supervisor (IC/OSC/Ramp coordination lead)** during ops or exercises.
 
@@ -303,8 +303,8 @@
 
     ## Layout at a glance
     - **Toolbar (top-left):**
-      **Staff**  |  **Comms Log** | **Locate Flight**
-      Use these to manage staffing, log communications, or open a locate request.
+      **Duty Roster**  |  **Comms Log** | **Locate Flight**
+      Use these to manage duty roster, log communications, or open a locate request.
     - **Flight Counts:** Rolling totals of key states (e.g., in-flight, landed, pending-send). Counts update as the table updates.
     - **Live Flight Table:** Operational list similar to Dashboard with status, tail, origin/destination, times, cargo, and remarks.
     - **ADS-B Map:** Embedded situational view if ADS-B is configured. Shows nearby tracks and helps you try the local ADS-B intercept map before you broadcast a request, if you're trying to find a wayward flight.
@@ -329,8 +329,8 @@
     - **Avoid duplicates:** If a tail already has an open locate, do **not** open another. If you see duplicates in the mini-list, open **Locates** and delete one.
     - When a station replies with a position, the request shows **Responded**; once no longer needed, **Delete** it to clear the list.
 
-    ### 3) Staff & Comms quick access
-    - **Staff:** Clock members in/out, check 24-hour rolling totals, print/export ICS-214.
+    ### 3) Duty Roster & Comms quick access
+    - **Duty Roster:** Clock members in/out, check 24-hour rolling totals, print/export ICS-214.
     - **Comms Log:** Free-form entries for radio/phone/other traffic; Winlink events auto-insert so your ICS-309 captures on- and off-system activity.
 
     ---
@@ -351,15 +351,15 @@
     ## See also
     - **Dashboard** - flight list focused for all operators.
     - **Locates** - full locate queue and history.
-    - **Staff** - staffing and ICS-214 exports.
-    - **Comms Log** - free-form comms + ICS-309.
+    - **Duty Roster** - duty roster and ICS-214 exports.
+    - **Comms Log** - free-form comms log + ICS-309.
 
 - route_prefix: "/supervisor/staff"
-  title: "Staff & Shifts"
+  title: "Duty Roster"
   body_md: |
-    # Staff & Shifts
+    # Duty Roster
 
-    Roster and duty tracking for your incident period.
+    Staff tracking for your incident period.
 
     ## What you can do
     - **Clock in / Clock out**. All staff can do this for all other staff.
