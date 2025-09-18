@@ -121,9 +121,10 @@
     <!-- ── Flight Locate & Offline Maps ─────────────────────────── -->
     <h3>Flight Locate &amp; Offline Maps</h3>
 
-    <label for="adsb_base_url">ADS-B Base URL (aircraft.json):</label>
+    <label for="adsb_base_url" class="hidden">ADS-B Base URL (aircraft.json):</label>
     <input
       id="adsb_base_url"
+      type="hidden"
       name="adsb_base_url"
       value="{{ adsb_base_url }}"
       placeholder="http://192.168.8.x/tar1090">
