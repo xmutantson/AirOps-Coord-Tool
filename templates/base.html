@@ -71,7 +71,7 @@
          class="{% if active=='queued_flights' %}active{% endif %}">Ramp Queue</a>
       <a href="{{ url_for('inventory.inventory_overview') }}"
          data-tab="inventory"
-         class="{% if active=='inventory' %}active{% endif %}">Inventory</a>
+         class="{% if active=='inventory' %}active{% endif %}">Mat. Handling</a>
       <a href="{{ url_for('preferences.preferences') }}"
          class="{% if active=='preferences' %}active{% endif %}">Preferences</a>
       {% if embedded_name and embedded_url %}
@@ -97,7 +97,7 @@
         <label><input type="checkbox" data-toggle-tab="radio" checked> Radio</label><br>
         <label><input type="checkbox" data-toggle-tab="ramp_boss" checked> Ramp</label><br>
         <label><input type="checkbox" data-toggle-tab="queued_flights" checked> Ramp Queue</label><br>
-        <label><input type="checkbox" data-toggle-tab="inventory" checked> Inventory</label><br>
+        <label><input type="checkbox" data-toggle-tab="inventory" checked> Mat. Handling</label><br>
         <hr>
         <button id="help-open" class="button button-primary">Help</button>
       </div>
