@@ -204,7 +204,7 @@ def _bootstrap_help_once():
     if _help_bootstrapped:
         return
     ensure_help_tables()
-    seed_help_from_yaml(only_if_empty=True)
+    seed_help_from_yaml(only_if_empty=False)
     _help_bootstrapped = True
 
 @bp.before_app_request

@@ -963,11 +963,11 @@ def init_db():
         # never hard-fail app init if optional module isn’t available yet
         pass
 
-    # ── Help system (ensure + seed on fresh DB) ──────────────────────────────
+    # ── Help system (ensure + always reseed from YAML) ───────────────────────
     try:
-        # Always ensure help schema, migrate legacy, then seed if empty
+        # Always ensure help schema, migrate legacy, then reseed from YAML
         ensure_help_tables()
-        seed_help_from_yaml(only_if_empty=True)
+        seed_help_from_yaml(only_if_empty=False)
     except Exception as e:
         logger.warning("Help DB init skipped: %s", e)
 
@@ -1154,10 +1154,10 @@ def run_migrations():
     except Exception:
         pass
 
-    # Ensure help table exists after upgrades and backfill if empty
+    # Ensure help table exists after upgrades and reseed from YAML
     try:
         ensure_help_tables()
-        seed_help_from_yaml(only_if_empty=True)
+        seed_help_from_yaml(only_if_empty=False)
     except Exception as e:
         logger.warning("Help DB migration hook skipped: %s", e)
 
@@ -1335,11 +1335,11 @@ def ensure_help_tables():
 
 def seed_help_from_yaml(only_if_empty: bool = True) -> int:
     """
-    Load helpdocs/help_seed.yaml and insert any missing articles into help_articles.
+    Load helpdocs/help_seed.yaml and upsert into help_articles.
     Accepts either:
       • a list of {route_prefix,title,body_md}
       • a dict with key "docs": [{slug|path,title,md|body|content}]
-    Returns number of rows inserted.
+    Returns number of rows inserted (updates are not counted).
     """
     path = _help_seed_path()
     if not os.path.exists(path):
@@ -1384,12 +1384,32 @@ def seed_help_from_yaml(only_if_empty: bool = True) -> int:
             rp   = _normalize_route_prefix(it.get("route_prefix") or "/")
             ttl  = (it.get("title") or "Help").strip()
             body = it.get("body_md") or ""
-            cur = c.execute("""
-              INSERT INTO help_articles(route_prefix,title,body_md,is_active,seeded,version,updated_at_utc)
-              SELECT ?,?,?,1,1,1,?
-              WHERE NOT EXISTS (SELECT 1 FROM help_articles WHERE route_prefix=?)
-            """, (rp, ttl, body, nowz, rp))
+            # Insert if missing
+            cur = c.execute(
+                """
+                INSERT INTO help_articles(route_prefix,title,body_md,is_active,seeded,version,updated_at_utc)
+                SELECT ?,?,?,1,1,1,?
+                 WHERE NOT EXISTS (SELECT 1 FROM help_articles WHERE route_prefix=?)
+                """,
+                (rp, ttl, body, nowz, rp)
+            )
             inserts += cur.rowcount or 0
+
+            # Refresh existing rows from YAML if content changed
+            # (bump version so optimistic concurrency notices the change)
+            c.execute(
+                """
+                UPDATE help_articles
+                   SET title          = ?,
+                       body_md        = ?,
+                       seeded         = 1,
+                       version        = version + 1,
+                       updated_at_utc = ?
+                 WHERE route_prefix   = ?
+                   AND (title <> ? OR body_md <> ?)
+                """,
+                (ttl, body, nowz, rp, ttl, body)
+            )
     return inserts
 
 def iso8601_ceil_utc(dt: datetime | None = None) -> str:
