@@ -4,6 +4,8 @@ import time
 import requests
 
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
+from modules.utils.staff import ensure_staff_tables
+from modules.utils.comms import ensure_comms_tables
 from modules.utils.http import _filter_headers
 from app import DB_FILE
 from flask import Blueprint, current_app
@@ -325,13 +327,14 @@ def reset_db():
     if os.path.exists(DB_FILE):
         os.remove(DB_FILE)
 
-    init_db()          # recreate empty tables
-    run_migrations()   # add all current columns
-
-    # ─── rebuild & reload our airports lookup ────────────────
-    ensure_airports_table()
-    load_airports_from_csv()
-    seed_default_categories()
+    init_db()                      # recreate empty tables
+    ensure_airports_table()        # must exist before migrations that touch airports indexes
+    run_migrations()               # add all current columns/indexes
+    ensure_staff_tables()          # keep staff schema in sync
+    ensure_comms_tables()          # keep comms schema in sync
+    load_airports_from_csv()       # populate airports
+    seed_default_categories()      # default inventory categories
+    clear_airport_cache()          # reset any cached formatters
 
     flash("Database reset and re-initialised.", "db_reset")
     # if we came from the Admin console, stay there

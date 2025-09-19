@@ -596,10 +596,10 @@ _fmt_airport = fmt_airport
 # ──────────────────────────────────────────────────────────────────────────────
 # DB init / migrations / data seeds
 init_db()
+ensure_airports_table()
 run_migrations()
 ensure_staff_tables()        # staff schema first (owned by modules/utils/staff.py)
 ensure_comms_tables()        # then communications (may be mirrored to by staff routes)
-ensure_airports_table()
 load_airports_from_csv()
 seed_default_categories()
 clear_airport_cache()

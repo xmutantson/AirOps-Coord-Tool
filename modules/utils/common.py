@@ -496,6 +496,21 @@ def get_db_file():
     from app import DB_FILE
     return DB_FILE
 
+def expand_text_macros(text: str) -> str:
+    """
+    Lightweight rewrite helper:
+      {MISSION}, {{MISSION}}, ${MISSION} → mission_number preference
+      (No-ops if unset.)
+    """
+    t = str(text or '')
+    m = (get_preference('mission_number') or '').strip()
+    if not m:
+        return t
+    return (t
+        .replace('{MISSION}', m)
+        .replace('{{MISSION}}', m)
+        .replace('${MISSION}', m))
+
 def emit_inventory_event(event):
     from app import publish_inventory_event
     return publish_inventory_event(event)

@@ -1694,3 +1694,24 @@ details.req-group[open] > summary.req-group-h::before { transform: rotate(90deg)
 
 /* ───────── Advanced chips: green border ONLY when fulfilling a request ───── */
 .adv-chip.fulfill-req { border: 2px solid #2e7d32 !important; border-radius: 16px; }
+
+/* ===============================================================
+   Setup Wizard (scoped overrides so Add Mapping stacks vertically)
+   =============================================================== */
+/* Scope to this page’s form so we don't affect Preferences/Ramp/etc. */
+#setup-wizard-form .wizard-mapping-section{
+  grid-column: 1 / -1 !important;  /* span all columns if parent is a grid */
+  display: block !important;       /* kill any inherited grid/flex */
+}
+#setup-wizard-form #airport-mappings{
+  display: block !important;       /* rows stack naturally */
+}
+#setup-wizard-form .wizard-add-btn{
+  display: block !important;
+  width: 100% !important;
+  grid-column: 1 / -1 !important;  /* never sit beside a label column */
+  justify-self: stretch !important;
+  margin-top: 8px;
+}
+/* If any global rule targets direct children (form > button), dodge it: */
+#setup-wizard-form > button[type="button"]{ grid-column: 1 / -1 !important; }

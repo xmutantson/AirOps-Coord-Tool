@@ -8,6 +8,9 @@
 
     <!-- ── Ops / Display Prefs ─────────────────────────────── -->
     <h3>Display / Operational Prefs</h3>
+    <div style="margin:.25rem 0 .75rem 0;">
+      <a href="{{ url_for('auth.setup_wizard') }}" class="block-btn" style="display:inline-block;padding:.25rem .5rem;">🔁 Rerun Setup Wizard</a>
+    </div>
 
     <label for="ramp_scan_adv_manifest"
       title="If Yes: on inbound Lookup Tail, parse the latest Remarks for advanced-manifest items and show the apply dialog."
@@ -21,7 +24,22 @@
       id="default-origin"
       name="default_origin"
       value="{{ default_origin }}"
-      placeholder="e.g. KSEA or SEA">
+      placeholder="e.g. KSEA or SEA"
+      oninput="this.value=this.value.toUpperCase()"
+      style="text-transform:uppercase;">
+
+    <label style="margin-top:18px" for="mission-number">Mission Number:</label>
+    <input
+      id="mission-number"
+      name="mission_number"
+      value="{{ mission_number }}"
+      placeholder="e.g. 24-ALPHA"
+      oninput="this.value=this.value.toUpperCase()">
+    <script>
+      // Save Mission Number on blur (same pattern as default-origin)
+      document.getElementById('mission-number')
+              .addEventListener('blur', ()=>document.getElementById('prefs-form').submit());
+    </script>
 
     <label for="code_format">Airport Code Format:</label>
     <select id="code_format" name="code_format" onchange="this.form.submit()">
@@ -298,8 +316,9 @@
       name="admin_passphrase"
       type="password"
       placeholder="I solemnly swear that I am up to no good"
-      required>
-    <button type="submit">Unlock</button>
+      required
+      style="grid-column: 1 / -1;">
+    <button type="submit" style="grid-column: 2;">Unlock</button>
   </form>
 
 </div>
@@ -307,15 +326,20 @@
 <script>
 ;(function(){
   const form  = document.getElementById('prefs-form');
-  const input = document.getElementById('default-origin');
-  let   timer;
-  input.addEventListener('input', () => {
-    clearTimeout(timer);
-    timer = setTimeout(()=> form.submit(), 800);
-  });
-  input.addEventListener('blur', () => {
-    clearTimeout(timer);
-    form.submit();
+  // Auto-submit after typing/blur for key text inputs
+  const ids = ['default-origin','mission-number'];
+  ids.forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    let t;
+    el.addEventListener('input', () => {
+      clearTimeout(t);
+      t = setTimeout(()=> form.submit(), 800);
+    });
+    el.addEventListener('blur', () => {
+      clearTimeout(t);
+      form.submit();
+    });
   });
 })();
 </script>

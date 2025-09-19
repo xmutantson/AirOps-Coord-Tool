@@ -305,51 +305,58 @@ document.addEventListener('DOMContentLoaded', () => {
 </script>
 
 <script>
-// --- Hamburger navbar menu logic ---
-const hamburger = document.getElementById('nav-hamburger');
-const dropdown = document.getElementById('nav-dropdown');
-const tabNames = ['supervisor','radio','ramp_boss','queued_flights','inventory'];
-const storageKey = 'navTabPrefs_v1';
+// --- Hamburger navbar menu logic (guarded for pages without nav) ---
+document.addEventListener('DOMContentLoaded', () => {
+  const hamburger  = document.getElementById('nav-hamburger');
+  const dropdown   = document.getElementById('nav-dropdown');
+  const tabNames   = ['supervisor','radio','ramp_boss','queued_flights','inventory'];
+  const storageKey = 'navTabPrefs_v1';
 
-// Show/hide dropdown
-hamburger.addEventListener('click', e => {
-  dropdown.style.display = dropdown.style.display === 'block' ? 'none' : 'block';
-  e.stopPropagation();
-});
-document.addEventListener('click', e => {
-  if (!dropdown.contains(e.target) && e.target !== hamburger)
-    dropdown.style.display = 'none';
-});
+  if (!hamburger || !dropdown) {
+    return; // no nav on login/setup pages → avoid binding listeners
+  }
 
-// Load tab prefs from localStorage
-function loadTabPrefs(){
-  let prefs = {};
-  try { prefs = JSON.parse(localStorage.getItem(storageKey) || '{}'); } catch {}
-  tabNames.forEach(tab => {
-    const checked = prefs[tab] !== false; // default ON
-    document.querySelectorAll(`[data-toggle-tab="${tab}"]`).forEach(box => box.checked = checked);
-    document.querySelectorAll(`[data-tab="${tab}"]`).forEach(a => a.style.display = checked ? '' : 'none');
+  // Show/hide dropdown
+  hamburger.addEventListener('click', e => {
+    dropdown.style.display = dropdown.style.display === 'block' ? 'none' : 'block';
+    e.stopPropagation();
   });
-}
-
-// Save tab prefs to localStorage
-function saveTabPrefs(){
-  let prefs = {};
-  tabNames.forEach(tab => {
-    const checked = document.querySelector(`[data-toggle-tab="${tab}"]`).checked;
-    prefs[tab] = checked;
-    document.querySelectorAll(`[data-tab="${tab}"]`).forEach(a => a.style.display = checked ? '' : 'none');
+  document.addEventListener('click', e => {
+    if (!dropdown.contains(e.target) && e.target !== hamburger)
+      dropdown.style.display = 'none';
   });
-  localStorage.setItem(storageKey, JSON.stringify(prefs));
-}
 
-// Update on checkbox click
-tabNames.forEach(tab => {
-  document.querySelector(`[data-toggle-tab="${tab}"]`).addEventListener('change', saveTabPrefs);
+  // Load tab prefs from localStorage
+  function loadTabPrefs(){
+    let prefs = {};
+    try { prefs = JSON.parse(localStorage.getItem(storageKey) || '{}'); } catch {}
+    tabNames.forEach(tab => {
+      const checked = prefs[tab] !== false; // default ON
+      document.querySelectorAll(`[data-toggle-tab="${tab}"]`).forEach(box => box.checked = checked);
+      document.querySelectorAll(`[data-tab="${tab}"]`).forEach(a => a.style.display = checked ? '' : 'none');
+    });
+  }
+
+  // Save tab prefs to localStorage
+  function saveTabPrefs(){
+    let prefs = {};
+    tabNames.forEach(tab => {
+      const toggle = document.querySelector(`[data-toggle-tab="${tab}"]`);
+      const checked = toggle ? toggle.checked : true;
+      prefs[tab] = checked;
+      document.querySelectorAll(`[data-tab="${tab}"]`).forEach(a => a.style.display = checked ? '' : 'none');
+    });
+    localStorage.setItem(storageKey, JSON.stringify(prefs));
+  }
+
+  // Update on checkbox click
+  tabNames.forEach(tab => {
+    const box = document.querySelector(`[data-toggle-tab="${tab}"]`);
+    if (box) box.addEventListener('change', saveTabPrefs);
+  });
+
+  loadTabPrefs();
 });
-
-// Initialize at page load
-document.addEventListener('DOMContentLoaded', loadTabPrefs);
 </script>
 
 {% block scripts %}{% endblock %}

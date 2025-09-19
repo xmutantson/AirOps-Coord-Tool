@@ -89,7 +89,6 @@ def preferences():
             except Exception:
                 pass
             flash("NetOps feeder settings saved.", "success")
-            return redirect(url_for('preferences.preferences'))
 
         # ── WinLink Airport→Callsign mappings & CC addrs ─────────
         if (
@@ -153,7 +152,6 @@ def preferences():
                     set_preference(key, 'yes' if val else 'no')
 
             flash("WinLink mappings and CC addresses saved.", "success")
-            return redirect(url_for('preferences.preferences'))
 
         # ── Flight Locate & Offline Maps (DB-backed) ───────────────
         if (
@@ -165,20 +163,27 @@ def preferences():
             'map_tiles_path' in request.form or
             'map_offline_seed' in request.form
         ):
+            changed = False
             # ADS-B base URL (allow blank)
             if 'adsb_base_url' in request.form:
-                set_preference('adsb_base_url', (request.form.get('adsb_base_url','') or '').strip())
+                new = (request.form.get('adsb_base_url','') or '').strip()
+                if new != (get_preference('adsb_base_url') or ''):
+                    set_preference('adsb_base_url', new); changed = True
             # ADS-B JSON-lines stream URL (tcp://host:port or http(s)://…)
             if 'adsb_stream_url' in request.form:
-                set_preference('adsb_stream_url', (request.form.get('adsb_stream_url','') or '').strip())
+                new = (request.form.get('adsb_stream_url','') or '').strip()
+                if new != (get_preference('adsb_stream_url') or ''):
+                    set_preference('adsb_stream_url', new); changed = True
             # AOCT: auto-reply to *Flight Query* with latest sighting
             if 'aoct_auto_reply_flight' in request.form:
                 ar = 'yes' if (request.form.get('aoct_auto_reply_flight','yes').strip().lower() == 'yes') else 'no'
-                set_preference('aoct_auto_reply_flight', ar)
+                if ar != (get_preference('aoct_auto_reply_flight') or 'yes'):
+                    set_preference('aoct_auto_reply_flight', ar); changed = True
             # Local ADS-B poller toggle
             if 'adsb_poll_enabled' in request.form:
                 pe = 'yes' if (request.form.get('adsb_poll_enabled','no').strip().lower() == 'yes') else 'no'
-                set_preference('adsb_poll_enabled', pe)
+                if pe != (get_preference('adsb_poll_enabled') or 'no'):
+                    set_preference('adsb_poll_enabled', pe); changed = True
             # Poller interval (clamp to >=1s)
             if 'adsb_poll_interval_s' in request.form:
                 raw = (request.form.get('adsb_poll_interval_s','') or '').strip()
@@ -186,22 +191,28 @@ def preferences():
                     n = max(1, int(float(raw)))
                 except Exception:
                     n = 10
-                set_preference('adsb_poll_interval_s', str(n))
+                if str(n) != (get_preference('adsb_poll_interval_s') or '10'):
+                    set_preference('adsb_poll_interval_s', str(n)); changed = True
             # Map tiles path: blank ⇒ revert to derived default (delete row)
             if 'map_tiles_path' in request.form:
                 mpath = (request.form.get('map_tiles_path','') or '').strip()
+                cur = get_preference('map_tiles_path') or ''
                 if mpath:
-                    set_preference('map_tiles_path', mpath)
+                    if mpath != cur:
+                        set_preference('map_tiles_path', mpath); changed = True
                 else:
-                    with sqlite3.connect(DB_FILE) as c:
-                        c.execute("DELETE FROM preferences WHERE name='map_tiles_path'")
-            # One-time offline seed flag
+                    if cur:
+                        with sqlite3.connect(DB_FILE) as c:
+                            c.execute("DELETE FROM preferences WHERE name='map_tiles_path'")
+                        changed = True
+             # One-time offline seed flag
             if 'map_offline_seed' in request.form:
                 ovs = 'yes' if (request.form.get('map_offline_seed','yes').strip().lower() == 'yes') else 'no'
-                set_preference('map_offline_seed', ovs)
-
-            flash("ADS-B & Map preferences saved.", "success")
-            return redirect(url_for('preferences.preferences'))
+                if ovs != (get_preference('map_offline_seed') or 'yes'):
+                    set_preference('map_offline_seed', ovs); changed = True
+            if changed:
+                flash("ADS-B & Map preferences saved.", "success")
+            # DO NOT early-return; let the rest of this POST process too.
 
         # ── Unlock / lock admin mode ────────────────────
         if 'admin_passphrase' in request.form:
@@ -224,6 +235,16 @@ def preferences():
                     ON CONFLICT(name) DO UPDATE
                     SET value = excluded.value
                 """, (val,))
+
+        if 'mission_number' in request.form:
+            m = escape((request.form.get('mission_number','') or '').strip().upper())
+            with sqlite3.connect(DB_FILE) as c:
+                c.execute("""
+                    INSERT INTO preferences(name,value)
+                    VALUES('mission_number',?)
+                    ON CONFLICT(name) DO UPDATE
+                    SET value = excluded.value
+                """, (m,))
 
         # ----- Remote Airports (DB-backed) --------------------------------
         if ('auto_broadcast_interval_min' in request.form or
@@ -283,12 +304,10 @@ def preferences():
                     if not recipients:
                         flash("Auto-broadcast enabled, but no recipients found in airport_call_mappings.", "warning")
                 flash("Remote-airport broadcast/auto-reply settings saved.", "success")
-                return redirect(url_for('preferences.preferences'))
 
         # ----- cookie-backed prefs ---------------------------------------
         resp = make_response(redirect(url_for('preferences.preferences')))
 
-        # existing cookie-backed prefs...
         if 'code_format' in request.form:
             resp.set_cookie(
                 'code_format',
@@ -360,14 +379,24 @@ def preferences():
             resp.set_cookie('dashboard_sort_seq',
                             request.form['dashboard_sort_seq'],
                             max_age=31_536_000, samesite='Lax')
+        # Inbound manifest auto-scan (Ramp) -------------------------------
+        if 'ramp_scan_adv_manifest' in request.form:
+            resp.set_cookie(
+                'ramp_scan_adv_manifest',
+                request.form['ramp_scan_adv_manifest'],
+                max_age=ONE_YEAR,
+                samesite='Lax'
+            )
 
         flash("Preferences saved", "success")
         return resp
 
     # ── GET: read current settings ────────────────────────────────────────
-    # default_origin from DB
+    # default_origin / mission_number from DB
     row = dict_rows("SELECT value FROM preferences WHERE name='default_origin'")
     default_origin = row[0]['value'] if row else ''
+    row_m = dict_rows("SELECT value FROM preferences WHERE name='mission_number'")
+    mission_number = row_m[0]['value'] if row_m else ''
 
     # Airport→WinLink mappings (raw + parsed)
     row2 = dict_rows(
@@ -392,6 +421,7 @@ def preferences():
     current_debug   = request.cookies.get('show_debug_logs','no')
     current_radio_unsent = request.cookies.get('radio_show_unsent_only','yes')
     hide_tbd        = request.cookies.get('hide_tbd','yes') == 'yes'
+    scan_adv_pref   = request.cookies.get('ramp_scan_adv_manifest','yes')
 
     winlink_cc_1 = get_preference('winlink_cc_1') or ''
     winlink_cc_2 = get_preference('winlink_cc_2') or ''
@@ -428,6 +458,7 @@ def preferences():
     return render_template(
         'preferences.html',
         default_origin=default_origin,
+        mission_number=mission_number,
         current_code=current_code,
         current_mass=current_mass,
         distance_unit=distance_unit,
@@ -463,5 +494,7 @@ def preferences():
         adsb_poll_interval_s=adsb_poll_interval_s,
         map_tiles_path=map_tiles_path,
         map_offline_seed=map_offline_seed,
-        map_tiles_default=map_tiles_default
+        map_tiles_default=map_tiles_default,
+        # Ramp inbound auto-scan
+        scan_adv_pref=scan_adv_pref
     )
