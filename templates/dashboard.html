@@ -79,20 +79,63 @@
   <!-- panel/card (styled by #checkin-modal + .card in style.css) -->
   <div id="checkin-modal" class="card">
     <h3 id="checkin-title">Shift Check-In</h3>
-    <p class="muted">Welcome! Clock in so others know who’s on duty. You can skip if you’re just looking around.</p>
+    <p class="muted">Welcome! Start with your name. If we already have you, we’ll clock you right in.</p>
     <form id="checkin-form" autocomplete="on">
-      <label for="ci-name">Name</label>
-      <input id="ci-name" name="name" class="force-upper" placeholder="e.g. JANE DOE"
-             value="{{ (last_staff.name or '')|e }}">
-      <label for="ci-role">Role</label>
-      <input id="ci-role" name="role" placeholder="e.g. RADIO / RAMP / SUPERVISOR"
-             value="{{ (last_staff.role or '')|e }}">
-      <label for="ci-ew">EW#</label>
-      <input id="ci-ew" name="ew_number" placeholder="Optional EW number"
-             value="{{ (last_staff.ew or '')|e }}">
-      <div class="actions">
-        <button type="button" class="button secondary" id="checkin-skip">Skip</button>
-        <button type="submit" class="button primary">Clock In</button>
+      <!-- Stage 1: Name only -->
+      <div id="checkin-stage1">
+        <label for="ci-name">Name</label>
+        <input id="ci-name" name="name" class="force-upper" placeholder="e.g. JANE DOE"
+               value="{{ (last_staff.name or '')|e }}">
+        <div class="actions">
+          <button type="button" class="button secondary" id="checkin-skip">Skip</button>
+          <button type="submit" class="button primary">Continue</button>
+        </div>
+      </div>
+
+      <!-- Stage 2: New person → collect details -->
+      <div id="checkin-stage2" style="display:none; margin-top:.75rem;">
+        <div class="muted" style="margin-bottom:.5rem;">Looks like you’re new. Please add a few details:</div>
+        <input type="hidden" name="ajax" value="1">
+        <label for="ci2-name">Name</label>
+        <input id="ci2-name" name="name" class="force-upper" placeholder="JANE DOE">
+        <label for="ci2-organization">Organization</label>
+        <input id="ci2-organization" name="organization" placeholder="Red Cross / EOC / WWDART…">
+        <label for="ci2-emc">EMC (optional)</label>
+        <input id="ci2-emc" name="emc" placeholder="EMC-1234">
+        <label for="ci2-email">Email</label>
+        <input id="ci2-email" name="email" type="email" placeholder="name@example.org">
+        <label for="ci2-phone">Cell Phone</label>
+        <input id="ci2-phone" name="phone" inputmode="tel" placeholder="(555) 555-5555">
+
+        <style>
+          .role-chooser {
+            margin:.75rem 0; padding:.5rem; border:1px solid #8883; border-radius:.5rem;
+          }
+          .role-chooser legend { font-weight:700; padding:0 .25rem; }
+          .radio-row {
+            display:flex; align-items:center; gap:.6rem;
+            padding:.35rem .5rem; border-radius:.4rem; cursor:pointer;
+          }
+          .radio-row:hover { background:rgba(127,127,127,.12); }
+          .radio-row input { margin:0; }
+          .radio-row input:checked + span { font-weight:700; text-decoration:underline; }
+        </style>
+        <fieldset class="role-chooser">
+          <legend>Are you a Pilot or a Volunteer?</legend>
+          <label class="radio-row">
+            <input type="radio" name="affiliation" value="pilot">
+            <span>Pilot</span>
+          </label>
+          <label class="radio-row">
+            <input type="radio" name="affiliation" value="volunteer">
+            <span>Volunteer</span>
+          </label>
+        </fieldset>
+
+        <div class="actions">
+          <button type="button" class="button secondary" id="checkin-back">Back</button>
+          <button type="submit" class="button primary" id="checkin-create">Create & Continue</button>
+        </div>
       </div>
     </form>
   </div>
@@ -104,30 +147,194 @@
     const backdrop = document.getElementById('checkin-backdrop');
     const form     = document.getElementById('checkin-form');
     const btnSkip  = document.getElementById('checkin-skip');
+    const st1      = document.getElementById('checkin-stage1');
+    const st2      = document.getElementById('checkin-stage2');
+    const btnBack  = document.getElementById('checkin-back');
     function openModal(){ backdrop.style.display = 'flex'; setTimeout(()=>document.getElementById('ci-name').focus(), 10); }
     function closeModal(){ backdrop.remove(); }
     openModal();
 
+    // Inline choice UI to open the appropriate waiver in a new tab
+    function openWaiverChoice(staffId, name, chooseUrl){
+      // Prefer an inline mini-modal; fall back to the chooser page if construction fails.
+      try{
+        const wrap = document.createElement('div');
+        wrap.className = 'modal';
+        wrap.id = 'waiver-choice';
+        wrap.innerHTML = `
+          <div class="backdrop" aria-hidden="true"></div>
+          <div class="card" role="dialog" aria-modal="true" aria-label="Choose Waiver">
+            <h3 style="margin:0 0 .25rem 0;">Choose Waiver</h3>
+            <p class="muted" style="margin:0 0 .75rem 0;">for <strong>${name || 'new staffer'}</strong></p>
+            <div class="actions" style="justify-content:flex-start; gap:.5rem;">
+              <a class="button" target="_blank" rel="noopener" href="/docs/waiver/pilot?staff_id=${encodeURIComponent(staffId)}">Pilot</a>
+              <a class="button" target="_blank" rel="noopener" href="/docs/waiver/volunteer?staff_id=${encodeURIComponent(staffId)}">Volunteer</a>
+              <button type="button" class="button secondary" id="wc-close">Done</button>
+            </div>
+          </div>`;
+        document.body.appendChild(wrap);
+        const closeBtn = wrap.querySelector('#wc-close');
+        if (closeBtn) closeBtn.addEventListener('click', ()=> wrap.remove());
+      }catch(_e){
+        if (chooseUrl) window.location.href = chooseUrl;
+      }
+    }
+
+    // Guard against accidental double-binding if this script is included twice
+    if (window.__DASH_CHECKIN_BOUND__) return; window.__DASH_CHECKIN_BOUND__ = true;
+
+    // ─ Single submit handler drives both stages (existing vs new profile) ─
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const data = new URLSearchParams(new FormData(form));
-      const r = await fetch('{{ url_for("staff.staff_quick_checkin") }}', {
-        method: 'POST',
-        headers: { 'X-CSRFToken': CSRF },
-        body: data,
-        credentials: 'same-origin'
-      });
-      if (r.ok) { closeModal(); window.showToast('Clocked in. Have a great shift!', 'success'); }
-      else { window.showToast('Check-in failed. Please try again.', 'error'); }
+      const fd = new FormData(form);
+
+      // Stage 2 path (new profile creation)
+      if (st2.style.display !== 'none') {
+        if (!fd.get('name')) {
+          fd.set('name', (document.getElementById('ci2-name').value || document.getElementById('ci-name').value || '').trim());
+        }
+        fd.set('ajax', '1');
+        try {
+          const resp = await fetch('{{ url_for("staff.staff_new") }}', {
+            method: 'POST',
+            headers: {
+              'X-CSRFToken': CSRF,
+              'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: fd,
+            credentials: 'same-origin'
+          });
+          const ctype = resp.headers.get('content-type') || '';
+          if (!resp.ok) throw new Error('bad status');
+          if (ctype.includes('application/json')) {
+            const data = await resp.json();
+            if (data && data.ok && data.staff_id) {
+              // Immediately clock them in after creating profile
+              try {
+                const r2 = await fetch('{{ url_for("staff.staff_quick_checkin") }}', {
+                  method:'POST',
+                  headers:{ 'X-CSRFToken': CSRF },
+                  body:new URLSearchParams({ name: fd.get('name') || '' }),
+                  credentials:'same-origin'
+                });
+                // ignore failures; profile was created
+                if (r2.ok) { /* optional: read json */ }
+              } catch(_) {}
+              // Waiver: if they chose role here, prefer that; else show chooser
+              const aff = (fd.get('affiliation') || '').toString();
+              closeModal(); // always close modal after success
+              window.showToast?.('Profile saved and clocked in. Thanks!', 'success');
+              const sid = data.staff_id;
+              const nm  = data.name || (fd.get('name') || '');
+              if (aff === 'pilot') {
+                openWaiverChoice(sid, nm, null);
+                window.open(`/docs/waiver/pilot?staff_id=${encodeURIComponent(sid)}`, '_blank', 'noopener');
+              } else if (aff === 'volunteer') {
+                openWaiverChoice(sid, nm, null);
+                window.open(`/docs/waiver/volunteer?staff_id=${encodeURIComponent(sid)}`, '_blank', 'noopener');
+              } else {
+                const choose = data.waiver_choose_url || (`/staff/waiver/choose?staff_id=${encodeURIComponent(sid)}`);
+                openWaiverChoice(sid, nm, choose);
+              }
+              return;
+            }
+            // Fallback: modal/waiver fragments
+            if (data.modal_html) {
+              const wrap = document.createElement('div'); wrap.innerHTML = data.modal_html; document.body.appendChild(wrap);
+            } else if (data.waiver_html) {
+              const wrap = document.createElement('div'); wrap.innerHTML = data.waiver_html; document.body.appendChild(wrap);
+            } else if (data.waiver_url) {
+              openWaiverChoice(data.staff_id || null, fd.get('name') || '', data.waiver_url);
+            } else {
+              closeModal(); window.showToast?.('Profile saved.', 'success');
+            }
+            return;
+          } else {
+            // If backend returned HTML (often because it 302'd), fall back:
+            // 1) stash the entered data, 2) close modal, 3) go to roster where
+            //    a helper script will auto-fill & submit the "Add" form.
+            const payload = {
+              name:        (fd.get('name') || '').toString(),
+              organization:(fd.get('organization') || '').toString(),
+              emc:         (fd.get('emc') || '').toString(),
+              email:       (fd.get('email') || '').toString(),
+              phone:       (fd.get('phone') || '').toString(),
+              affiliation: (fd.get('affiliation') || '').toString()
+            };
+            try { sessionStorage.setItem('pendingStaffProfile', JSON.stringify(payload)); } catch(_){}
+            closeModal();
+            window.location.href = "{{ url_for('staff.staff_list', window='all') }}";
+          }
+        } catch(_e) {
+          window.showToast?.('Could not save profile. Please try again.', 'error');
+        }
+        return;
+      }
+
+      // Stage 1 path (name → quick check-in; auto-toggle if exists; else expand)
+      const nameVal = (fd.get('name') || '').toString().trim();
+      if (!nameVal) { document.getElementById('ci-name').focus(); return; }
+      try {
+        const r = await fetch('{{ url_for("staff.staff_quick_checkin") }}', {
+          method: 'POST',
+          headers: { 'X-CSRFToken': CSRF },
+          body: new URLSearchParams({ name: nameVal }),
+          credentials: 'same-origin'
+        });
+        if (!r.ok) throw new Error('bad status');
+        // robust parse (handles any stray text before JSON)
+        const ctype = r.headers.get('content-type') || '';
+        let rawText = await r.text();
+        if (!ctype.includes('application/json')) {
+          const brace = rawText.indexOf('{'); if (brace > 0) rawText = rawText.slice(brace);
+        }
+        let payload = {}; try { payload = JSON.parse(rawText); } catch { payload = {}; }
+        console.debug('quick_checkin payload:', payload);
+
+        if (payload && payload.ok) {
+          if (payload.needs_profile) {
+            // New person → expand to Stage 2
+            st1.style.display = 'none';
+            st2.style.display = '';
+            const n1 = document.getElementById('ci-name').value;
+            document.getElementById('ci2-name').value = n1;
+            setTimeout(()=>document.getElementById('ci2-organization').focus(), 10);
+            return;
+          }
+          // Treat ok:true as success for existing/auto-created records
+          closeModal();
+          const t = String(payload.toggled || '').toLowerCase();
+          const msg = (t === 'restarted') ? 'Shift restarted.' : 'Clocked in.';
+          window.showToast?.(msg, 'success');
+          if (payload.staff_id) {
+            const choose = payload.waiver_choose_url || (`/staff/waiver/choose?staff_id=${encodeURIComponent(payload.staff_id)}`);
+            openWaiverChoice(payload.staff_id, payload.name || '', choose);
+          }
+          return;
+        }
+        window.showToast?.('Could not check you in. Please try again.', 'error');
+      } catch(_err) {
+        window.showToast?.('Check-in failed. Please try again.', 'error');
+      }
     });
-    btnSkip.addEventListener('click', async () => {
-      const r = await fetch('{{ url_for("staff.staff_quick_checkin") }}', {
-        method:'POST',
-        headers: { 'X-CSRFToken': CSRF },
-        body: new URLSearchParams({skip:'1'}),
-        credentials: 'same-origin'
-      });
-      if (r.ok) { closeModal(); window.showToast('Okay — we won’t ask again for a while.', 'info'); }
+
+    // Back to Stage 1
+    btnBack?.addEventListener('click', () => {
+      st2.style.display = 'none';
+      st1.style.display = '';
+      setTimeout(()=>document.getElementById('ci-name').focus(), 10);
+    });
+    // Skip for now
+    btnSkip?.addEventListener('click', async () => {
+      try{
+        const r = await fetch('{{ url_for("staff.staff_quick_checkin") }}', {
+          method:'POST',
+          headers: { 'X-CSRFToken': CSRF },
+          body: new URLSearchParams({skip:'1'}),
+          credentials: 'same-origin'
+        });
+        if (r.ok) { closeModal(); window.showToast?.('Okay — we won’t ask again for a while.', 'info'); }
+      } catch(_) {}
     });
   })();
 </script>

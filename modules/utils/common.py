@@ -114,7 +114,7 @@ import random, string
 
 import uuid
 from markupsafe import escape
-import sqlite3, csv, re, os, json
+import sqlite3, csv, re, os, json, base64
 from datetime import datetime, timedelta, timezone
 import threading, time, socket, math
 from urllib.request import urlopen
@@ -978,6 +978,13 @@ def init_db():
         # never hard-fail app init if optional module isn’t available yet
         pass
 
+    # ── Pilot & Aircraft Information (PAI) tables
+    try:
+        from modules.utils.aircraft import ensure_aircraft_tables  # type: ignore
+        ensure_aircraft_tables()
+    except Exception:
+        pass
+
     # ── Help system (ensure + always reseed from YAML) ───────────────────────
     try:
         # Always ensure help schema, migrate legacy, then reseed from YAML
@@ -1107,6 +1114,17 @@ def run_migrations():
     ensure_column("queued_flights", "cargo_weight",     "REAL DEFAULT 0")
     ensure_column("winlink_messages", "sender",         "TEXT")
 
+    # ─── Pilot acknowledgment (signatures) ───────────────────────────────
+    # Store both on flights (final record) and queued_flights (drafts).
+    ensure_column("flights", "pilot_ack_name",        "TEXT")
+    ensure_column("flights", "pilot_ack_method",      "TEXT")   # 'typed' | 'drawn'
+    ensure_column("flights", "pilot_ack_signature_b64","TEXT")  # base64 PNG (no data: prefix)
+    ensure_column("flights", "pilot_ack_signed_at",   "TEXT")
+    ensure_column("queued_flights", "pilot_ack_name",         "TEXT")
+    ensure_column("queued_flights", "pilot_ack_method",       "TEXT")
+    ensure_column("queued_flights", "pilot_ack_signature_b64","TEXT")
+    ensure_column("queued_flights", "pilot_ack_signed_at",    "TEXT")
+
     # Helpful index for inventory reconciliation lookups
     with sqlite3.connect(get_db_file()) as c:
         c.execute("CREATE INDEX IF NOT EXISTS idx_wg_items_lookup ON wargame_inventory_batch_items(lower(name), size_lb)")
@@ -1166,6 +1184,13 @@ def run_migrations():
     try:
         from modules.utils.staff import ensure_staff_tables  # type: ignore
         ensure_staff_tables()
+    except Exception:
+        pass
+
+    # ── PAI tables (upgrade path)
+    try:
+        from modules.utils.aircraft import ensure_aircraft_tables  # type: ignore
+        ensure_aircraft_tables()
     except Exception:
         pass
 
@@ -1247,31 +1272,76 @@ def ensure_airports_table():
         # Keep the old composite for legacy queries; harmless if unused.
         c.execute("CREATE INDEX IF NOT EXISTS idx_airports_search     ON airports(ident, icao_code, iata_code, gps_code, local_code)")
 
+def _airports_csv_candidates() -> list[str]:
+    """
+    Ordered search paths for airports.csv:
+      1) AOCT_AIRPORTS_CSV env override
+      2) /app/airports.csv (Docker image convention; next to app.py)
+      3) folder of the loaded app module (if available) + 'airports.csv'
+      4) legacy: same folder as this common.py
+    """
+    cand: list[str] = []
+    # 1) explicit override
+    envp = os.getenv("AOCT_AIRPORTS_CSV")
+    if envp:
+        cand.append(envp)
+    # 2) container default
+    cand.append("/app/airports.csv")
+    # 3) alongside app.py if we can find it
+    try:
+        mod = _sys.modules.get("app")
+        if mod and getattr(mod, "__file__", None):
+            cand.append(os.path.join(os.path.dirname(mod.__file__), "airports.csv"))
+    except Exception:
+        pass
+    # 4) legacy: next to this module
+    cand.append(os.path.join(os.path.dirname(__file__), "airports.csv"))
+    # de-dupe preserving order
+    seen, out = set(), []
+    for p in cand:
+        if p and p not in seen:
+            out.append(p); seen.add(p)
+    return out
+
 def load_airports_from_csv():
     """One-time load/refresh of airports.csv into airports table."""
-    csv_path = os.path.join(os.path.dirname(__file__), 'airports.csv')
-    if not os.path.exists(csv_path):
+    # Make sure the schema is there (idempotent)
+    ensure_airports_table()
+
+    candidates = _airports_csv_candidates()
+    csv_path = next((p for p in candidates if os.path.exists(p)), None)
+    if not csv_path:
+        logger.warning("airports.csv not found; looked in: %s", ", ".join(candidates))
         return
+
     with sqlite3.connect(get_db_file()) as c, open(csv_path, newline='', encoding='utf-8') as f:
         rdr = csv.DictReader(f)
+        # tolerate different schemas; pull with .get(...)
         for r in rdr:
-            c.execute("""
-              INSERT INTO airports
-                (ident,name,icao_code,iata_code,gps_code,local_code)
-              VALUES (?,?,?,?,?,?)
-              ON CONFLICT(ident) DO UPDATE SET
-                name       = excluded.name,
-                icao_code  = excluded.icao_code,
-                iata_code  = excluded.iata_code,
-                gps_code   = excluded.gps_code,
-                local_code = excluded.local_code
-            """, (
-                r['ident'], r['name'],
-                r['icao_code'] or None,
-                r['iata_code'] or None,
-                r['gps_code']  or None,
-                r['local_code'] or None
-            ))
+            ident = (r.get('ident') or '').strip()
+            if not ident:
+                continue  # skip rows without a canonical key
+            name  = (r.get('name') or '').strip()
+            icao  = (r.get('icao_code') or r.get('gps_code') or r.get('ident') or '').strip() or None
+            iata  = (r.get('iata_code') or '').strip() or None
+            gps   = (r.get('gps_code') or '').strip() or None
+            local = (r.get('local_code') or '').strip() or None
+            try:
+                c.execute("""
+                  INSERT INTO airports
+                    (ident,name,icao_code,iata_code,gps_code,local_code)
+                  VALUES (?,?,?,?,?,?)
+                  ON CONFLICT(ident) DO UPDATE SET
+                    name       = excluded.name,
+                    icao_code  = excluded.icao_code,
+                    iata_code  = excluded.iata_code,
+                    gps_code   = excluded.gps_code,
+                    local_code = excluded.local_code
+                """, (ident, name, icao, iata, gps, local))
+            except sqlite3.IntegrityError as e:
+                # If a uniqueness clash on iata/icao occurs, just skip that row.
+                logger.debug("airports.csv upsert skipped for ident=%s (%s)", ident, e)
+                continue
 
     # Any refresh invalidates cached lookups.
     try:
@@ -3045,6 +3115,130 @@ def ensure_trailing_semicolon(s: str) -> str:
         return t
     # Collapse any trailing spaces/semicolons to a single ';'
     return re.sub(r'[;\s]+$', '', t) + ';'
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pilot acknowledgment (typed/drawn signature) helpers
+# ─────────────────────────────────────────────────────────────────────────────
+def _sig_now_iso() -> str:
+    try:
+        return iso8601_ceil_utc()
+    except Exception:
+        return datetime.utcnow().replace(microsecond=0).isoformat()
+
+def _sig_strip_data_uri(b64_or_datauri: str | None) -> str:
+    """
+    Accepts either a bare base64 PNG or a data URI like 'data:image/png;base64,....'
+    Returns the base64 payload only ('' on falsy input).
+    """
+    if not b64_or_datauri:
+        return ""
+    s = str(b64_or_datauri).strip()
+    if s.startswith("data:image/png;base64,"):
+        s = s.split(",", 1)[1]
+    # Light sanity check
+    try:
+        # don’t keep it if it’s not valid base64
+        base64.b64decode(s, validate=True)
+    except Exception:
+        return ""
+    return s
+
+def set_pilot_ack_for_flight(
+    flight_id: int,
+    *, name: str,
+    method: str,                 # 'typed' | 'drawn'
+    signature_b64_or_datauri: str | None = None,
+    signed_at_iso: str | None = None
+) -> None:
+    """
+    Attach pilot acknowledgment to a flight:
+      - name (required)
+      - method: 'typed' or 'drawn'
+      - signature_b64_or_datauri: required for 'drawn', optional for 'typed'
+      - signed_at_iso: optional (defaults to now, ISO-8601)
+    Safe to call repeatedly (overwrites).
+    """
+    if not flight_id:
+        return
+    m = (method or "").strip().lower()
+    m = "drawn" if m == "drawn" else "typed"
+    sig_b64 = _sig_strip_data_uri(signature_b64_or_datauri) if m == "drawn" else ""
+    ts = signed_at_iso or _sig_now_iso()
+    with sqlite3.connect(get_db_file()) as c:
+        c.execute("""
+          UPDATE flights
+             SET pilot_ack_name         = ?,
+                 pilot_ack_method       = ?,
+                 pilot_ack_signature_b64= ?,
+                 pilot_ack_signed_at    = ?
+           WHERE id=?
+        """, (name.strip(), m, sig_b64, ts, int(flight_id)))
+
+def set_pilot_ack_for_queue(
+    qid: int,
+    *, name: str,
+    method: str,
+    signature_b64_or_datauri: str | None = None,
+    signed_at_iso: str | None = None
+) -> None:
+    """
+    Same as set_pilot_ack_for_flight, but stores on queued_flights.
+    Useful if you capture signature before a draft is sent.
+    """
+    if not qid:
+        return
+    m = (method or "").strip().lower()
+    m = "drawn" if m == "drawn" else "typed"
+    sig_b64 = _sig_strip_data_uri(signature_b64_or_datauri) if m == "drawn" else ""
+    ts = signed_at_iso or _sig_now_iso()
+    with sqlite3.connect(get_db_file()) as c:
+        c.execute("""
+          UPDATE queued_flights
+             SET pilot_ack_name          = ?,
+                 pilot_ack_method        = ?,
+                 pilot_ack_signature_b64 = ?,
+                 pilot_ack_signed_at     = ?
+           WHERE id=?
+        """, (name.strip(), m, sig_b64, ts, int(qid)))
+
+def copy_pilot_ack_from_queue(qid: int, flight_id: int) -> None:
+    """
+    When a queued flight becomes a real flight, copy any existing signature
+    fields across. No-ops if either record is missing.
+    """
+    if not (qid and flight_id):
+        return
+    with sqlite3.connect(get_db_file()) as c:
+        row = c.execute("""
+          SELECT pilot_ack_name, pilot_ack_method, pilot_ack_signature_b64, pilot_ack_signed_at
+            FROM queued_flights WHERE id=? LIMIT 1
+        """, (int(qid),)).fetchone()
+        if not row:
+            return
+        c.execute("""
+          UPDATE flights
+             SET pilot_ack_name         = COALESCE(?, pilot_ack_name),
+                 pilot_ack_method       = COALESCE(?, pilot_ack_method),
+                 pilot_ack_signature_b64= COALESCE(?, pilot_ack_signature_b64),
+                 pilot_ack_signed_at    = COALESCE(?, pilot_ack_signed_at)
+           WHERE id=?
+        """, (row[0], row[1], row[2], row[3], int(flight_id)))
+
+def get_pilot_ack_for_flight(flight_id: int) -> dict:
+    """
+    Fetch acknowledgment metadata (and signature base64) for export/audit.
+    Returns {} if not present.
+    """
+    if not flight_id:
+        return {}
+    rows = dict_rows("""
+      SELECT pilot_ack_name AS name,
+             pilot_ack_method AS method,
+             pilot_ack_signature_b64 AS signature_b64,
+             pilot_ack_signed_at AS signed_at
+        FROM flights WHERE id=? LIMIT 1
+    """, (int(flight_id),))
+    return rows[0] if rows else {}
 
 def _parse_manifest(manifest: str):
     """

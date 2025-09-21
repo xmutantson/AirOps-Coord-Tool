@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Aircraft List{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="page-header-bar">
+    <h1 class="page-title">Aircraft List</h1>
+    <form method="get" action="{{ url_for('aircraft.aircraft_list_view') }}" style="display:flex; gap:.5rem; align-items:center;">
+      <input type="search" name="q" placeholder="Search registration or pilot…" value="{{ q or '' }}" />
+      <button class="btn btn-primary" type="submit">Search</button>
+    </form>
+  </div>
+
+  {% include "partials/_aircraft_table.html" %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  // Handle row delete (keeps documents on disk – DB row only)
+  document.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.js-del-aircraft');
+    if (!btn) return;
+    e.preventDefault();
+    const reg = btn.getAttribute('data-reg') || 'this aircraft';
+    const url = btn.getAttribute('data-url');
+    if (!url) return;
+
+    const ok = confirm(`Delete ${reg} from the list?\n\nThis removes the record only. Any generated documents remain saved.`);
+    if (!ok) return;
+
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' }
+      });
+      // best-effort refresh
+      location.reload();
+    } catch (_) {
+      location.reload();
+    }
+  });
+</script>
+{% endblock %}

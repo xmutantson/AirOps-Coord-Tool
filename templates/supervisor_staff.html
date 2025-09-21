@@ -1,5 +1,36 @@
 {% extends "base.html" %}
 {% block content %}
+<style>
+  /* Lightweight modal sheet */
+  ._modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,.45);
+    display:none; z-index: 9998;
+  }
+  ._modal {
+    position: fixed; left: 50%; top: 6vh; transform: translateX(-50%);
+    width: min(960px, 92vw); max-height: 88vh; overflow: auto;
+    background: #fff; border: 1px solid #ddd; border-radius: .6rem;
+    box-shadow: 0 10px 30px rgba(0,0,0,.25); padding: 0;
+    display:none; z-index: 9999;
+  }
+  ._modal header {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:.75rem 1rem; border-bottom:1px solid #eee;
+  }
+  ._modal ._body { padding: 1rem; }
+  ._modal ._close {
+    border:1px solid #ccc; background:#f7f7f7; border-radius:.4rem;
+    padding:.3rem .6rem; cursor:pointer;
+  }
+</style>
+
+<!-- Modal scaffold (re-used for waiver flow) -->
+<div id="waiver-modal-backdrop" class="_modal-backdrop"></div>
+<div id="waiver-modal" class="_modal" role="dialog" aria-modal="true" aria-labelledby="waiver-modal-title">
+  <header><h3 id="waiver-modal-title" style="margin:0;">Paperwork</h3><button class="_close" data-close-modal>Close</button></header>
+  <div class="_body" id="waiver-modal-body"></div>
+  <div style="height:.25rem"></div>
+</div>
 <div style="max-width: 1000px; margin: 1rem auto;">
   <div style="display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap;">
     <h2 style="margin:0;">Duty Roster</h2>
@@ -18,22 +49,34 @@
   </div>
 
   <div style="margin: 1rem 0; padding:.75rem; border:1px solid #ddd; border-radius:.4rem;">
-    <form method="post" action="{{ url_for('staff.staff_new') }}" style="display:flex; gap:.5rem; flex-wrap:wrap; align-items:flex-end;">
+    <form id="staff-add-form" method="post" action="{{ url_for('staff.staff_new') }}" style="display:flex; gap:.75rem; flex-wrap:wrap; align-items:flex-end;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="window" value="{{ win }}">
-      <div>
+      <!-- Row 1: Name, Organization, EMC -->
+      <div style="min-width: 220px;">
         <label class="muted" for="name">Name</label><br>
         <input id="name" name="name" required placeholder="Jane Doe" style="padding:.35rem .5rem; border:1px solid #ccc; border-radius:.3rem;">
       </div>
-      <div>
-        <label class="muted" for="role">Role</label><br>
-        <input id="role" name="role" placeholder="Radio / Ramp / Inventory" style="padding:.35rem .5rem; border:1px solid #ccc; border-radius:.3rem;">
+      <div style="min-width: 220px;">
+        <label class="muted" for="organization">Organization</label><br>
+        <input id="organization" name="organization" placeholder="Red Cross / EOC / WWDART…" style="padding:.35rem .5rem; border:1px solid #ccc; border-radius:.3rem;">
       </div>
-      <div>
-        <label class="muted" for="ew_number">EW #</label><br>
-        <input id="ew_number" name="ew_number" placeholder="EW-123" style="padding:.35rem .5rem; border:1px solid #ccc; border-radius:.3rem;">
+      <div style="min-width: 160px;">
+        <label class="muted" for="emc">EMC (optional)</label><br>
+        <input id="emc" name="emc" placeholder="EMC-1234" style="padding:.35rem .5rem; border:1px solid #ccc; border-radius:.3rem;">
       </div>
-      <button type="submit" class="button" style="padding:.4rem .8rem; border:1px solid #ccc; border-radius:.4rem; background:#f6f6f6;">Add</button>
+      <!-- Force next line -->
+      <div style="flex-basis: 100%; height: 0;"></div>
+      <!-- Row 2: Email, Phone, Add -->
+      <div style="min-width: 260px;">
+        <label class="muted" for="email">Email</label><br>
+        <input id="email" name="email" type="email" placeholder="name@example.org" style="padding:.35rem .5rem; border:1px solid #ccc; border-radius:.3rem;">
+      </div>
+      <div style="min-width: 200px;">
+        <label class="muted" for="phone">Cell Phone</label><br>
+        <input id="phone" name="phone" inputmode="tel" placeholder="(555) 555-5555" style="padding:.35rem .5rem; border:1px solid #ccc; border-radius:.3rem;">
+      </div>
+      <button type="submit" class="button" style="padding:.55rem .9rem; border:1px solid #ccc; border-radius:.4rem; background:#f6f6f6; align-self:flex-end;">Add</button>
     </form>
   </div>
 
@@ -69,6 +112,126 @@
     if (a2) a2.href = "{{ url_for('staff.staff_ics214_download') }}?window=" + win;
   });
 
+  // ---- Modal helpers --------------------------------------------------------
+  const $backdrop = document.getElementById("waiver-modal-backdrop");
+  const $modal = document.getElementById("waiver-modal");
+  const $modalBody = document.getElementById("waiver-modal-body");
+  function showModal(html) {
+    $modalBody.innerHTML = html;
+    $backdrop.style.display = "block";
+    $modal.style.display = "block";
+  }
+  function closeModal() {
+    $modalBody.innerHTML = "";
+    $modal.style.display = "none";
+    $backdrop.style.display = "none";
+  }
+  // Close handlers
+  $backdrop.addEventListener("click", closeModal);
+  $modal.addEventListener("click", (e) => {
+    if (e.target.matches("[data-close-modal]")) closeModal();
+  });
+
+  // If a form is loaded inside the modal, submit it via AJAX by default.
+  document.addEventListener("submit", async (e) => {
+    const mf = e.target.closest("#waiver-modal form");
+    if (!mf) return;
+    e.preventDefault();
+    const fd = new FormData(mf);
+    try {
+      const resp = await fetch(mf.action || window.location.href, {
+        method: (mf.method || "POST").toUpperCase(),
+        headers: { "X-Requested-With": "XMLHttpRequest" },
+        body: fd,
+        credentials: "same-origin"
+      });
+      const ctype = resp.headers.get("content-type") || "";
+      if (!resp.ok) throw new Error("bad status");
+      if (ctype.includes("application/json")) {
+        const data = await resp.json();
+        if (data.html) showModal(data.html);
+        if (data.done) { closeModal(); await reloadStaffTable(); }
+        if (data.redirect) window.location.href = data.redirect;
+      } else {
+        const html = await resp.text();
+        // Replace modal content (server returned next step)
+        showModal(html);
+        // If the server indicates completion via an attribute, auto-close.
+        if (html.includes('data-waiver-complete="1"')) {
+          closeModal();
+          await reloadStaffTable();
+        }
+      }
+    } catch (_err) {
+      // Fall back to regular submit if AJAX fails
+      mf.submit();
+    }
+  }, true);
+
+  // ---- Intercept "Add" to keep the page from fully reloading ----------------
+  const addForm = document.getElementById("staff-add-form");
+  addForm?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const dispatchAdded = (detail) => window.dispatchEvent(new CustomEvent("staff:add:success", { detail }));
+    const fd = new FormData(addForm);
+    const nameJustEntered = (fd.get("name") || "").toString().trim();
+    // Hint to the server that we want an AJAX-friendly response
+    fd.append("ajax", "1");
+    try {
+      const resp = await fetch(addForm.action, {
+        method: "POST",
+        headers: { "X-Requested-With": "XMLHttpRequest" },
+        body: fd,
+        credentials: "same-origin"
+      });
+      const ctype = resp.headers.get("content-type") || "";
+      if (!resp.ok) throw new Error("bad status");
+      if (ctype.includes("application/json")) {
+        const data = await resp.json();
+        // New canonical path: server tells us who was added → refresh list → fire flow trigger.
+        if (data && data.ok && data.staff_id) {
+          await reloadStaffTable();
+          dispatchAdded({ staffId: data.staff_id, name: data.name || nameJustEntered });
+          addForm.reset();
+          return;
+        }
+        // Legacy/alternate: support modal_html/waiver_url if provided.
+        if (data.modal_html) { showModal(data.modal_html); }
+        else if (data.waiver_html) { showModal(data.waiver_html); }
+        else if (data.waiver_url) {
+          const inner = await fetch(data.waiver_url, { headers: { "X-Requested-With": "XMLHttpRequest" }, credentials: "same-origin" }).then(r => r.text());
+          showModal(inner);
+        } else {
+          await reloadStaffTable();
+          dispatchAdded({ staffId: data.staff_id || null, name: data.name || nameJustEntered });
+        }
+      } else {
+        // Server returned HTML (possibly a step) — treat it as modal content.
+        const html = await resp.text();
+        // If this looks like a staff table/partial or a full HTML doc, don't show it in the modal.
+        const looksLikeTable = /<table[\s\S]*<\/table>/i.test(html) && !/waiver/i.test(html);
+        const looksLikeDoc   = html.includes("<html") && html.includes("<body");
+        if (looksLikeTable || looksLikeDoc) {
+          await reloadStaffTable();
+          dispatchAdded({ staffId: null, name: nameJustEntered });
+        } else {
+          showModal(html); // genuine waiver fragment
+        }
+      }
+      // Clear the add form inputs on success
+      addForm.reset();
+    } catch (_e) {
+      // Fall back to normal navigation if AJAX fails
+      addForm.submit();
+    }
+  });
+
+  // Load global flow triggers (pilot/volunteer confirm + labels toasts)
+  // This is safe to include more than once; it self-guards.
+  </script>
+  <script src="{{ url_for('static', filename='js/flow_triggers.js') }}"></script>
+  <script>
+
   // Intercept Clock In/Out form submits and do AJAX to the form's true action URL.
   document.addEventListener("submit", async (e) => {
     const f = e.target.closest("form.toggle-form");
@@ -94,5 +257,54 @@
       window.location.reload();
     }
   }, false);
+
+  // Fallback delete handler (only if flow_triggers.js didn't bind)
+  document.addEventListener('click', async (e) => {
+    if (window.__HAS_DELETE_HANDLER__) return;
+    const btn = e.target.closest('[data-action="delete-staff"][data-id]');
+    if (!btn) return;
+    e.preventDefault();
+    const id = btn.getAttribute('data-id');
+    if (!window.confirm('Delete this staff member? This cannot be undone.')) return;
+    try {
+      const token = (document.querySelector('input[name="csrf_token"]')||{}).value || '';
+      const r = await fetch(`/supervisor/staff/${encodeURIComponent(id)}/delete`, {
+        method:'POST',
+        headers:{'X-Requested-With':'XMLHttpRequest','Content-Type':'application/x-www-form-urlencoded'},
+        body:`csrf_token=${encodeURIComponent(token)}`
+      });
+      if (r.ok) await reloadStaffTable(); else alert('Delete failed.');
+    } catch(_){ alert('Network error.'); }
+  });
+
+  // ───────────────────────────────────────────────────────────────────
+  // Bridge from dashboard check-in (handles 302 redirect fallback)
+  // If a pending profile is stashed, auto-fill the Add form and submit.
+  // ───────────────────────────────────────────────────────────────────
+  (function(){
+    let raw = null; try { raw = sessionStorage.getItem('pendingStaffProfile'); } catch(_){}
+    if (!raw) return;
+    let data = null; try { data = JSON.parse(raw); } catch(_){}
+    if (!data) { try { sessionStorage.removeItem('pendingStaffProfile'); } catch(_){ } return; }
+
+    const f = document.getElementById('staff-add-form');
+    if (!f) { try { sessionStorage.removeItem('pendingStaffProfile'); } catch(_){ } return; }
+
+    function setVal(name, val){ const el = f.querySelector(`[name="${name}"]`); if (el && val != null) el.value = String(val); }
+    setVal('name', data.name || '');
+    setVal('organization', data.organization || '');
+    setVal('emc', data.emc || '');
+    setVal('email', data.email || '');
+    setVal('phone', data.phone || '');
+    // Ensure the window param persists
+    const winHidden = f.querySelector('input[name="window"]'); if (winHidden && !winHidden.value) winHidden.value = '{{ win }}';
+    // Hint to the existing handler that we want AJAX semantics
+    try { const aj = f.querySelector('input[name="ajax"]'); if (!aj) { const i = document.createElement('input'); i.type='hidden'; i.name='ajax'; i.value='1'; f.appendChild(i); } } catch(_){}
+
+    // fire the existing AJAX submit handler
+    try { sessionStorage.removeItem('pendingStaffProfile'); } catch(_){}
+    // Give the DOM a tick so listeners are in place
+    setTimeout(()=>f.requestSubmit ? f.requestSubmit() : f.submit(), 50);
+  })();
 </script>
 {% endblock %}

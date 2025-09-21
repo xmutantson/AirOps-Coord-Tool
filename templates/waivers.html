@@ -1,0 +1,425 @@
+{% extends "base.html" %}
+{# Dynamic title → better default filename when users “Save as PDF” #}
+{% set _section = (section or "").strip() %}
+{% set _kind = 'pilot' if _section=='pilot_waiver' else ('volunteer' if _section=='volunteer_waiver' else 'labels') %}
+{% set _name = (printed_name or '') %}
+{% set _date_sp = (date_iso or '')|replace('-', ' ') %}
+{% set _title_suggest =
+   ('dart.pilot.waiver ' ~ _date_sp ~ ' ' ~ _name) if _kind=='pilot'
+   else (('dart.volunteer.waiver ' ~ _date_sp ~ ' ' ~ _name) if _kind=='volunteer'
+   else 'dart.labels') %}
+{% block title %}{{ _title_suggest|trim }}{% endblock %}
+
+{% block content %}
+<div class="container" style="max-width: 8.5in; margin: 0 auto;">
+  {# ─────────────────────────────────────────────────────────────
+     Minimal print CSS. We lean on app styles from base.html and
+     only add what’s needed for page sizing / borders / hiding UI.
+     ───────────────────────────────────────────────────────────── #}
+  <style>
+    :root{
+      --page-w: 8.5in;
+      --page-h: 11in;
+      --margin: 0.5in;
+      --grid-gap: 0.25in;
+    }
+    @page { size: Letter; margin: 0.5in; }
+
+    .print-page{
+      /* keep comfy preview on screen */
+      width: var(--page-w);
+      min-height: auto;
+      padding: var(--margin);
+      background: #fff;
+      /* no unconditional page break here; handle it in @media print */
+    }
+    /* Print/PDF: let @page margins create whitespace and avoid overflow */
+    @media print {
+      .print-page{
+        width: auto;            /* prevents 8.5in + padding overflow in some PDF engines */
+        padding: 0;             /* rely on @page { margin } for printable margins */
+        min-height: auto;
+      }
+      /* only break if there's another page following */
+      .print-page:not(:last-of-type){ break-after: page; }
+    }
+
+    /* Smaller titles so Pilot fits on 1 page at 100% */
+    .waiver-title{ font-size:1.05rem; line-height:1.15; text-align:center; margin:0 0 .4rem 0; }
+    .meta-grid{ margin-top:10px; margin-bottom:8px; }
+    .sig-grid{ margin-top:12px; }
+
+    .waiver-table{
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+    .waiver-table th, .waiver-table td{
+      border: 1px solid #000;
+      padding: 6px 8px;
+      vertical-align: top;
+    }
+    .waiver-table th{
+      background: #f2f2f2;
+      font-weight: 700;
+    }
+    .waiver-num{
+      width: 28px;
+      white-space: nowrap;
+      text-align: right;
+      padding-right: 6px;
+      display: inline-block;
+    }
+    .waiver-initials-col{
+      width: 90px;
+      text-align: center;
+      white-space: nowrap;
+    }
+    .initial-chip{
+      display: inline-block;
+      min-width: 40px;
+      border: 1px solid #000;
+      padding: 2px 6px;
+      font-weight: 600;
+      font-size: 0.9rem;
+    }
+
+    .sig-grid{
+      margin-top: 22px; /* a little more vertical space */
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      align-items: end;
+    }
+    .sig-field{
+      border-top: 1px solid #000;
+      padding-top: 4px;
+      min-height: 56px;
+      position: relative;
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
+    .sig-label{
+      font-size: 0.85rem;
+      position: absolute;
+      bottom: 100%;
+      left: 0;
+      transform: translateY(-4px);
+    }
+    .sig-img{
+      max-height: 52px;
+      max-width: 100%;
+      display: block;
+      object-fit: contain;
+    }
+
+    .meta-grid{
+      display: grid;
+      grid-template-columns: 1.5fr 1fr 1fr;
+      gap: 12px;
+      margin-top: 10px;
+      margin-bottom: 14px; /* extra breathing room above signatures */
+    }
+
+    /* Labels: 3×2 per page using inch math */
+    .labels-page{
+      width: var(--page-w);
+      min-height: var(--page-h);
+      padding: var(--margin);
+      background: #fff;
+      display: grid;
+      grid-template-columns: repeat(3, calc((var(--page-w) - (2 * var(--margin)) - (2 * var(--grid-gap))) / 3));
+      grid-template-rows: repeat(2, calc((var(--page-h) - (2 * var(--margin)) - (1 * var(--grid-gap))) / 2));
+      gap: var(--grid-gap);
+    }
+    @media print {
+      .labels-page{
+        width: auto;
+        padding: 0;
+      }
+      .labels-page:not(:last-of-type){ break-after: page; }
+    }
+    .label-card{
+      border: 2px solid #000;
+      padding: 8px;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
+    .label-card h3{
+      text-align: center;
+      font-size: 0.95rem;
+      margin: 0 0 6px;
+      letter-spacing: .3px;
+    }
+    .label-card table{
+      width:100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+    .label-card td{
+      border: 1px solid #000;
+      padding: 4px 6px;
+      vertical-align: top;
+    }
+    .label-card td:first-child{
+      width: 42%;
+      font-weight: 600;
+    }
+    .label-lines{ height: 100%; }
+    .label-lines div{
+      border-bottom: 1px solid #000;
+      height: 18px;
+    }
+
+    /* Print rules */
+    @media print{
+      /* hide chrome & controls universally */
+      header, nav, .sidebar, .hide-on-print,
+      button, .button, input, select, textarea { display: none !important; }
+      .print-page, .labels-page{ margin: 0; }
+      .initialize-btn{ display: none !important; }
+    }
+  </style>
+
+  {% set _section = (section or "").strip() %}
+  {% set _print = print_mode or false %}
+  {% set _auto  = auto_print or false %}
+
+  {# ====================== PILOT WAIVER ====================== #}
+  {% if _section == "pilot_waiver" %}
+  <section id="pilot" class="print-page">
+    <span id="waiver-pilot" hidden data-print="{{ 1 if _print else 0 }}"></span>
+    <h1 class="waiver-title">Pilot Certification And Waiver of Liability</h1>
+    <table class="waiver-table">
+      <thead>
+        <tr>
+          <th>Waiver of Liability Articles</th>
+          <th class="waiver-initials-col">Initials</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for n, text in [
+          (1, "The WWDART Airlift Pilot (herein called Pilot) hereby agrees and attests that he or she will provide the requested disaster relief airlift flights as a humanitarian service with no expectation of reimbursement of any kind, including money, free or discounted fuel, or anything of value in exchange except for courtesy refreshments and snacks before, during and after such volunteer flights, plus the gratitude of the communities served by such Good Samaritan humanitarian relief, and the sincere appreciation of the Walla Walla County Disaster Airlift Response Team (DART)."),
+          (2, "Pilot agrees to safely operate his or her aircraft in accordance with all applicable rules specified in U.S. Federal Aviation Regulations Part 91. If safe operation of the flight appears to be in question, Pilot agrees to abort the operation."),
+          (3, "Pilot agrees to accept all responsibility to supervise proper loading and securing of all cargo transported in his or her aircraft used, and accepts any assistance requested of the Ramp Crew on a hold harmless basis. Pilot agrees that he or she is fully responsible for achieving proper weight and balance limitations in accordance with the manufacturer's Pilot Operating Handbook."),
+          (4, "Pilot agrees to provide a copy of a valid insurance policy verifying coverage for a minimum of $1,000,000 of personal liability and property damage, plus normal hull, pilot and passenger bodily injury or death for the aircraft used during the disaster airlift operations."),
+          (5, "Pilot agrees to be rated, proficient, and current for the type, make, and model of aircraft flown, including for instrument flight if flying IFR."),
+          (6, "If changes occur regarding the aircraft or pilot, Pilot agrees to inform the Flight Operations Manager prior to additional flights."),
+          (7, "Pilot agrees to hold harmless the Walla Walla County Emergency Management, Walla Walla DART, the DART volunteers and the DART volunteer pilots from any and all liability, including, but not limited to, liability for negligence for any personal injury, death, or property damage Pilot may suffer and for any wrongful death action that Pilot's estate might otherwise bring arising from the injury while Pilot is engaged in a WWDART mission."),
+          (8, "Pilot agrees that in the event any portion of this contract is held to be invalid, the remaining portions shall remain in full force and effect.")
+        ] %}
+        <tr>
+          <td>
+            <span class="waiver-num">{{ n }}.</span>
+            {{ text }}
+          </td>
+          <td class="waiver-initials-col">
+            {% set key = n|string %}
+            {% if _print %}
+              <span class="initial-chip">{{ (initials_map.get(key) if initials_map else "") or "" }}</span>
+            {% else %}
+              {% set existing = (initials_map.get(key) if initials_map else "") or "" %}
+              {% if existing %}
+                <span class="initial-chip">{{ existing }}</span>
+              {% else %}
+                <button type="button" class="btn btn-sm btn-outline-secondary initialize-btn" data-for="p{{ n }}">Tap to initial</button>
+                <span id="p{{ n }}" class="initial-chip" hidden></span>
+              {% endif %}
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <p class="mt-2">I accept the above articles and agree to the conditions.</p>
+
+    <div class="meta-grid">
+      <div>
+        <label class="form-label">Printed</label>
+        {% if _print %}
+          <div style="border-bottom:1px solid #000; padding:6px 0;">{{ printed_name or "" }}</div>
+        {% else %}
+          <input class="form-control form-control-sm" id="pilot_printed" name="printed_name" value="{{ printed_name or '' }}" placeholder="Pilot name">
+        {% endif %}
+      </div>
+      <div>
+        <label class="form-label">Date</label>
+        {% if _print %}
+          <div style="border-bottom:1px solid #000; padding:6px 0;">{{ date_iso or "" }}</div>
+        {% else %}
+          <input class="form-control form-control-sm" id="pilot_date" type="date" name="date" value="{{ date_iso or '' }}">
+        {% endif %}
+      </div>
+      <div></div>
+    </div>
+
+    <div class="sig-grid">
+      <div class="sig-field">
+        <div class="sig-label">Signature</div>
+        {% if pilot_signature_b64 %}
+          <img class="sig-img"
+               src="{{ pilot_signature_b64 if pilot_signature_b64.startswith('data:image') else ('data:image/png;base64,' ~ pilot_signature_b64) }}">
+        {% endif %}
+      </div>
+      <div class="sig-field">
+        <div class="sig-label">Witness</div>
+        {% if witness_signature_b64 %}
+          <img class="sig-img"
+               src="{{ witness_signature_b64 if witness_signature_b64.startswith('data:image') else ('data:image/png;base64,' ~ witness_signature_b64) }}">
+        {% endif %}
+      </div>
+    </div>
+  </section>
+  {% if not _print %}
+  <div class="hide-on-print" style="display:flex;gap:.5rem;justify-content:flex-end;margin-top:.75rem;">
+    <button id="print-submit" class="button btn-primary">Print Page</button>
+  </div>
+  {% endif %}
+  {% endif %}
+
+  {# ==================== VOLUNTEER WAIVER ==================== #}
+  {% if _section == "volunteer_waiver" %}
+  <section id="volunteer" class="print-page">
+    <span id="waiver-volunteer" hidden data-print="{{ 1 if _print else 0 }}"></span>
+    <h1 class="waiver-title">Volunteer Certification And Waiver of Liability</h1>
+    <table class="waiver-table">
+      <thead>
+        <tr>
+          <th>Certification and Waiver of Liability Articles</th>
+          <th class="waiver-initials-col">Initials</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for n, text in [
+          (1, "The WWDART Volunteer (herein called Volunteer) hereby agrees and attests that he/she will learn the duties of the work to be performed and perform the work properly, with full regard for the safety of all volunteers and public and with the approval of the WWDART Lead."),
+          (2, "Volunteer agrees to hold harmless the Walla Walla County Emergency Management, WWDART, and DART volunteers, and the DART volunteer pilots from any and all liability, including but not limited to, liability for any personal injury, death, or property damage Volunteer may suffer and for any wrongful death action which the Volunteer's estate might otherwise bring arising out of such injury while Volunteer is engaged in the WWDART operation."),
+          (3, "Volunteer understands that it is Volunteer's sole and exclusive responsibility to purchase any flight or accident insurance should the Volunteer desire to be insured in this operation."),
+          (4, "Volunteer agrees that in the event any portion of this contract is held to be invalid, the remaining portions shall remain in full force and effect.")
+        ] %}
+        <tr>
+          <td>
+            <span class="waiver-num">{{ n }}.</span>
+            {{ text }}
+          </td>
+          <td class="waiver-initials-col">
+            {% set key = n|string %}
+            {% if _print %}
+              <span class="initial-chip">{{ (initials_map.get(key) if initials_map else "") or "" }}</span>
+            {% else %}
+              {% set existing = (initials_map.get(key) if initials_map else "") or "" %}
+              {% if existing %}
+                <span class="initial-chip">{{ existing }}</span>
+              {% else %}
+                <button type="button" class="btn btn-sm btn-outline-secondary initialize-btn" data-for="v{{ n }}">Tap to initial</button>
+                <span id="v{{ n }}" class="initial-chip" hidden></span>
+              {% endif %}
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <p class="mt-2">I accept the above articles and agree to the conditions.</p>
+
+    <div class="meta-grid">
+      <div>
+        <label class="form-label">Printed</label>
+        {% if _print %}
+          <div style="border-bottom:1px solid #000; padding:6px 0;">{{ printed_name or "" }}</div>
+        {% else %}
+          <input class="form-control form-control-sm" id="vol_printed" name="printed_name" value="{{ printed_name or '' }}" placeholder="Volunteer name">
+        {% endif %}
+      </div>
+      <div>
+        <label class="form-label">Date</label>
+        {% if _print %}
+          <div style="border-bottom:1px solid #000; padding:6px 0;">{{ date_iso or "" }}</div>
+        {% else %}
+          <input class="form-control form-control-sm" id="vol_date" type="date" name="date" value="{{ date_iso or '' }}">
+        {% endif %}
+      </div>
+      <div></div>
+    </div>
+
+    <div class="sig-grid">
+      <div class="sig-field">
+        <div class="sig-label">Signature</div>
+        {% if pilot_signature_b64 %}
+          <img class="sig-img"
+               src="{{ pilot_signature_b64 if pilot_signature_b64.startswith('data:image') else ('data:image/png;base64,' ~ pilot_signature_b64) }}">
+        {% endif %}
+      </div>
+      <div class="sig-field">
+        <div class="sig-label">Witness</div>
+        {% if witness_signature_b64 %}
+          <img class="sig-img"
+               src="{{ witness_signature_b64 if witness_signature_b64.startswith('data:image') else ('data:image/png;base64,' ~ witness_signature_b64) }}">
+        {% endif %}
+      </div>
+    </div>
+  </section>
+  {% if not _print %}
+  <div class="hide-on-print" style="display:flex;gap:.5rem;justify-content:flex-end;margin-top:.75rem;">
+    <button id="print-submit" class="button btn-primary">Print Page</button>
+  </div>
+  {% endif %}
+  {% endif %}
+
+  {# ============== DART MATERIAL IDENTIFICATION LABELS ============== #}
+  {% if _section == "labels" %}
+  {% for page in labels|batch(6, fill_with=None) %}
+  <section id="labels" class="labels-page label-grid-3x2">
+    <span id="labels-dart" hidden></span>
+    {# Expect a list like:
+       labels = [
+         {"mission": "M-001", "from_org":"Walla Walla DART", "origin":"ALW",
+          "destination":"EPH", "date_sealed":"2025-08-09", "weight_lb":"42",
+          "contents":"Rice 10 lb × 3; Beans 5 lb × 2"},
+         ... up to any number; we render 6 per page and paginate via CSS
+       ]
+    #}
+    {% for label in page if label %}
+      <div class="label-card">
+        <h3>DART MATERIAL IDENTIFICATION LABEL</h3>
+        <table>
+          <tr><td>Mission Number:</td><td>{{ label.mission or "" }}</td></tr>
+          <tr><td>From:</td><td>{{ label.from_org or "Walla Walla DART" }}</td></tr>
+          <tr><td>Originating Airport:</td><td>{{ label.origin or "" }}</td></tr>
+          <tr><td>Destination Airport:</td><td>{{ label.destination or "" }}</td></tr>
+          <tr><td>Date Sealed/Shipped:</td><td>{{ label.date_sealed or "" }}</td></tr>
+          <tr><td>Weight (lb):</td><td>{{ label.weight_lb or "" }}</td></tr>
+          <tr>
+            <td>Contents:</td>
+            <td class="label-lines">
+              {% if label.contents %}
+                <div style="border:none;height:auto;white-space:pre-wrap">{{ label.contents }}</div>
+              {% endif %}
+              <div></div><div></div><div></div><div></div><div></div>
+            </td>
+          </tr>
+        </table>
+      </div>
+    {% endfor %}
+  </section>
+  {% endfor %}
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>window.CSRF_TOKEN = "{{ csrf_token() }}";</script>
+<script src="{{ url_for('static', filename='js/waivers.js') }}"></script>
+{% if print_mode %}
+<script>
+  // In print mode, open the print dialog once after layout settles.
+  window.addEventListener('load', () => {
+    const kick = () => { try { window.focus(); window.print(); } catch(_) {} };
+    requestAnimationFrame(() => setTimeout(kick, 0));
+  });
+</script>
+{% endif %}
+{% endblock %}

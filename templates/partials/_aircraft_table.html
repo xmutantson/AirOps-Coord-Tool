@@ -1,0 +1,43 @@
+<table class="ops-flight-table">
+  <thead>
+    <tr>
+      <th style="width:1%"></th>
+      <th>Registration</th>
+      <th>Pilot</th>
+      <th>Make/Model</th>
+      <th>Net Avail (lbs)</th>
+      <th>Email</th>
+      <th>Phone</th>
+      <th>Updated</th>
+      <th class="status">Action</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td class="status">
+        <button class="btn btn-danger js-del-aircraft"
+                data-id="{{ r.id }}" data-reg="{{ r.registration }}"
+                data-url="{{ url_for('aircraft.aircraft_delete', id=r.id) }}">Delete</button>
+      </td>
+      <td><strong>{{ r.registration }}</strong></td>
+      <td>{{ r.pilot_name }}</td>
+      <td>{{ r.aircraft_make_model }}</td>
+      <td>{{ r.net_available_weight_lbs or "" }}</td>
+      <td>{{ r.email or "" }}</td>
+      <td>{{ r.mobile_phone or r.work_phone or r.home_phone or "" }}</td>
+      <td>{{ r.updated_at or r.created_at }}</td>
+      <td class="status">
+        {% if r.staff_id %}
+          <a class="btn btn-secondary" href="{{ url_for('aircraft.aircraft_new_form') }}?staff_id={{ r.staff_id }}&edit=1">Edit</a>
+        {% else %}
+          <span class="btn btn-secondary disabled" title="Editing requires a linked staff record" aria-disabled="true" tabindex="-1">Edit</span>
+        {% endif %}
+        <a class="btn btn-secondary" href="{{ url_for('aircraft.pai_print', id=r.id) }}">Print</a>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="8" style="text-align:center; color:#666; padding:1rem;">No aircraft yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>

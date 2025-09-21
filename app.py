@@ -79,6 +79,32 @@ if not logging.getLogger().handlers:
         stream=sys.stdout,
     )
 
+def tame_third_party_logs() -> None:
+    """
+    Reduce noise from third-party libraries used during PDF generation and scheduling,
+    without altering the application's own logger level.
+    """
+    # WeasyPrint "Ignored ..." CSS warnings → keep only errors
+    logging.getLogger('weasyprint').setLevel(logging.ERROR)
+
+    # FontTools chatty DEBUG/INFO during subsetting → raise to WARNING
+    logging.getLogger('fontTools').setLevel(logging.WARNING)
+    logging.getLogger('fontTools.ttLib').setLevel(logging.WARNING)
+    logging.getLogger('fontTools.subset').setLevel(logging.WARNING)
+
+    # APScheduler “job executed successfully” every minute → raise to WARNING
+    logging.getLogger('apscheduler').setLevel(logging.WARNING)
+    logging.getLogger('apscheduler.executors.default').setLevel(logging.WARNING)
+
+    # Optional if you want less werkzeug noise in production:
+    # logging.getLogger('werkzeug').setLevel(logging.WARNING)
+
+# Quiet noisy third-party libraries without changing your app log level.
+try:
+    tame_third_party_logs()
+except Exception as _e:
+    logging.getLogger(__name__).debug("logging tamer failed: %s", _e)
+
 _sql_logger = logging.getLogger("sql")
 if not _sql_logger.handlers:
     _h = logging.StreamHandler(sys.stdout)
@@ -439,6 +465,7 @@ supervisor_bp  = _get_bp("modules.routes.supervisor")
 wginventory_bp  = _get_bp("modules.routes.wargame.inventory")
 staff_bp       = _get_bp("modules.routes.staff")
 comms_bp       = _get_bp("modules.routes.comms")
+aircraft_bp    = _get_bp("modules.utils.aircraft")   # ← merged utils+routes
 locates_bp     = _get_bp("modules.routes.locates")   # /api/locates/*
 
 # Register blueprints with unique names to avoid collisions
@@ -465,6 +492,7 @@ _reg(tiles_bp,       name="tiles")
 _reg(locates_bp,     name="locates")
 _reg(staff_bp,       name="staff")
 _reg(comms_bp,       name="comms")
+_reg(aircraft_bp,    name="aircraft")   # /aircraft routes
 
 # Shutdown hook from services
 _jobs = _safe_import("modules.services.jobs")

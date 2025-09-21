@@ -19,7 +19,8 @@ except Exception:
         return None
 
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
-from modules.utils.common import parse_adv_manifest, guess_category_id_for_name, new_manifest_session_id, sanitize_name
+from modules.utils.common import parse_adv_manifest, guess_category_id_for_name, new_manifest_session_id, sanitize_name, \
+    get_pilot_ack_for_flight, set_pilot_ack_for_flight
 from app import publish_inventory_event
 from app import DB_FILE
 from modules.utils.common import aggregate_manifest_net, flip_session_pending_to_committed
@@ -192,6 +193,14 @@ def ramp_boss():
     if request.method == 'POST':
         # ── Validate destination against airports DB ─────────────────────
         dest = request.form.get('destination','').upper().strip()
+        # HARD GATE: destination is required to submit from Ramp Boss
+        if not dest:
+            msg = 'Destination is required.'
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return jsonify({'error':'destination_required','message':msg}), 400
+            flash(msg, 'error')
+            # Keep UX consistent with legacy: redirect back to Ramp Boss
+            return redirect(url_for('ramp.ramp_boss'))
         if dest:
             rows = dict_rows(
                 "SELECT 1 FROM airports "
@@ -593,6 +602,14 @@ def queue_flight():
     """Save this RampBoss form as a draft in queued_flights + record its cargo."""
     # --- Collect form inputs ---
     mid               = request.form.get('manifest_id','')
+    # HARD GATE for Ramp-Boss-origin "Add to Queue": require a destination.
+    # (Quick Add has its own minimal route that permits missing destination.)
+    if not (request.form.get('destination','') or '').strip():
+        msg = 'Destination is required.'
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({'error':'destination_required','message': msg}), 400
+        flash(msg, 'error')
+        return redirect(url_for('ramp.ramp_boss'))
     # Ensure we have a place to persist the manifest id on the draft
     try:
         ensure_column("queued_flights", "manifest_id", "TEXT")
@@ -806,7 +823,7 @@ def queued_flights():
 
     # Build query
     base_sql = """
-      SELECT id, direction, tail_number,
+      SELECT id, direction, tail_number, pilot_name,
              airfield_takeoff, airfield_landing,
              travel_time, cargo_type, remarks, created_at
         FROM queued_flights
@@ -864,7 +881,7 @@ def queued_flights_table_partial():
         airport_idents = list(dict.fromkeys([a.strip().upper() for a in acc if a and a.strip()]))
 
     base_sql = """
-      SELECT id, direction, tail_number,
+      SELECT id, direction, tail_number, pilot_name,
              airfield_takeoff, airfield_landing,
              travel_time, cargo_type, remarks, created_at
         FROM queued_flights
@@ -893,6 +910,15 @@ def send_queued_flight(qid):
     if not q:
         flash(f"Queue entry {qid} not found.", 'error')
         return redirect(url_for('ramp.queued_flights'))
+    # HARD GATE: cannot send a queued flight without a destination
+    if not (q[0].get('airfield_landing') or '').strip():
+        msg = "Destination is required before sending."
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({'error':'destination_required','message': msg}), 400
+        flash(msg, 'error')
+        # Send the operator to the editor to fill it in
+        return redirect(url_for('ramp.edit_queued_flight', qid=qid))
+
     q = q[0]
 
     # ── take-off & ETA come **from the browser** when available ─────────────
@@ -1079,6 +1105,30 @@ def send_queued_flight(qid):
         # Commit all session pendings for this manifest (now that it's sent)
         if mid:
             c.execute("UPDATE inventory_entries SET pending=0 WHERE session_id=? AND pending=1", (mid,))
+
+        # ── If the draft already has a pilot acknowledgment, copy it onto the flight ──
+        try:
+            row_ack = c.execute("""
+              SELECT pilot_ack_name, pilot_ack_method, pilot_ack_signature_b64, pilot_ack_signed_at
+                FROM queued_flights WHERE id=? LIMIT 1
+            """, (qid,)).fetchone()
+            if row_ack:
+                c.execute("""
+                  UPDATE flights
+                     SET pilot_ack_name          = COALESCE(?, pilot_ack_name),
+                         pilot_ack_method        = COALESCE(?, pilot_ack_method),
+                         pilot_ack_signature_b64 = COALESCE(?, pilot_ack_signature_b64),
+                         pilot_ack_signed_at     = COALESCE(?, pilot_ack_signed_at)
+                   WHERE id=?
+                """, (
+                   row_ack['pilot_ack_name'],
+                   row_ack['pilot_ack_method'],
+                   row_ack['pilot_ack_signature_b64'],
+                   row_ack['pilot_ack_signed_at'],
+                   fid
+                ))
+        except Exception:
+            pass
 
         # delete the draft record
         c.execute("DELETE FROM queued_flights WHERE id=?", (qid,))
@@ -1709,6 +1759,109 @@ def delete_flight_cargo(fcid):
             pass
 
     return jsonify(status='ok', comp_id=comp_id)
+
+# ──────────────────────────────────────────────────────────────────────────
+# Pilot acknowledgment (typed name or drawn signature)
+#   • POST /flight/<id>/ack     ← persists acknowledgment on flights.*
+#   • GET  /api/flight/<id>/ack ← returns ack json for audit/export/UI
+# Storage is handled via common.set_pilot_ack_for_flight (DB columns added by migrations).
+# ──────────────────────────────────────────────────────────────────────────
+@bp.post('/flight/<int:flight_id>/ack')
+def flight_ack(flight_id):
+    """
+    Persist pilot acknowledgment for a flight.
+    Accepts:
+      - typed_name (string, optional if signature_data is present)
+      - signature_data (data:image/png;base64,..., optional if typed_name present)
+    Rules:
+      • At least one of typed_name or signature_data must be present.
+      • If signature_data is present → method='drawn', else 'typed'.
+    """
+    typed = (request.form.get('typed_name') or '').strip()
+    sig   = (request.form.get('signature_data') or '').strip()
+    if not typed and not sig:
+        msg = 'Type name or draw a signature.'
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({'ok': False, 'error': 'signature_required', 'message': msg}), 400
+        flash(msg, 'error')
+        return redirect(request.referrer or url_for('core.dashboard'))
+
+    method = 'drawn' if sig else 'typed'
+    try:
+        set_pilot_ack_for_flight(
+            flight_id=flight_id,
+            name=typed or '',
+            method=method,
+            signature_b64_or_datauri=sig or None,
+            signed_at_iso=None
+        )
+    except Exception:
+        current_app.logger.exception('Failed to save pilot ack')
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({'ok': False, 'error': 'signature_save_failed'}), 500
+        flash('Failed to save pilot acknowledgment.', 'error')
+        return redirect(request.referrer or url_for('core.dashboard'))
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        return jsonify({'ok': True})
+    flash('Pilot acknowledgment saved.', 'success')
+    return redirect(request.referrer or url_for('core.dashboard'))
+
+@bp.get('/api/flight/<int:flight_id>/ack')
+def api_flight_ack(flight_id):
+    """Returns: { name, method, signature_b64, signed_at } or {}"""
+    try:
+        data = get_pilot_ack_for_flight(flight_id) or {}
+    except Exception:
+        current_app.logger.exception('Ack fetch failed')
+        return jsonify({}), 500
+    return jsonify(data or {})
+
+# ──────────────────────────────────────────────────────────────────────────
+# Quick Add to Ramp Queue
+# Tail required; pilot optional; direction defaults to outbound.
+# Inserts a minimal draft so ops can fill destination/details later.
+# ──────────────────────────────────────────────────────────────────────────
+@bp.post('/queue_quick_add')
+def queue_quick_add():
+    tail   = (request.form.get('tail_number') or '').strip().upper()
+    pilot  = (request.form.get('pilot_name') or '').strip()
+    direct = (request.form.get('direction') or 'outbound').strip().lower()
+    direction = 'inbound' if direct == 'inbound' else 'outbound'
+
+    if not tail:
+        msg = 'Tail number is required.'
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({'error':'tail_required','message': msg}), 400
+        flash(msg, 'error')
+        return redirect(url_for('ramp.queued_flights'))
+
+    created_at = datetime.utcnow().isoformat()
+    with sqlite3.connect(DB_FILE) as c:
+        c.row_factory = sqlite3.Row
+        c.execute("BEGIN IMMEDIATE")
+        try:
+            ensure_column("queued_flights", "manifest_id", "TEXT")
+        except Exception:
+            pass
+        cur = c.execute("""
+          INSERT INTO queued_flights(
+            direction, pilot_name, pax_count, tail_number,
+            airfield_takeoff, airfield_landing, travel_time,
+            cargo_weight, cargo_type, remarks, created_at
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+          direction, pilot, '', tail,
+          '', '', '',     # origin/destination/travel_time left blank
+          '0', '', '',    # cargo weight/type/remarks defaulted
+          created_at
+        ))
+        qid = cur.lastrowid
+        c.commit()
+
+    flash(f"Draft {qid} created for {tail}.", 'success')
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        return jsonify({'status':'queued','qid': qid})
+    return redirect(url_for('ramp.queued_flights'))
 
 # ──────────────────────────────────────────────────────────────────────────
 # Helpers for manifest math (server-side “gate” / preview and effective qty)

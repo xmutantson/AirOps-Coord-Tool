@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% block title %}Pilot & Aircraft Information{% endblock %}
+{% block content %}
+<div class="container" style="max-width: 820px;">
+  <h1>Pilot &amp; Aircraft Information</h1>
+
+  {% if errors %}
+    <div class="toast error show" style="position:static; margin:.5rem 0 0;">
+      {{ errors.__all__ or "Please correct the highlighted fields." }}
+    </div>
+  {% endif %}
+
+  <form method="post" action="{{ url_for('aircraft.aircraft_new_post') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="staff_id" value="{{ staff_id }}">
+
+    <details open>
+      <summary><strong>Pilot</strong></summary>
+      <label>Pilot Name (required)
+        <input name="pilot_name" value="{{ prefill.pilot_name }}" required />
+      </label>
+      <label>Pilot Certificate Number (required)
+        <input name="pilot_cert_number" value="{{ prefill.pilot_cert_number }}" required />
+      </label>
+      <label>Type Ratings
+        <input name="type_ratings" value="{{ prefill.type_ratings }}">
+      </label>
+      <label>Email
+        <input type="email" name="email" value="{{ prefill.email }}">
+      </label>
+      <label>Mobile Phone
+        <input name="mobile_phone" value="{{ prefill.mobile_phone }}">
+      </label>
+      <label>Work Phone
+        <input name="work_phone" value="{{ prefill.work_phone }}">
+      </label>
+      <label>Home Phone
+        <input name="home_phone" value="{{ prefill.home_phone }}">
+      </label>
+      <label>Street Address
+        <input name="street_address" value="{{ prefill.street_address }}">
+      </label>
+      <label>City, State
+        <input name="city_state" value="{{ prefill.city_state }}">
+      </label>
+      <label>ZIP
+        <input name="zip_code" value="{{ prefill.zip_code }}">
+      </label>
+    </details>
+
+    <details open>
+      <summary><strong>Aircraft</strong></summary>
+      <label>Make/Model (required)
+        <input name="aircraft_make_model" placeholder="Cessna 172" value="{{ prefill.aircraft_make_model }}" required>
+      </label>
+      <label>Registration (required)
+        <input id="registration" name="registration" value="{{ prefill.registration }}" required style="text-transform:uppercase">
+      </label>
+      <label>Net Available Weight (lb)
+        <input id="net_available_weight_lbs" name="net_available_weight_lbs" value="{{ prefill.net_available_weight_lbs }}" placeholder="e.g., 600">
+        {% if errors and errors.net_available_weight_lbs %}<small style="color:#c33">{{ errors.net_available_weight_lbs }}</small>{% endif %}
+      </label>
+    </details>
+
+    <details>
+      <summary><strong>Emergency Contact</strong></summary>
+      <label>Name
+        <input name="emc_name" value="{{ prefill.emc_name }}">
+      </label>
+      <label>Phone
+        <input name="emc_phone" value="{{ prefill.emc_phone }}">
+      </label>
+      <label>Relationship
+        <input name="emc_relationship" value="{{ prefill.emc_relationship }}">
+      </label>
+    </details>
+
+    <details>
+      <summary><strong>Reviewed By</strong></summary>
+      <label>Reviewed by
+        <input id="reviewed_by" name="reviewed_by" value="{{ prefill.reviewed_by }}">
+        <small class="muted">We’ll suggest your last used value from this browser.</small>
+      </label>
+      <label>Review Notes
+        <textarea name="review_notes">{{ prefill.review_notes }}</textarea>
+      </label>
+      <label>Review Date
+        <input id="review_date_utc" type="date" name="review_date_utc" value="{{ prefill.review_date_utc }}">
+      </label>
+    </details>
+
+    <div class="form-buttons" style="display:flex; gap:.5rem; margin-top:.75rem;">
+      <button class="btn btn-primary" type="submit">Save &amp; Print</button>
+    </div>
+  </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  (function(){
+    const KEY = 'pai_reviewed_by';
+    try {
+      const ls = window.localStorage;
+      const fromLS = ls ? ls.getItem(KEY) : '';
+      const fromCookie = (document.cookie.split('; ').find(s => s.startsWith(KEY+'=')) || '').split('=').slice(1).join('=');
+      const v = fromLS || fromCookie;
+      if (v) { // prefill only if empty
+        const inp = document.getElementById('reviewed_by');
+        if (inp && !inp.value) inp.value = decodeURIComponent(v);
+      }
+      const inp = document.getElementById('reviewed_by');
+      if (inp) {
+        inp.addEventListener('change', () => {
+          const val = encodeURIComponent(inp.value || '');
+          try { if (localStorage) localStorage.setItem(KEY, inp.value || ''); } catch(_) {}
+          document.cookie = KEY + '=' + val + '; path=/; max-age={{ 365*24*3600 }}';
+        });
+      }
+    } catch(_) {}
+  })();
+
+  // Normalize registration to uppercase as the user types (do not restrict formats).
+  (function(){
+    const reg = document.getElementById('registration');
+    if (!reg) return;
+    const toUpper = () => { if (reg.value) reg.value = reg.value.toUpperCase(); };
+    reg.addEventListener('input', toUpper);
+    reg.addEventListener('blur', toUpper);
+    // run once on load in case browser autofill populated it
+    toUpper();
+  })();
+
+  // Net Available Weight: accept "600", "600 lb", "600lbs", etc.
+  // Coerce to a plain number string before submit.
+  (function(){
+    const form = document.querySelector('form[action="{{ url_for('aircraft.aircraft_new_post') }}"]') || document.querySelector('form');
+    const el   = document.getElementById('net_available_weight_lbs');
+    if (!form || !el) return;
+    function coerce(){
+      const raw = (el.value || '').trim();
+      // pull first integer or decimal from the string
+      const m = raw.match(/(\d+(?:\.\d+)?)/);
+      if (m) {
+        // round halves down to integer pounds if decimal; server treats as lbs
+        const n = Math.floor(parseFloat(m[1]));
+        el.value = String(isFinite(n) ? n : '');
+      }
+    }
+    form.addEventListener('submit', coerce);
+    el.addEventListener('blur', coerce);
+  })();
+
+  // Reviewed Date → default to today if empty (spec).
+  (function(){
+    const el = document.getElementById('review_date_utc');
+    if (!el || el.value) return;
+    try {
+      const tz = new Date();
+      const y = tz.getFullYear();
+      const m = String(tz.getMonth() + 1).padStart(2, '0');
+      const d = String(tz.getDate()).padStart(2, '0');
+      el.value = `${y}-${m}-${d}`;
+    } catch(_) {}
+  })();
+</script>
+{% endblock %}

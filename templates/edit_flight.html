@@ -8,6 +8,15 @@
 
   <h2>Edit Flight {{ flight['tail_number'] }}</h2>
 
+  <!-- Action bar: Print Labels -->
+  <div class="action-bar"
+       style="display:flex; gap:.5rem; align-items:center; justify-content:flex-end; margin:.5rem 0 1rem;">
+    <a href="/docs/labels/cargo?flight_id={{ flight['id'] }}&scope=all"
+       class="btn-secondary"
+       target="_blank" rel="noopener"
+       title="Print cargo labels">📦 Print Labels</a>
+  </div>
+
   <div class="ramp-form-container">
     <form method="POST">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

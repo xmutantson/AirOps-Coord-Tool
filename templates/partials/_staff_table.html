@@ -2,8 +2,8 @@
   <thead>
     <tr style="border-bottom:1px solid #ddd;">
       <th style="text-align:left; padding:.4rem;">Name</th>
-      <th style="text-align:left; padding:.4rem;">Role</th>
-      <th style="text-align:left; padding:.4rem;">EW #</th>
+      <th style="text-align:left; padding:.4rem;">Organization</th>
+      <th style="text-align:left; padding:.4rem;">EMC</th>
       <th style="text-align:left; padding:.4rem;">Status</th>
       <th style="text-align:left; padding:.4rem;">Shift Start (UTC)</th>
       <th style="text-align:right; padding:.4rem;">Current</th>
@@ -15,8 +15,8 @@
     {% for r in rows %}
       <tr id="staff-{{ r.id }}" style="border-bottom:1px solid #eee;">
         <td style="padding:.4rem;">{{ r.name }}</td>
-        <td style="padding:.4rem;">{{ r.role or '—' }}</td>
-        <td style="padding:.4rem;">{{ r.ew_number or 'None' }}</td>
+        <td style="padding:.4rem;">{{ r.organization or '—' }}</td>
+        <td style="padding:.4rem;">{{ r.emc or '—' }}</td>
         <td style="padding:.4rem;">
           {% if r.on_duty %}
             <span style="color:#0a0; font-weight:600;">On Duty</span>
@@ -41,6 +41,12 @@
               {{ 'Clock Out' if r.on_duty else 'Clock In' }}
             </button>
           </form>
+          <button class="button small"
+                  data-action="delete-staff"
+                  data-id="{{ r.id }}"
+                  style="margin-top:.35rem; padding:.25rem .5rem; border:1px solid #d33; color:#d33; background:#fff; border-radius:.35rem;">
+            Delete
+          </button>
         </td>
       </tr>
     {% else %}
@@ -49,4 +55,11 @@
       </tr>
     {% endfor %}
   </tbody>
+  <tfoot>
+    <tr>
+      <td colspan="8" class="muted" style="padding:.5rem; text-align:right; font-size:.85rem;">
+        Times shown in UTC · Window: {{ window }}
+      </td>
+    </tr>
+  </tfoot>
 </table>

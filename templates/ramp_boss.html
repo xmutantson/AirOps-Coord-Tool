@@ -369,6 +369,14 @@
                   formaction="{{ url_for('ramp.edit_queued_flight', qid=d.id) }}">
             SAVE TO QUEUE
           </button>
+          <!-- Persistent Print Labels button (enabled once a flight_id is known) -->
+          <a id="rb-print-labels"
+             href="#"
+             target="_blank" rel="noopener"
+             class="btn-secondary"
+             title="Print cargo labels"
+             style="margin-left:auto; opacity:.5; pointer-events:none;"
+             aria-disabled="true">📦 Print Labels</a>
         {% else %}
           {# ── brand-new Ramp-Boss entry ── #}
           <button id="sendBtn" type="submit"
@@ -383,6 +391,14 @@
                   formaction="{{ url_for('ramp.queue_flight') }}">
             Add To Queue
           </button>
+          <!-- Persistent Print Labels button (enabled once a flight_id is known) -->
+          <a id="rb-print-labels"
+             href="#"
+             target="_blank" rel="noopener"
+             class="btn-secondary"
+             title="Print cargo labels"
+             style="margin-left:auto; opacity:.5; pointer-events:none;"
+             aria-disabled="true">📦 Print Labels</a>
         {% endif %}
       </div>
     </form>
@@ -1556,11 +1572,62 @@
         if (b.dataset.originalText) b.textContent = b.dataset.originalText;
       });
     }
+    // ── Labels helpers (enable persistent button + toast) ────────────────
+    function labelsURL(opts){
+      // Back-compat: if a primitive is passed, assume it's a flight_id
+      if (typeof opts === 'string' || typeof opts === 'number') {
+        return `/docs/labels/cargo?flight_id=${encodeURIComponent(opts)}&scope=all`;
+      }
+      const o = opts || {};
+      if (o.flightId) return `/docs/labels/cargo?flight_id=${encodeURIComponent(o.flightId)}&scope=all`;
+      if (o.queuedId) return `/docs/labels/cargo?queued_id=${encodeURIComponent(o.queuedId)}&scope=all`;
+      return '#';
+    }
+    function enablePrintLabelsButton(opts){
+      const a = document.getElementById('rb-print-labels');
+      if (!a) return;
+      const url = labelsURL(opts);
+      if (!url || url === '#') return;
+      a.href = url;
+      a.style.opacity = '';
+      a.style.pointerEvents = '';
+      a.removeAttribute('aria-disabled');
+    }
+    function showLabelsToast(opts){
+      const url = labelsURL(opts);
+      if (!url || url === '#') return;
+      try {
+        // Many builds allow simple HTML in toasts — if not, we drop a small inline link below.
+        window.showToast(`Labels ready — <a href="${url}" target="_blank" rel="noopener">Print</a>`, 'success');
+      } catch(_){}
+      // Fallback inline link for environments where toast strips HTML:
+      try {
+        const box = document.getElementById('rb-feedback-container');
+        const div = document.createElement('div');
+        div.className = 'muted';
+        div.style.marginTop = '.5rem';
+        div.innerHTML = `Labels ready — <a href="${url}" target="_blank" rel="noopener">Print</a>`;
+        box.appendChild(div);
+        setTimeout(()=>{ try{div.remove();}catch(_){} }, 8000);
+      } catch(_){}
+    }
     form.addEventListener('submit', async e => {
       e.preventDefault();
       if (rbSubmitting) return;
-      rbSubmitting = true;
+      /* ── Hard-gate: cannot SEND outbound without Destination ─────────── */
+      const dirNow  = document.querySelector('input[name="direction"]:checked')?.value || 'outbound';
       const clicked = e.submitter || sendBtn || queueBtn;
+      if (clicked?.value === 'send' && dirNow === 'outbound') {
+        const destVal = String(destField.value || '').trim();
+        if (!destVal) {
+          showToast('Destination is required to SEND.', 'error');
+          destField.focus();
+          return;
+        }
+      }
+      rbSubmitting = true;
+      /* lock UI after our early gate so we don’t flash the spinner */
+      // NOTE: 'clicked' is already defined above
       lockButtons(clicked);
       // basic required‐field check
       if (!validateRampBoss()){ unlockButtons(); return; }
@@ -1713,6 +1780,9 @@
 
       /* ── QUEUE branch: simple toast + hard reset ─────────────────── */
       if (e.submitter?.value === 'queue' && !isEditDraft){
+          // If backend returned an id/flight_id, light up labels right away.
+          const fidQ = (j && (j.flight_id || j.id)) ? (j.flight_id || j.id) : null;
+          if (fidQ){ enablePrintLabelsButton({ queuedId: fidQ }); showLabelsToast({ queuedId: fidQ }); }
           showToast('Flight added to queue','success');
           form.reset();
           applyDirUI();
@@ -1767,7 +1837,13 @@
 
       showToast('Flight sent','success');
 
-      // auto‑clear success after 5s so it doesn’t stick around
+      // Enable persistent Print Labels button and toast
+      try {
+        const fid = (f && (f.flight_id || f.id)) || (j && (j.flight_id || j.id));
+        if (fid){ enablePrintLabelsButton(fid); showLabelsToast(fid); }
+      } catch(_){}
+
+      // auto-clear success after 5s so it doesn’t stick around
       setTimeout(() => { feedbackBox.innerHTML = ''; }, 5000);
 
       form.reset();

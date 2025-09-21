@@ -4,6 +4,34 @@
 {% block content %}
   <div class="page-header-bar">
     <span class="page-title">Queued Flights</span>
+    <!-- Quick Add: tail required, pilot optional (default outbound on server) -->
+    <form id="quick-add-form"
+          style="display:flex; gap:0.5rem; margin-top:0.5rem; align-items:center; flex-wrap:nowrap;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input name="tail_number" class="force-upper" type="text"
+             placeholder="Tail"
+             style="flex:0 0 auto; width:12ch; min-width:8ch; padding:0.35em 0.5em; border-radius:4px; border:1px solid #ccc;"
+             autocomplete="off" required>
+      <input name="pilot_name" type="text"
+             placeholder="Pilot (optional)"
+             style="flex:0 0 auto; width:20ch; min-width:12ch; padding:0.35em 0.5em; border-radius:4px; border:1px solid #ccc;"
+             autocomplete="off">
+      <button type="submit" class="btn-primary" style="flex:0 0 auto; padding:0.45em 0.9em;">
+        Quick Add
+      </button>
+    </form>
+    <script>
+      document.getElementById('quick-add-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        try {
+          const resp = await fetch('{{ url_for("ramp.queue_quick_add") }}', { method:'POST', body: fd, headers:{ 'X-Requested-With':'XMLHttpRequest' }});
+          if (!resp.ok) { const {message} = await resp.json().catch(() => ({})); alert(message || 'Quick Add failed'); return; }
+          e.target.reset();
+          refreshQueued();
+        } catch (err) { console.error(err); alert('Network error while adding draft'); }
+      });
+    </script>
     <form id="filter-form"
           style="display:flex; gap:0.5rem; margin-top:0.5rem; width:100%;">
       <input

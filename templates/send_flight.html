@@ -1,6 +1,138 @@
 {% extends "base.html" %}
 {% block title %}Send Flight {{ flight['flight_code'] or flight['tail_number'] }} – Aircraft Ops{% endblock %}
 {% block content %}
+{% set _fid = flight['id'] %}
+<script>
+// Require Destination when direction is outbound on this page’s form(s)
+document.addEventListener('submit', (e) => {
+  const f = e.target.closest('form');
+  if (!f) return;
+  const dirEl  = f.querySelector('input[name="direction"]:checked');
+  const dirVal = dirEl ? dirEl.value : 'outbound';
+  const dest   = f.querySelector('#destination, [name="destination"]');
+  if (dest && dirVal === 'outbound' && !String(dest.value||'').trim()){
+    e.preventDefault();
+    alert('Destination is required to send.');
+    dest.focus();
+  }
+});
+</script>
+<!-- ───────── Pilot Acknowledgment (typed or drawn) ───────── -->
+<div class="card" style="padding:1rem; margin:.75rem 0 1.25rem; max-width:820px;">
+  <h3 style="margin:.25rem 0 .75rem;">Pilot Acknowledgment</h3>
+  <p style="margin:.25rem 0 .75rem; opacity:.85;">
+    Pilot acknowledges the load and destination for this flight.
+  </p>
+
+  <form id="ack-form" method="POST" action="{{ url_for('ramp.flight_ack', flight_id=_fid) }}" style="display:flex; flex-direction:column; gap:.75rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" id="signature_data" name="signature_data" value="">
+
+    <div style="display:flex; gap:1rem; flex-wrap:wrap; align-items:flex-end;">
+      <div style="flex:1 1 260px; min-width:240px;">
+        <label for="typed_name" style="display:block; margin-bottom:.25rem;">Type pilot name (optional if drawing)</label>
+        <input id="typed_name" name="typed_name" placeholder="e.g., J. Smith" style="width:100%; padding:.5rem; border:1px solid #ccc; border-radius:6px;">
+      </div>
+      <div style="flex:0 0 auto;">
+        <button type="submit" class="btn btn-primary" id="ack-save-btn">Save Acknowledgment</button>
+      </div>
+      <div id="ack-status" style="flex:1 1 auto; min-width:220px; opacity:.9;"></div>
+    </div>
+
+    <div style="margin-top:.25rem; display:flex; flex-direction:column; gap:.5rem;">
+      <div>Or draw signature:</div>
+      <div style="position:relative; border:1px solid #ccc; border-radius:8px; width:100%; max-width:560px; height:180px; touch-action:none; background:#fff;">
+        <canvas id="sigpad" width="560" height="180" style="width:100%; height:100%; display:block;"></canvas>
+        <button type="button" id="sig-clear" style="position:absolute; right:.5rem; top:.5rem; padding:.25rem .5rem;">Clear</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<script>
+(function(){
+  const fid = {{ _fid|tojson }};
+  const form = document.getElementById('ack-form');
+  const statusEl = document.getElementById('ack-status');
+  const sigOut = document.getElementById('signature_data');
+  const typedEl = document.getElementById('typed_name');
+  const saveBtn = document.getElementById('ack-save-btn');
+  const cvs = document.getElementById('sigpad');
+  const ctx = cvs.getContext('2d');
+  const clearBtn = document.getElementById('sig-clear');
+
+  let drawing = false, wasDrawn = false, last = null;
+  function pt(e){
+    const r = cvs.getBoundingClientRect();
+    const x = (e.touches ? e.touches[0].clientX : e.clientX) - r.left;
+    const y = (e.touches ? e.touches[0].clientY : e.clientY) - r.top;
+    return { x: x * (cvs.width/r.width), y: y * (cvs.height/r.height) };
+  }
+  function line(a,b){ ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.lineWidth=2; ctx.lineCap='round'; ctx.stroke(); }
+
+  cvs.addEventListener('pointerdown', e => { drawing = true; last = pt(e); wasDrawn = true; cvs.setPointerCapture(e.pointerId); });
+  cvs.addEventListener('pointermove', e => { if(!drawing) return; const p=pt(e); line(last,p); last=p; });
+  cvs.addEventListener('pointerup',   () => { drawing = false; last = null; });
+  cvs.addEventListener('pointerleave',() => { drawing = false; last = null; });
+  cvs.addEventListener('touchstart', e => e.preventDefault(), {passive:false});
+  cvs.addEventListener('touchmove',  e => e.preventDefault(), {passive:false});
+
+  clearBtn.addEventListener('click', ()=>{
+    ctx.clearRect(0,0,cvs.width,cvs.height);
+    wasDrawn = false;
+  });
+
+  async function fetchAck(){
+    try{
+      const r = await fetch({{ url_for('ramp.api_flight_ack', flight_id=_fid)|tojson }});
+      if (!r.ok) return;
+      const j = await r.json();
+      if (!j || (!j.name && !j.signature_b64)) return;
+      const when = j.signed_at ? ` at ${j.signed_at}` : '';
+      statusEl.textContent = `Signed by ${j.name || '(drawn)'}${when}`;
+      // lock controls
+      [typedEl, saveBtn, clearBtn].forEach(el => el.disabled = true);
+      cvs.style.opacity = .6;
+    }catch(_){}
+  }
+  fetchAck();
+
+  form.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const typed = (typedEl.value || '').trim();
+    if (!typed && !wasDrawn){
+      alert('Type the pilot name or draw a signature.');
+      typedEl.focus();
+      return;
+    }
+    sigOut.value = wasDrawn ? cvs.toDataURL('image/png') : '';
+    const fd = new FormData(form);
+    saveBtn.disabled = true;
+    const prev = saveBtn.textContent;
+    saveBtn.textContent = 'Saving…';
+    try {
+      const resp = await fetch(form.action, { method:'POST', body: fd, headers:{ 'X-Requested-With':'XMLHttpRequest' }});
+      if (!resp.ok){
+        const j = await resp.json().catch(()=> ({}));
+        alert(j.message || 'Failed to save acknowledgment');
+        saveBtn.disabled = false;
+        saveBtn.textContent = prev;
+        return;
+      }
+      statusEl.textContent = `Saved${typed ? ` for ${typed}` : ''}.`;
+      // lock controls after success
+      [typedEl, saveBtn, clearBtn].forEach(el => el.disabled = true);
+      cvs.style.opacity = .6;
+    } catch (err) {
+      console.error(err);
+      alert('Network error saving acknowledgment');
+      saveBtn.disabled = false;
+    } finally {
+      saveBtn.textContent = prev;
+    }
+  });
+})();
+</script>
   <div style="margin-bottom:20px">
     <button onclick="location.href='{{ url_for('radio.radio') }}'">↩️ Out-box</button>
     <button onclick="location.href='{{ url_for('core.dashboard') }}'">Dashboard</button>

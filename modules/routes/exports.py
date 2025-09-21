@@ -1,14 +1,17 @@
 
-import sqlite3, csv, io, zipfile, json, os, re
+import sqlite3, csv, io, zipfile, json, os, re, base64
 
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
 from app import DB_FILE
 from flask import Blueprint, current_app, render_template
-from flask import flash, redirect, request, url_for, send_file, session, Response, jsonify
+from flask import flash, redirect, request, url_for, send_file, session, Response, jsonify, abort
 from datetime import datetime, timedelta, timezone
 from modules.utils.comms import parse_comm_filters, sql_for_comm_filters, COMM_WINDOWS
 bp = Blueprint(__name__.rsplit('.', 1)[-1], __name__)
 app = current_app  # legacy shim if route body references 'app'
+
+# HTML → PDF (pure-Python)
+from weasyprint import HTML, CSS
 
 @bp.route('/export_csv')
 def export_csv():
@@ -85,6 +88,34 @@ def export_all_csv():
             pass
 
         conn.close()
+
+        # ── Include any persisted PDFs ───────────────────────────────
+        try:
+            root = os.path.join(_data_root(), "waivers")
+            if os.path.isdir(root):
+                for dirpath, _dirs, files in os.walk(root):
+                    for fn in files:
+                        if fn.lower().endswith(".pdf"):
+                            full = os.path.join(dirpath, fn)
+                            # keep folder structure under waivers/
+                            arc = os.path.relpath(full, _data_root()).replace("\\","/")
+                            zf.write(full, arc)
+        except Exception:
+            pass
+
+        # ── Include all PAI PDFs under PilotAircraftInformation/ ─────
+        try:
+            pai_root = _pai_exports_root()
+            if os.path.isdir(pai_root):
+                for _dirpath, _dirs, files in os.walk(pai_root):
+                    for fn in files:
+                        if not fn.lower().endswith(".pdf"):
+                            continue
+                        full = os.path.join(pai_root, fn)
+                        arc  = ("PilotAircraftInformation/" + fn).replace("\\", "/")
+                        zf.write(full, arc)
+        except Exception:
+            pass
 
     mem_zip.seek(0)
     return send_file(
@@ -808,6 +839,7 @@ def _rows_from_flight_cargo_table(fid: int) -> list[dict]:
           SELECT
             IFNULL(sanitized_name,'')        AS name,
             IFNULL(quantity,0)               AS qty,
+            IFNULL(weight_per_unit,NULL)     AS wpu,
             COALESCE(total_weight,
                      CASE
                        WHEN weight_per_unit IS NOT NULL AND quantity IS NOT NULL
@@ -830,8 +862,13 @@ def _rows_from_flight_cargo_table(fid: int) -> list[dict]:
             tw = float(r.get("total_w") or 0.0)
         except Exception:
             tw = 0.0
+        wpu = r.get("wpu")
+        try:
+            wpu_f = float(wpu) if wpu is not None else (tw/qty if qty else None)
+        except Exception:
+            wpu_f = None
         if name and qty > 0 and tw > 0:
-            out.append({"item": name, "qty": qty, "weight": round(tw, 1)})
+            out.append({"item": name, "qty": qty, "weight": round(tw, 1), "size_lb": (round(wpu_f,2) if wpu_f else None)})
     return out
 
 def _generate_flight_cargo_csv_text(filters: dict | None = None) -> str:
@@ -903,3 +940,615 @@ def export_flights_csv():
     buf = io.BytesIO(csv_text.encode('utf-8'))
     return send_file(buf, mimetype='text/csv', as_attachment=True, download_name='flights.csv')
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Waivers & Labels (HTML printables)
+#   • GET  /docs/waiver/pilot        → interactive pilot waiver (prefill via args)
+#   • GET  /docs/waiver/volunteer    → interactive volunteer waiver
+#   • POST /docs/waiver/pilot/print  → pilot waiver, print mode, auto window.print()
+#   • POST /docs/waiver/volunteer/print → volunteer waiver, print mode
+#   • GET  /docs/labels/cargo?flight_id=…&scope=all|selected[&copies=N][&only=item_slug]
+#       - Builds labels from normalized flight_cargo; falls back to parsed manifest.
+#       - Renders templates/waivers.html with section="labels"
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _ctx_waiver(section: str,
+                printed_name: str = "",
+                date_iso: str = "",
+                initials_map: dict | None = None,
+                pilot_signature_b64: str | None = None,
+                witness_signature_b64: str | None = None,
+                staff_id: str | int | None = None,
+                print_mode: bool = False,
+                auto_print: bool = False) -> dict:
+    """Shared context builder for waivers.html."""
+    if not date_iso:
+        try:
+            # default to today (local server date) for convenience
+            date_iso = datetime.utcnow().strftime("%Y-%m-%d")
+        except Exception:
+            date_iso = ""
+    return {
+        "section": section,
+        "printed_name": printed_name,
+        "date_iso": date_iso,
+        "initials_map": initials_map or {},
+        "pilot_signature_b64": pilot_signature_b64,
+        "witness_signature_b64": witness_signature_b64,
+        "staff_id": staff_id,
+        "print_mode": print_mode,
+        "auto_print": auto_print,
+        # keep nav highlight consistent with other docs
+        "active": "supervisor",
+    }
+
+
+def _extract_initials_map_from_form(formlike) -> dict:
+    """
+    Accepts fields shaped like: initials[1]=AB, initials[2]=AB, ...
+    Also tolerates a JSON field 'initials_map' when posted as JSON.
+    """
+    if not formlike:
+        return {}
+    out = {}
+    # 1) bracketed fields
+    for k, v in (formlike.items() if hasattr(formlike, "items") else []):
+        if not isinstance(k, str):
+            continue
+        if k.startswith("initials[") and k.endswith("]"):
+            key = k[9:-1].strip()  # grab digits between [ ]
+            if key:
+                out[str(key)] = (v or "").strip()
+    # 2) direct JSON map
+    try:
+        jm = formlike.get("initials_map")
+        if isinstance(jm, (dict,)):
+            for kk, vv in jm.items():
+                out[str(kk)] = (vv or "").strip()
+    except Exception:
+        pass
+    return out
+
+def _default_initials_from_name(name: str) -> str:
+    """First letter of first token + first letter of last token (uppercased)."""
+    words = [w for w in re.split(r'\s+', (name or '').strip()) if w]
+    if not words:
+        return ''
+    if len(words) == 1:
+        w = re.sub(r'[^A-Za-z]', '', words[0])
+        return (w[:1] + (w[-1:] if len(w) > 1 else '')).upper()
+    return (words[0][:1] + words[-1][:1]).upper()
+
+def _staff_printed_name_from_id(staff_id: str | int) -> str:
+    """
+    Best-effort resolution using modules.utils.staff helpers if available,
+    else a lightweight DB fallback against a likely 'staff' table shape.
+    Never raises; returns '' if not found.
+    """
+    sid = str(staff_id or '').strip()
+    if not sid:
+        return ''
+    # Try helper module first
+    try:
+        from modules.utils import staff as _staff  # type: ignore
+        for fn_name in ('get_staff_by_id','staff_by_id','get_staff','lookup','get_staff_record'):
+            fn = getattr(_staff, fn_name, None)
+            if callable(fn):
+                rec = fn(sid)
+                if isinstance(rec, dict):
+                    for key in ('printed_name','full_name','name'):
+                        if rec.get(key):
+                            return str(rec[key]).strip()
+                    # common split fields
+                    first = (rec.get('first_name') or rec.get('first') or '').strip()
+                    last  = (rec.get('last_name')  or rec.get('last')  or '').strip()
+                    if first or last:
+                        return f"{first} {last}".strip()
+                # tolerate tuple/list shapes
+                if isinstance(rec, (list, tuple)) and rec:
+                    return str(rec[0]).strip()
+    except Exception:
+        pass
+    # DB fallback (best-effort)
+    try:
+        with sqlite3.connect(DB_FILE) as c:
+            c.row_factory = sqlite3.Row
+            have = c.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='staff' LIMIT 1"
+            ).fetchone()
+            if not have:  # no table → give up
+                return ''
+            cols = {r['name'] for r in c.execute("PRAGMA table_info(staff)")}
+            if 'printed_name' in cols:
+                row = c.execute("SELECT printed_name AS name FROM staff WHERE id=? LIMIT 1", (sid,)).fetchone()
+            elif 'full_name' in cols:
+                row = c.execute("SELECT full_name  AS name FROM staff WHERE id=? LIMIT 1", (sid,)).fetchone()
+            elif {'first_name','last_name'} <= cols:
+                row = c.execute("SELECT TRIM(first_name||' '||last_name) AS name FROM staff WHERE id=? LIMIT 1", (sid,)).fetchone()
+            elif 'name' in cols:
+                row = c.execute("SELECT name FROM staff WHERE id=? LIMIT 1", (sid,)).fetchone()
+            else:
+                row = None
+            return (row['name'].strip() if row and row['name'] else '')
+    except Exception:
+        return ''
+
+@bp.get("/docs/waiver/pilot")
+def docs_waiver_pilot():
+    printed = (request.args.get("printed") or request.args.get("printed_name") or "").strip()
+    date_iso = (request.args.get("date") or "").strip()
+    staff_id = (request.args.get("staff_id") or "").strip()
+    if not printed and staff_id:
+        printed = _staff_printed_name_from_id(staff_id) or ''
+    default_initials = _default_initials_from_name(printed)
+    ctx = _ctx_waiver(
+        section="pilot_waiver",
+        printed_name=printed,
+        date_iso=date_iso,
+        staff_id=staff_id,
+        print_mode=False,
+        auto_print=False,
+    )
+    ctx["default_initials"] = default_initials
+    return render_template("waivers.html", **ctx)
+
+@bp.get("/docs/waiver/volunteer")
+def docs_waiver_volunteer():
+    printed = (request.args.get("printed") or request.args.get("printed_name") or "").strip()
+    date_iso = (request.args.get("date") or "").strip()
+    staff_id = (request.args.get("staff_id") or "").strip()
+    if not printed and staff_id:
+        printed = _staff_printed_name_from_id(staff_id) or ''
+    default_initials = _default_initials_from_name(printed)
+    ctx = _ctx_waiver(
+        section="volunteer_waiver",
+        printed_name=printed,
+        date_iso=date_iso,
+        staff_id=staff_id,
+        print_mode=False,
+        auto_print=False,
+    )
+    ctx["default_initials"] = default_initials
+    return render_template("waivers.html", **ctx)
+
+@bp.post("/docs/waiver/pilot/print")
+def docs_waiver_pilot_print():
+    data = request.get_json(silent=True) or request.form
+    printed = (data.get("printed") or data.get("printed_name") or "").strip()
+    date_iso = (data.get("date") or "").strip()
+    staff_id = (data.get("staff_id") or request.args.get("staff_id") or "").strip()
+    if not printed and staff_id:
+        printed = _staff_printed_name_from_id(staff_id) or ''
+    initials_map = _extract_initials_map_from_form(data)
+    sig_pilot   = data.get("pilot_signature_b64") or data.get("signature_b64")
+    sig_witness = data.get("witness_signature_b64")
+    ctx = _ctx_waiver(
+        section="pilot_waiver",
+        printed_name=printed,
+        date_iso=date_iso,
+        initials_map=initials_map,
+        pilot_signature_b64=(sig_pilot or None),
+        witness_signature_b64=(sig_witness or None),
+        staff_id=staff_id,
+        print_mode=True,
+        auto_print=True,
+    )
+    # Compatibility aliases for current template partials
+    ctx["pilot_signature_data_uri"] = ctx["pilot_signature_b64"]
+    ctx["pilot_witness_signature_data_uri"] = ctx["witness_signature_b64"]
+    ctx["pilot_printed"] = ctx["printed_name"]
+    ctx["pilot_date"] = ctx["date_iso"]
+
+    html = render_template("waivers.html", **ctx)
+    # Persist to PDF (non-blocking if it fails)
+    _persist_waiver_pdf("pilot", ctx, html)
+    return html
+
+@bp.post("/docs/waiver/volunteer/print")
+def docs_waiver_volunteer_print():
+    data = request.get_json(silent=True) or request.form
+    printed = (data.get("printed") or data.get("printed_name") or "").strip()
+    date_iso = (data.get("date") or "").strip()
+    staff_id = (data.get("staff_id") or request.args.get("staff_id") or "").strip()
+    if not printed and staff_id:
+        printed = _staff_printed_name_from_id(staff_id) or ''
+    initials_map = _extract_initials_map_from_form(data)
+    sig_vol     = data.get("volunteer_signature_b64") or data.get("signature_b64") or data.get("pilot_signature_b64")
+    sig_witness = data.get("witness_signature_b64")
+    ctx = _ctx_waiver(
+        section="volunteer_waiver",
+        printed_name=printed,
+        date_iso=date_iso,
+        initials_map=initials_map,
+        pilot_signature_b64=(sig_vol or None),
+        witness_signature_b64=(sig_witness or None),
+        staff_id=staff_id,
+        print_mode=True,
+        auto_print=True,
+    )
+    # Compatibility aliases for current template partials
+    ctx["volunteer_signature_data_uri"] = ctx["pilot_signature_b64"]
+    ctx["volunteer_witness_signature_data_uri"] = ctx["witness_signature_b64"]
+    ctx["volunteer_printed"] = ctx["printed_name"]
+    ctx["volunteer_date"] = ctx["date_iso"]
+
+    html = render_template("waivers.html", **ctx)
+    # Persist to PDF (non-blocking if it fails)
+    _persist_waiver_pdf("volunteer", ctx, html)
+    return html
+
+def _data_root() -> str:
+    """Root directory for persisted artifacts."""
+    root = os.getenv("AOCT_DATA_DIR") or os.path.join(os.getcwd(), "data")
+    os.makedirs(root, exist_ok=True)
+    return root
+def _pai_exports_root() -> str:
+    """data/exports/pai — persisted PAI PDFs live here."""
+    d = os.path.join(_data_root(), "exports", "pai")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+def _day_dir(kind: str) -> str:
+    """data/waivers/<kind>/YYYY/MM/DD"""
+    today = datetime.utcnow()
+    d = os.path.join(
+        _data_root(), "waivers", kind,
+        f"{today:%Y}", f"{today:%m}", f"{today:%d}"
+    )
+    os.makedirs(d, exist_ok=True)
+    return d
+
+def _ensure_waiver_table():
+    """Create lightweight log table if missing."""
+    sql = """
+    CREATE TABLE IF NOT EXISTS waiver_submissions (
+      id INTEGER PRIMARY KEY,
+      waiver_type TEXT NOT NULL,       -- 'pilot' | 'volunteer'
+      staff_id TEXT,
+      printed_name TEXT,
+      date_iso TEXT,
+      initials_json TEXT,
+      pilot_signature_path TEXT,
+      witness_signature_path TEXT,
+      pdf_path TEXT,
+      created_at TEXT
+    )
+    """
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute(sql)
+    # If table existed without staff_id, add it.
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(waiver_submissions)").fetchall()]
+        if "staff_id" not in cols:
+            conn.execute("ALTER TABLE waiver_submissions ADD COLUMN staff_id TEXT")
+    except Exception:
+        pass
+    conn.commit()
+    conn.close()
+
+def _save_data_uri_png(data_or_uri: str | None, out_path: str | None) -> str | None:
+    """
+    Accepts either a full data URI (data:image/png;base64,...) or a bare base64 PNG/JPEG.
+    Writes to disk and returns the path, else None.
+    """
+    if not data_or_uri or not out_path:
+        return None
+    s = (data_or_uri or "").strip()
+    try:
+        if s.lower().startswith("data:image"):
+            m = re.match(r'^data:image/(png|jpe?g);base64,(.*)$', s, re.IGNORECASE | re.DOTALL)
+            if not m:
+                return None
+            payload_b64 = m.group(2)
+        else:
+            payload_b64 = s
+        with open(out_path, "wb") as f:
+            f.write(base64.b64decode(payload_b64))
+        return out_path
+    except Exception:
+        return None
+
+def _persist_waiver_pdf(waiver_type: str, ctx: dict, html: str) -> str | None:
+    """
+    Render HTML to PDF via WeasyPrint, save to filesystem, then insert a row in waiver_submissions.
+    Returns absolute PDF path (or None on failure). Never raises.
+    """
+    try:
+        _ensure_waiver_table()
+
+        # 1) HTML → PDF
+        # Use filesystem base_url so WeasyPrint resolves assets without HTTP,
+        # and include /static/style.css so @media print rules apply in the PDF.
+        base = current_app.root_path
+        stylesheets = []
+        try:
+            css_file = os.path.join(base, "static", "style.css")
+            if os.path.exists(css_file):
+                stylesheets.append(CSS(filename=css_file))
+        except Exception:
+            pass
+        pdf_bytes = HTML(string=html, base_url=base).write_pdf(stylesheets=stylesheets)
+
+        # 2) Filenames/paths
+        stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        # _slug is declared later in this module; resolution happens at call time.
+        name_slug = _slug(ctx.get("printed_name") or "unknown")[:40] or "unknown"
+        daydir = _day_dir(waiver_type)
+        pdf_path = os.path.join(daydir, f"{waiver_type}_waiver_{stamp}_{name_slug}.pdf")
+        sig_path = os.path.join(daydir, f"{waiver_type}_signature_{stamp}_{name_slug}.png")
+        wit_path = os.path.join(daydir, f"{waiver_type}_witness_{stamp}_{name_slug}.png")
+
+        # 3) Write PDF
+        with open(pdf_path, "wb") as f:
+            f.write(pdf_bytes)
+
+        # 4) Save signatures if present (accept data URIs or bare base64)
+        pilot_sig = ctx.get("pilot_signature_b64") or ctx.get("pilot_signature_data_uri")
+        witness_sig = ctx.get("witness_signature_b64") or \
+                      ctx.get("pilot_witness_signature_b64") or \
+                      ctx.get("volunteer_witness_signature_data_uri")
+        sig_path_written = _save_data_uri_png(pilot_sig, sig_path) if pilot_sig else None
+        wit_path_written = _save_data_uri_png(witness_sig, wit_path) if witness_sig else None
+
+        # 5) Insert DB row
+        conn = sqlite3.connect(DB_FILE)
+        conn.execute(
+            """INSERT INTO waiver_submissions
+               (waiver_type, staff_id, printed_name, date_iso, initials_json,
+                pilot_signature_path, witness_signature_path, pdf_path, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                waiver_type,
+                str(ctx.get("staff_id") or ""),
+                ctx.get("printed_name") or "",
+                ctx.get("date_iso") or "",
+                json.dumps(ctx.get("initials_map") or {}),
+                sig_path_written or "",
+                wit_path_written or "",
+                pdf_path,
+                datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            )
+        )
+        conn.commit()
+        conn.close()
+        return pdf_path
+    except Exception:
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cargo Labels
+#   GET /docs/labels/cargo?flight_id=123&scope=all|selected[&copies=N][&only=item-slug]
+#   GET /docs/labels/cargo?queued_id=45&scope=all|selected[&copies=N][&only=item-slug]
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _slug(s: str) -> str:
+    try:
+        return re.sub(r'[^a-z0-9]+', '-', (s or '').lower()).strip('-')
+    except Exception:
+        return ""
+
+def _labels_for_queued(qid: int,
+                       scope: str = "all",
+                       only_slug: str | None = None,
+                       copies: int = 1) -> list[dict]:
+    """
+    Build labels from a queued (draft) flight row.
+    Prefers parsable manifest data from cargo_type/remarks; if none, emits a single generic label.
+    """
+    if qid <= 0:
+        return []
+    # Best-effort: tolerate column drift in queued_flights
+    rows = dict_rows("""
+      SELECT *
+        FROM queued_flights
+       WHERE id = ?
+       LIMIT 1
+    """, (qid,))
+    if not rows:
+        return []
+    q = rows[0]
+    # safe getters with alias fallbacks
+    def get(qobj, *names, default=""):
+        for n in names:
+            if n in qobj and qobj[n] is not None:
+                return str(qobj[n])
+        return default
+    origin = get(q, "airfield_takeoff", "origin").strip()
+    dest   = get(q, "airfield_landing", "destination").strip()
+    tail   = get(q, "tail_number", "tail").strip()
+    ts     = (get(q, "created_at", "timestamp", "ts") or "")[:10]
+    cargo  = get(q, "cargo_type").strip()
+    remarks= get(q, "remarks").strip()
+
+    manifest_txt = " ".join([cargo, remarks]).strip()
+    items = _parse_manifest_items(manifest_txt)
+
+    if only_slug:
+        items = [i for i in items if _slug(i.get("item","")) == only_slug]
+
+    mission = f"Q-{qid}"
+    base = []
+    if items:
+        for it in items:
+            name = (it.get("item") or "").strip()
+            qty  = int(it.get("qty") or 0)
+            tot_w = it.get("weight")
+            try:
+                weight_lb = f"{float(tot_w):.1f}"
+            except Exception:
+                weight_lb = ""
+            size_lb = it.get("size_lb")
+            try:
+                size_lb = f"{float(size_lb):.2f}" if size_lb is not None else (f"{float(tot_w)/qty:.2f}" if qty else "")
+            except Exception:
+                size_lb = ""
+            base.append({
+                "mission": mission,
+                "from_org": "Walla Walla DART",
+                "origin": origin,
+                "destination": dest,
+                "date_sealed": ts,
+                "weight_lb": weight_lb,
+                "contents": f"{name}" + (f" × {qty}" if qty else ""),
+                "name": name, "size_lb": size_lb, "qty": qty, "dest": dest, "tail": tail,
+                "flight_code": "",
+            })
+    else:
+        generic = (cargo or remarks or "").strip()
+        base.append({
+            "mission": mission, "from_org": "Walla Walla DART",
+            "origin": origin, "destination": dest, "date_sealed": ts,
+            "weight_lb": "", "contents": generic,
+        })
+    try:
+        copies = max(1, min(int(copies), 100))
+    except Exception:
+        copies = 1
+    return base * copies
+
+def _labels_for_flight(fid: int,
+                       scope: str = "all",
+                       only_slug: str | None = None,
+                       copies: int = 1) -> list[dict]:
+    """
+    Build a list of label dicts:
+      { mission, from_org, origin, destination, date_sealed, weight_lb, contents }
+    Uses normalized flight_cargo first; falls back to parsing manifest from cargo_type/remarks.
+    """
+    if fid <= 0:
+        return []
+    fl_rows = dict_rows("""
+      SELECT id,
+             IFNULL(timestamp,'')        AS ts,
+             IFNULL(flight_code,'')      AS flight_code,
+             IFNULL(tail_number,'')      AS tail,
+             IFNULL(airfield_takeoff,'') AS origin,
+             IFNULL(airfield_landing,'') AS dest,
+             IFNULL(cargo_type,'')       AS cargo_type,
+             IFNULL(remarks,'')          AS remarks
+        FROM flights
+       WHERE id = ?
+       LIMIT 1
+    """, (fid,))
+    if not fl_rows:
+        return []
+    fl = fl_rows[0]
+
+    # Prefer normalized items (flight_cargo)
+    items = _rows_from_flight_cargo_table(fid)
+
+    # Fallback: try advanced manifest parser if available; else local simple parser
+    if not items:
+        manifest_txt = " ".join([
+            str(fl.get("cargo_type") or ""),
+            str(fl.get("remarks") or ""),
+        ]).strip()
+        try:
+            # parse_adv_manifest may return [{"item":"name","qty":n,"weight":w_lbs}, ...]
+            if "parse_adv_manifest" in globals() and callable(globals()["parse_adv_manifest"]):
+                adv_items = globals()["parse_adv_manifest"](manifest_txt) or []
+                # normalize keys just in case
+                items = [{"item": i.get("item",""),
+                          "qty": int(i.get("qty") or 0),
+                          "weight": float(i.get("weight") or 0.0)} for i in adv_items if i]
+            else:
+                items = _parse_manifest_items(manifest_txt)
+        except Exception:
+            items = _parse_manifest_items(manifest_txt)
+
+    # Optional filter by slug (v1.1 nicety)
+    if only_slug:
+        items = [i for i in items if _slug(i.get("item","")) == only_slug]
+
+    # Selected scope hook (for future use). For now, 'selected' == 'all'.
+    _ = scope  # reserved; currently unused in server route
+
+    mission = (fl.get("flight_code") or f"FLT-{fid}").strip()
+    origin  = (fl.get("origin") or "").strip()
+    dest    = (fl.get("dest") or "").strip()
+    tail    = (fl.get("tail") or "").strip()
+    date_sealed = (fl.get("ts") or "")[:10]
+    base = []
+    if items:
+        for it in items:
+            name = (it.get("item") or "").strip()
+            qty  = int(it.get("qty") or 0)
+            tot_w = it.get("weight")
+            try:
+                weight_lb = f"{float(tot_w):.1f}"
+            except Exception:
+                weight_lb = ""
+            size_lb = it.get("size_lb")
+            try:
+                size_lb = f"{float(size_lb):.2f}" if size_lb is not None else (f"{float(tot_w)/qty:.2f}" if qty else "")
+            except Exception:
+                size_lb = ""
+            base.append({
+                "mission": mission,
+                "from_org": "Walla Walla DART",
+                "origin": origin,
+                "destination": dest,
+                "date_sealed": date_sealed,
+                "weight_lb": weight_lb,
+                "contents": f"{name}" + (f" × {qty}" if qty else ""),
+                # structured fields (for templates/exports that prefer explicit keys)
+                "name": name,
+                "size_lb": size_lb,
+                "qty": qty,
+                "dest": dest,
+                "tail": tail,
+                "flight_code": mission if mission.startswith("FLT-") is False else "",
+            })
+    else:
+        # No discrete items; produce a single generic label
+        generic = (fl.get("cargo_type") or fl.get("remarks") or "").strip()
+        base.append({
+            "mission": mission,
+            "from_org": "Walla Walla DART",
+            "origin": origin,
+            "destination": dest,
+            "date_sealed": date_sealed,
+            "weight_lb": "",
+            "contents": generic,
+        })
+
+    # Apply copies (cap to a sane upper bound)
+    try:
+        copies = max(1, min(int(copies), 100))
+    except Exception:
+        copies = 1
+    return base * copies
+
+
+@bp.get("/docs/labels/cargo")
+def docs_labels_cargo():
+    # Accept either persisted flight or queued draft
+    fid = request.args.get("flight_id") or ""
+    qid = request.args.get("queued_id") or ""
+    try:
+        fid_int = int(fid)
+    except Exception:
+        fid_int = -1
+    try:
+        qid_int = int(qid)
+    except Exception:
+        qid_int = -1
+    if fid_int <= 0 and qid_int <= 0:
+        abort(400, description="Missing ?flight_id or ?queued_id")
+
+    scope = (request.args.get("scope") or "all").strip().lower()
+    only  = (request.args.get("only") or "").strip().lower()
+    copies = request.args.get("copies") or 1
+    labels = (_labels_for_flight(fid_int, scope=scope, only_slug=only, copies=copies)
+              if fid_int > 0 else _labels_for_queued(qid_int, scope=scope, only_slug=only, copies=copies))
+    if not labels:
+        abort(404, description="No labels could be generated for this request.")
+
+    ctx = {
+        "section": "labels",
+        "labels": labels,
+        "print_mode": True,
+        "auto_print": True,
+        "active": "supervisor",
+    }
+    return render_template("waivers.html", **ctx)

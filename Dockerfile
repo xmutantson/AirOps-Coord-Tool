@@ -27,6 +27,28 @@ RUN set -e; \
   dpkg -i /tmp/pat.deb || apt-get -fy install; \
   rm -f /tmp/pat.deb
 
+# WeasyPrint runtime deps (HTML→PDF)
+# Plus: conditional build deps on 32-bit arches so Pillow can compile (no i386 wheels).
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      libcairo2 \
+      libpango-1.0-0 libpangoft2-1.0-0 libpangocairo-1.0-0 \
+      libgdk-pixbuf2.0-0 \
+      libffi8 libffi-dev \
+      shared-mime-info fonts-dejavu-core; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      i386|armhf) \
+        apt-get install -y --no-install-recommends \
+          build-essential pkg-config \
+          zlib1g-dev libjpeg62-turbo-dev libpng-dev libtiff5-dev \
+          libwebp-dev libopenjp2-7-dev libfreetype6-dev liblcms2-dev \
+        ;; \
+      *) : ;; \
+    esac; \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Copy application code and install dependencies
@@ -36,6 +58,16 @@ COPY . .
 
 # Production WSGI server
 RUN pip install --no-cache-dir waitress
+
+# Trim build-only packages on 32-bit variants to keep the image lean
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    if [ "$arch" = "i386" ] || [ "$arch" = "armhf" ]; then \
+      apt-get purge -y \
+        build-essential pkg-config \
+        zlib1g-dev libjpeg62-turbo-dev libpng-dev libtiff5-dev \
+        libwebp-dev libopenjp2-7-dev libfreetype6-dev liblcms2-dev || true; \
+    fi
 
 # Entrypoint and expose
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh

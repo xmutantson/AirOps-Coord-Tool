@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+{% block title %}PAI – {{ row.registration }} – {{ row.pilot_name }}{% endblock %}
+{% block content %}
+<div class="container" style="max-width:8.5in; margin:0 auto;">
+  <style>
+    :root {
+      --border:#555;
+      --header-bg:#eee;
+      --title-size: 18px;
+      --label-size: 14px;
+    }
+    @page { size: Letter; margin: 0.5in; }
+    * { box-sizing: border-box; }
+    .sheet { background:#fff; border:2px solid var(--border); }
+    table.form {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      table-layout: fixed;
+    }
+    .form th, .form td {
+      border: 1px solid var(--border);
+      padding: 8px 10px;
+      vertical-align: middle;
+      height: 42px;
+    }
+    .no-border { border: none !important; }
+    .title {
+      text-align: center;
+      font-weight: 700;
+      font-size: var(--title-size);
+      border: none;
+      padding: 12px 0 8px;
+    }
+    .section {
+      background: var(--header-bg);
+      text-align: center;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .label { width: 28%; font-weight: 600; font-size: var(--label-size); background:#fafafa; }
+    .field { width: 46%; }
+    .rightcol { width: 26%; }
+    .hint { color:#666; font-size:13px; line-height:1.25; white-space:pre-wrap; }
+    .notes { height:110px; vertical-align: top; }
+    .footer { margin-top:.5rem; font-size:.9rem; color:#555; }
+    .print-toolbar { margin-top:.6rem; display:flex; gap:.5rem; justify-content:flex-end; }
+    /* Emergency Contacts: single line on screen, two lines when printing/PDF */
+    .section.ec-head .ec-line1,
+    .section.ec-head .ec-line2 { display:inline; }
+    @media print {
+      .section.ec-head {
+        line-height: 1.1;
+        padding-top: 6px;  /* give the two lines breathing room */
+        padding-bottom: 6px;
+      }
+      .section.ec-head .ec-line1, .section.ec-head .ec-line2 { display:block; }
+    }
+    @media print {
+      .form th, .form td { height: 34px; }
+      .notes { height: 85px; }
+      .print-toolbar, header, nav, .sidebar { display:none !important; }
+    }
+  </style>
+
+  {# best-effort split for first/last from the stored pilot_name #}
+  {% set _parts = (row.pilot_name or '').strip().split() %}
+  {% set _first = _parts[0] if _parts else '' %}
+  {% set _last  = (_parts[-1] if _parts|length>1 else '') %}
+
+  <div class="sheet">
+    <table class="form">
+      <colgroup>
+        <col style="width:28%">
+        <col style="width:46%">
+        <col style="width:26%">
+      </colgroup>
+      <tbody>
+        <!-- Title -->
+        <tr>
+          <td class="title" colspan="3">PILOT AND AIRCRAFT INFORMATION</td>
+        </tr>
+
+        <!-- Section headers aligned to their column groups -->
+        <tr>
+          <th class="section" colspan="2">PILOT</th>
+          <th class="section">Pilot Cert No.</th>
+        </tr>
+
+        <!-- Pilot rows (right column holds Type/Ratings hint, spans 3 rows) -->
+        <tr>
+          <td class="label">Last Name</td>
+          <td class="field">{{ _last }}</td>
+          <td class="rightcol" rowspan="3" style="vertical-align:top;">
+            <div class="hint">Type/Ratings:<br>{{ row.type_ratings or '' }}</div>
+          </td>
+        </tr>
+        <tr>
+          <td class="label">First Name</td>
+          <td class="field">{{ _first }}</td>
+        </tr>
+        <tr>
+          <td class="label">Street Address</td>
+          <td class="field">{{ row.street_address or '' }}</td>
+        </tr>
+
+        <!-- Aircraft header confined to right column only -->
+        <tr>
+          <td class="no-border" colspan="2"></td>
+          <th class="section">AIRCRAFT</th>
+        </tr>
+        <tr>
+          <td class="label">City, State</td>
+          <td class="field">{{ row.city_state or '' }}</td>
+          <td class="rightcol">{{ row.aircraft_make_model or '' }}</td>
+        </tr>
+        <tr>
+          <td class="label">Zip code</td>
+          <td class="field">{{ row.zip_code or '' }}</td>
+          <td class="rightcol">{{ row.registration or '' }}</td>
+        </tr>
+        <tr>
+          <td class="label">Mobile Phone</td>
+          <td class="field">{{ row.mobile_phone or '' }}</td>
+          <td class="rightcol">
+            {% if row.net_available_weight_lbs %}{{ row.net_available_weight_lbs }} lb{% endif %}
+          </td>
+        </tr>
+
+        <!-- Emergency Contact header confined to right column only -->
+        <tr>
+          <td class="no-border" colspan="2"></td>
+          <th class="section ec-head">
+            <span class="ec-line1">EMERGENCY</span><span class="ec-line2">CONTACTS</span>
+          </th>
+        </tr>
+        <tr>
+          <td class="label">Work Phone</td>
+          <td class="field">{{ row.work_phone or '' }}</td>
+          <td class="rightcol">{{ row.emc_name or '' }}</td>
+        </tr>
+        <tr>
+          <td class="label">Home Phone</td>
+          <td class="field">{{ row.home_phone or '' }}</td>
+          <td class="rightcol">{{ row.emc_phone or '' }}</td>
+        </tr>
+        <tr>
+          <td class="label">Email Address</td>
+          <td class="field">{{ row.email or '' }}</td>
+          <td class="rightcol">{{ row.emc_relationship or '' }}</td>
+        </tr>
+        <tr>
+          <td class="label">Pilot Certificate No.</td>
+          <td class="field">{{ row.pilot_cert_number or '' }}</td>
+          <td class="rightcol"></td>
+        </tr>
+
+        <!-- Reviewed by (left two cols) + Notes (right col) -->
+        <tr>
+          <th class="section" colspan="2">Reviewed by DART</th>
+          <th class="section">Notes:</th>
+        </tr>
+        <tr>
+          <td class="label">Full Name</td>
+          <td class="field">{{ row.reviewed_by or '' }}</td>
+          <td class="rightcol notes" rowspan="2">{{ row.review_notes or '' }}</td>
+        </tr>
+        <tr>
+          <td class="label">Date</td>
+          <td class="field">{{ row.review_date_utc or '' }}</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="footer">
+      Created {{ row.created_at }}{% if row.updated_at %}; Updated {{ row.updated_at }}{% endif %}
+    </div>
+  </div>
+
+  <!-- Bottom toolbar (hidden when printing) -->
+  <div class="print-toolbar">
+    <a class="button" href="{{ url_for('staff.staff_list', window='all') }}">Return to Duty Roster</a>
+    <button class="button btn-primary" type="button" onclick="window.print()">Print again</button>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if not request.args.get('noauto') %}
+<script>
+  window.addEventListener('load', () => {
+    const kick = () => { try { window.focus(); window.print(); } catch(_) {} };
+    requestAnimationFrame(() => setTimeout(kick, 0));
+  });
+</script>
+{% endif %}
+{% endblock %}

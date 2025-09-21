@@ -8,6 +8,9 @@
       <a href="{{ url_for('staff.staff_list', window='all') }}" class="button small" style="padding:.25rem .5rem; border:1px solid #ccc; border-radius:.4rem; text-decoration:none; font-size:.9rem;">
         Duty Roster
       </a>
+      <a href="{{ url_for('aircraft.aircraft_list_view') }}" class="button small" style="padding:.25rem .5rem; border:1px solid #ccc; border-radius:.4rem; text-decoration:none; font-size:.9rem;">
+        Aircraft List
+      </a>
       <a href="{{ url_for('comms.comms_index', window='all') }}" class="button small" style="padding:.25rem .5rem; border:1px solid #ccc; border-radius:.4rem; text-decoration:none; font-size:.9rem;">
         Communications Log
       </a>
@@ -18,7 +21,24 @@
     </div>
     <!-- Recent locate requests (quick access) -->
     <div id="supervisor-locates-card"><!-- loads via AJAX --></div>
-    <div id="supervisor-counts-body"><!-- counts load here --></div>
+    <!-- Flight counts + tools row -->
+    <div class="counts-and-tools"
+         style="display:flex; gap:.75rem; align-items:flex-start; flex-wrap:wrap;">
+      <!-- Narrower flight counts column only -->
+      <div id="supervisor-counts-body"
+           style="flex:0 0 340px; max-width:360px;"><!-- counts load here --></div>
+      <!-- New TFRs/Weather tile (separate visual container) -->
+      <div id="tfrs-tile" class="supervisor-panel"
+           style="flex:0 0 260px; max-width:300px; border:1px solid #ddd; border-radius:.5rem; padding:.75rem;">
+        <div style="font-weight:600; margin-bottom:.35rem;">TFRs &amp; Weather</div>
+        <div class="muted" style="font-size:.85rem; margin-bottom:.5rem;">(requires internet)</div>
+        <a href="https://skyvector.com" target="_blank" rel="noopener"
+           class="button small"
+           style="display:inline-block; padding:.4rem .6rem; border:1px solid #ccc; border-radius:.4rem; text-decoration:none; font-size:.95rem;">
+          Open SkyVector
+        </a>
+      </div>
+    </div>
   </div>
   <div id="supervisor-map" class="supervisor-panel">
     {% if embedded_url %}

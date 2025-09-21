@@ -3,9 +3,10 @@ from datetime import datetime, timedelta, timezone
 import io
 
 from flask import (
-    Blueprint, render_template, request, redirect, url_for, jsonify,
+    Blueprint, render_template, render_template_string, request, redirect, url_for, jsonify,
     current_app, send_file, session
 )
+from app import DB_FILE  # ← required by staff_delete()
 from modules.utils.common import dict_rows, get_preference, set_preference  # shared helpers
 from modules.utils.staff import (
     ensure_staff_tables,
@@ -13,6 +14,9 @@ from modules.utils.staff import (
     toggle_shift as _toggle_shift,
     list_staff,
 )
+
+from modules.utils.common import get_db_file
+import sqlite3
 
 bp = Blueprint(__name__.rsplit('.', 1)[-1], __name__)  # → "staff"
 app = current_app  # legacy shim (matches other route files)
@@ -47,15 +51,77 @@ def staff_list():
 @bp.route("/supervisor/staff/new", methods=["POST"])
 def staff_new():
     name = (request.form.get("name") or "").strip()
-    role = (request.form.get("role") or "").strip()
-    ew   = (request.form.get("ew_number") or "").strip()
+    organization = (request.form.get("organization") or "").strip()
+    emc   = (request.form.get("emc") or "").strip()
+    email = (request.form.get("email") or "").strip()
+    phone = (request.form.get("phone") or "").strip()
     window = _window_arg()
     if name:
         try:
-            get_or_create_staff(name, role=role, ew_number=ew)
+            # New signature for get_or_create_staff to support richer fields.
+            # (We’ll patch modules.utils.staff accordingly.)
+            srow = get_or_create_staff(
+                name,
+                organization=organization,
+                emc=emc,
+                email=email,
+                phone=phone,
+            )
+            sid = None
+            try:
+                sid = int(srow.get("id")) if srow else None
+            except Exception:
+                sid = None
+            # Auto clock-in on add
+            try:
+                if sid:
+                    _toggle_shift(sid, "on", source="add", notes="Auto clock-in on add")
+            except Exception:
+                pass
+
+            # AJAX path: return a machine-readable success so the client can pop waivers.
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                payload = {
+                    "ok": True,
+                    "staff_id": sid,
+                    "name": name,
+                    # handy direct links:
+                    "waiver_choose_url": url_for("staff.waiver_choose", staff_id=sid, name=name) if sid else url_for("staff.waiver_choose"),
+                    "waiver_pilot_url": url_for("exports.docs_waiver_pilot") + (f"?staff_id={sid}" if sid else ""),
+                    "waiver_volunteer_url": url_for("exports.docs_waiver_volunteer") + (f"?staff_id={sid}" if sid else ""),
+                }
+                return jsonify(payload)
+
+            # Non-AJAX path: if no organization was given, still allow waiver chooser
+            if srow and not organization and sid:
+                return redirect(url_for("staff.waiver_choose", staff_id=sid, name=name))
         except Exception:
             # Don’t crash the page; just fall back to redirect
             pass
+    return redirect(url_for("staff.staff_list", window=window))
+
+@bp.route("/supervisor/staff/<int:staff_id>/delete", methods=["POST"])
+def staff_delete(staff_id: int):
+    """Hard delete a staff record (and best-effort cleanup)."""
+    import sqlite3
+    window = _window_arg()
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        conn.execute("DELETE FROM staff WHERE id=?", (staff_id,))
+        for tbl, col in (("staff_shifts","staff_id"), ("staff_status","staff_id")):
+            try: conn.execute(f"DELETE FROM {tbl} WHERE {col}=?", (staff_id,))
+            except Exception: pass
+        conn.commit(); conn.close()
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return jsonify({"ok": True})
+    except Exception:
+        # Make the failure visible in Docker/stdout logs
+        try:
+            current_app.logger.exception("Staff delete failed for id=%s", staff_id)
+        except Exception:
+            pass
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return jsonify({"ok": False}), 500
     return redirect(url_for("staff.staff_list", window=window))
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -67,52 +133,103 @@ def staff_new():
 # ─────────────────────────────────────────────────────────────────────────────
 @bp.post("/supervisor/staff/quick_checkin")
 def staff_quick_checkin():
-    try:
-        ensure_staff_tables()
-    except Exception:
-        pass
-
-    COOLDOWN_S = 14 * 3600  # 14 hours
-    resp = jsonify({"ok": True})
-
-    # Always consume the one-shot login flag so refresh won't re-open the modal.
-    try:
-        session.pop("just_logged_in", None)
-    except Exception:
-        pass
-
-    # Skip path: only a cooldown cookie
-    if (request.form.get("skip") or "") == "1":
-        resp.set_cookie("checked_in_recently", "1", max_age=COOLDOWN_S, samesite="Lax")
-        return resp
+    """
+    Dashboard first-login modal helper.
+    Contract expected by frontend (dashboard.html):
+      - If no name found: { ok: true, needs_profile: true }
+      - If found & not on duty: opens shift → { ok: true, existing: true, toggled: "started", staff_id, name }
+      - If found & on duty: close then open (restart) → { ok: true, existing: true, toggled: "restarted", staff_id, name }
+      - Optional: needs_waiver bool + waiver_choose_url if your app uses that
+    """
+    if request.form.get("skip"):
+        return jsonify(ok=True, skipped=True)
 
     name = (request.form.get("name") or "").strip()
-    role = (request.form.get("role") or "").strip()
-    ew   = (request.form.get("ew_number") or "").strip()
     if not name:
-        return jsonify({"ok": False, "error": "name_required"}), 400
+        return jsonify(ok=False, message="Name required"), 400
 
-    # Upsert staff and open a shift if not already on duty
-    srow = get_or_create_staff(name, role=role, ew_number=ew)
-    sid = int(srow.get("id"))
-    try:
-        row = next((r for r in list_staff("all") if int(r["id"]) == sid), None)
-        if not (row and row.get("on_duty")):
-            _toggle_shift(sid, "on", source="login", notes="Login check-in")
-    except Exception:
-        pass
+    # Lookup by case-insensitive name (no .get calls on sqlite3.Row)
+    with sqlite3.connect(get_db_file()) as c:
+        c.row_factory = sqlite3.Row
+        row = c.execute(
+            "SELECT * FROM staff WHERE LOWER(name)=LOWER(?) LIMIT 1", (name,)
+        ).fetchone()
+        staff = dict(row) if row else None
 
-    # Prefill cookies for next time (1 year)
-    ONE_YEAR = 365 * 24 * 3600
-    resp.set_cookie("last_staff_name", name, max_age=ONE_YEAR, samesite="Lax")
-    if role:
-        resp.set_cookie("last_staff_role", role, max_age=ONE_YEAR, samesite="Lax")
-    if ew:
-        resp.set_cookie("last_staff_ew",   ew,   max_age=ONE_YEAR, samesite="Lax")
+    if not staff:
+        # Frontend will expand to Stage 2 to capture details & create profile
+        return jsonify(ok=True, needs_profile=True)
 
-    # Cooldown cookie so we don't nag again for a while
-    resp.set_cookie("checked_in_recently", "1", max_age=COOLDOWN_S, samesite="Lax")
-    return resp
+    staff_id = int(staff["id"])
+
+    # Are they currently on duty?
+    with sqlite3.connect(get_db_file()) as c:
+        c.row_factory = sqlite3.Row
+        open_row = c.execute(
+            "SELECT id FROM staff_shifts WHERE staff_id=? AND end_utc IS NULL ORDER BY start_utc DESC, id DESC LIMIT 1",
+            (staff_id,),
+        ).fetchone()
+
+    if open_row:
+        # Restart: clock out then in
+        _toggle_shift(staff_id, "off", source="quick_checkin", notes="restart")
+        _toggle_shift(staff_id, "on",  source="quick_checkin")
+        return jsonify(ok=True, existing=True, toggled="restarted",
+                       staff_id=staff_id, name=staff.get("name", name),
+                       needs_waiver=False)
+    else:
+        # Start fresh
+        _toggle_shift(staff_id, "on", source="quick_checkin")
+        return jsonify(ok=True, existing=True, toggled="started",
+                       staff_id=staff_id, name=staff.get("name", name),
+                       needs_waiver=False)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Simple waiver choice page (two buttons → open waiver in a new tab)
+# GET /staff/waiver/choose?staff_id=…[&name=…][&window=…]
+# ─────────────────────────────────────────────────────────────────────────────
+@bp.get("/staff/waiver/choose")
+def waiver_choose():
+    staff_id = request.args.get("staff_id", type=int)
+    name     = (request.args.get("name") or "").strip()
+    window   = _window_arg()
+    # Backfill name if omitted
+    if staff_id and not name:
+        try:
+            row = next((r for r in list_staff("all") if int(r["id"]) == int(staff_id)), None)
+            if row:
+                name = row.get("name") or name
+        except Exception:
+            pass
+    pilot_href = f"/docs/waiver/pilot?staff_id={staff_id}" if staff_id else "/docs/waiver/pilot"
+    vol_href   = f"/docs/waiver/volunteer?staff_id={staff_id}" if staff_id else "/docs/waiver/volunteer"
+    back_href  = url_for("staff.staff_list", window=window)
+    # Tiny one-shot HTML; no dedicated template needed.
+    return render_template_string("""
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Choose Waiver</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  </head>
+  <body class="supervisor">
+    <main class="container" style="max-width: 680px; margin: 2rem auto;">
+      <h2 style="margin:0 0 .5rem 0;">Choose waiver for {{ name or 'new staffer' }}</h2>
+      <p class="muted" style="margin:0 0 1rem 0;">Open the correct waiver in a new tab. When done, return to the roster.</p>
+      <div style="display:flex; gap:.75rem; flex-wrap:wrap;">
+        <a class="button" style="padding:.6rem 1.1rem;" target="_blank" rel="noopener"
+           href="{{ pilot_href }}">Pilot</a>
+        <a class="button" style="padding:.6rem 1.1rem;" target="_blank" rel="noopener"
+           href="{{ vol_href }}">Volunteer</a>
+        <a class="button secondary" style="margin-left:auto; padding:.6rem 1.1rem;"
+           href="{{ back_href }}">Back to Roster</a>
+      </div>
+    </main>
+  </body>
+</html>
+    """, name=name, pilot_href=pilot_href, vol_href=vol_href, back_href=back_href)
 
 @bp.route("/supervisor/staff/<int:staff_id>/toggle", methods=["POST"])
 def staff_toggle(staff_id: int):
@@ -211,18 +328,22 @@ def _ics214_context(window: str):
     # Resources assigned (unique people who touched the window)
     res_rows = dict_rows(f"""
       SELECT DISTINCT s.id, s.name,
-                      IFNULL(s.role,'')      AS role,
-                      IFNULL(s.ew_number,'') AS ew_number
+                      IFNULL(s.organization,'') AS organization,
+                      IFNULL(s.emc,'')          AS emc,
+                      IFNULL(s.email,'')        AS email,
+                      IFNULL(s.phone,'')        AS phone
         FROM staff s
         LEFT JOIN staff_shifts sh ON sh.staff_id = s.id
         {where_sql}
        ORDER BY s.name COLLATE NOCASE
     """, params)
 
+    # For ICS-214: show each person; map Organization → Home Agency.
+    # (ICS position remains a header field; we don't hardcode per person.)
     resources = [{
         "name": r["name"],
-        "ics_position": r.get("role") or "",
-        "home_agency": r.get("ew_number") or "",
+        "ics_position": "",                           # leave blank; filled by header field
+        "home_agency": r.get("organization") or "",
     } for r in res_rows]
 
     # Activity log: ONLY shifts that ENDED within the window
@@ -236,7 +357,7 @@ def _ics214_context(window: str):
     sh_rows = dict_rows(f"""
       SELECT sh.staff_id,
              s.name,
-             IFNULL(s.role,'') AS role,
+             IFNULL(s.organization,'') AS organization,
              sh.start_utc, sh.end_utc
         FROM staff_shifts sh
         JOIN staff s ON s.id = sh.staff_id
@@ -251,7 +372,7 @@ def _ics214_context(window: str):
     # Build compact "clock-out only" entries
     activities = []
     for sh in sh_rows:
-        role = (sh.get("role") or "").strip()
+        org = (sh.get("organization") or "").strip()
         st, en = sh.get("start_utc"), sh.get("end_utc")
         sdt, edt = _parse_iso(st), _parse_iso(en)
         # Duration (fallback to 0 if start missing)
@@ -259,8 +380,8 @@ def _ics214_context(window: str):
         if sdt and edt and edt >= sdt:
             mins = int((edt - sdt).total_seconds() // 60)
         msg = f"{sh['name']} shift end (duration {mins//60}h {mins%60:02d}m)"
-        if role:
-            msg += f" [{role}]"
+        if org:
+            msg += f" [{org}]"
         activities.append({"time": _fmt(en), "text": msg})
 
     # Sort chronologically (fallback to raw string if parse failed)

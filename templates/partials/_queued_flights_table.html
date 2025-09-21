@@ -6,11 +6,13 @@
         <th>ID / ✏️ / 🗑</th>
         <th>Dir</th>
         <th>Tail</th>
+        <th>Pilot</th>
         <th>To</th>
         <th>Travel Time</th>
         <th>Type</th>
         <th>Remarks</th>
         <th>Queued At</th>
+        <th>Labels</th>
         <th>Send</th>
       </tr>
     </thead>
@@ -28,6 +30,7 @@
         </td>
         <td>{{ q.direction }}</td>
         <td>{{ q.tail_number }}</td>
+        <td>{{ q.pilot_name or '—' }}</td>
         <td>{{ q['airfield_landing'] or '—' }}</td>
         <td>
           {% if q.travel_time %}
@@ -37,6 +40,17 @@
         <td>{{ q.cargo_type }}</td>
         <td>{{ q.remarks }}</td>
         <td>{{ q.created_at }}</td>
+        <!-- Labels action cell (aligns with <th>Labels) -->
+        <td style="text-align:center; white-space:nowrap;">
+          <a
+            href="/docs/labels/cargo?queued_id={{ q.id }}&scope=all"
+            title="Print labels"
+            target="_blank" rel="noopener"
+            class="button small"
+            style="padding:.2rem .5rem;">
+            📦
+          </a>
+        </td>
         <td>
           <form method="post"
                 class="q-send-form"

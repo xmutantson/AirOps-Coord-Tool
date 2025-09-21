@@ -4,7 +4,7 @@ import sqlite3
 from typing import Any, Dict, Iterable, List, Tuple, Optional
 from datetime import datetime, timedelta
 
-from modules.utils.common import get_db_file, dict_rows
+from modules.utils.common import get_db_file, dict_rows, ensure_column
 
 # Supported windows (hours); "all" means no lower bound
 _WINDOWS = {
@@ -34,6 +34,17 @@ def _fmt_hhmm_from_seconds(seconds: int) -> str:
     h = m // 60
     mm = m % 60
     return f"{h}:{mm:02d}"
+
+def _asdict(row: Any) -> Dict[str, Any]:
+    """Normalize sqlite3.Row → dict for safe .get() usage."""
+    if row is None:
+        return {}
+    try:
+        # sqlite3.Row is already mapping-like, but lacks .get; dict() makes a real dict
+        return dict(row)
+    except Exception:
+        # if it's already a dict, or something else mapping-like
+        return row  # type: ignore[return-value]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Schema
@@ -78,11 +89,25 @@ def ensure_staff_tables() -> None:
         c.execute("CREATE INDEX IF NOT EXISTS idx_shifts_open     ON staff_shifts(staff_id, end_utc)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_shifts_window   ON staff_shifts(start_utc, end_utc)")
 
+        # ── New contact/affiliation columns (idempotent on upgraded DBs) ─────
+        ensure_column("staff", "organization", "TEXT")
+        ensure_column("staff", "emc",          "TEXT")
+        ensure_column("staff", "email",        "TEXT")
+        ensure_column("staff", "phone",        "TEXT")
 # ─────────────────────────────────────────────────────────────────────────────
 # CRUD-ish helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def get_or_create_staff(name: str, role: str = "", ew_number: str = "") -> Dict[str, Any]:
+def get_or_create_staff(
+    name: str,
+    role: str = "",
+    ew_number: str = "",
+    *,
+    organization: str = "",
+    emc: str = "",
+    email: str = "",
+    phone: str = "",
+) -> Dict[str, Any]:
     """
     Find a staff record by ew_number (preferred) or case-insensitive name.
     Upsert role/EW # if a record exists but those fields changed.
@@ -90,7 +115,11 @@ def get_or_create_staff(name: str, role: str = "", ew_number: str = "") -> Dict[
     """
     nm = (name or "").strip()
     role = (role or "").strip()
-    ew = (ew_number or "").strip()
+    ew   = (ew_number or "").strip()
+    org  = (organization or "").strip()
+    emc_ = (emc or "").strip()
+    mail = (email or "").strip()
+    ph   = (phone or "").strip()
 
     if not nm:
         raise ValueError("name is required")
@@ -104,30 +133,49 @@ def get_or_create_staff(name: str, role: str = "", ew_number: str = "") -> Dict[
             row = c.execute("SELECT * FROM staff WHERE ew_number=? LIMIT 1", (ew,)).fetchone()
         if not row:
             row = c.execute("SELECT * FROM staff WHERE LOWER(name)=LOWER(?) LIMIT 1", (nm,)).fetchone()
+        # ── Normalize for safe .get(...) usage below ─────────────────────────
+        # sqlite3.Row does NOT implement .get; convert to a real dict.
+        if row is None:
+            row = None
+        elif isinstance(row, dict):
+            pass
+        else:
+            try:
+                row = dict(row)
+            except Exception:
+                # As a last resort, avoid .get on non-dict rows
+                row = {"id": row["id"], "name": row["name"], "role": row["role"], "ew_number": row["ew_number"]}
 
         if row:
-            # Update role/EW number if provided and different
-            need_update = False
-            new_role = row["role"] or ""
-            new_ew   = row["ew_number"] or ""
-            if role and role != (row["role"] or ""):
-                new_role = role; need_update = True
-            if ew and ew != (row["ew_number"] or ""):
-                new_ew = ew; need_update = True
-            if need_update:
+            # Update only when a provided field is non-blank and different
+            cur_role = row["role"] or ""
+            cur_ew   = row["ew_number"] or ""
+            cur_org  = row.get("organization") or ""
+            cur_emc  = row.get("emc") or ""
+            cur_mail = row.get("email") or ""
+            cur_ph   = row.get("phone") or ""
+
+            new_role = cur_role if not role else role
+            new_ew   = cur_ew   if not ew   else ew
+            new_org  = cur_org  if not org  else org
+            new_emc  = cur_emc  if not emc_ else emc_
+            new_mail = cur_mail if not mail else mail
+            new_ph   = cur_ph   if not ph   else ph
+
+            if (new_role, new_ew, new_org, new_emc, new_mail, new_ph) != (cur_role, cur_ew, cur_org, cur_emc, cur_mail, cur_ph):
                 c.execute("""
                   UPDATE staff
-                     SET role=?, ew_number=?, updated_at=?
+                     SET role=?, ew_number=?, organization=?, emc=?, email=?, phone=?, updated_at=?
                    WHERE id=?
-                """, (new_role or None, new_ew or None, now, int(row["id"])))
+                """, (new_role or None, new_ew or None, new_org or None, new_emc or None, new_mail or None, new_ph or None, now, int(row["id"])))
                 row = c.execute("SELECT * FROM staff WHERE id=?", (int(row["id"]),)).fetchone()
-            return dict(row)
+            return dict(row) if row is not None else {}
 
         # Insert new
         cur = c.execute("""
-          INSERT INTO staff(name, role, ew_number, is_active, created_at)
-          VALUES(?, ?, ?, 1, ?)
-        """, (nm, role or None, ew or None, now))
+          INSERT INTO staff(name, role, ew_number, organization, emc, email, phone, is_active, created_at)
+          VALUES(?, ?, ?, ?, ?, ?, ?, 1, ?)
+        """, (nm, role or None, ew or None, org or None, emc_ or None, mail or None, ph or None, now))
         sid = cur.lastrowid
         return dict(c.execute("SELECT * FROM staff WHERE id=?", (sid,)).fetchone())
 
@@ -272,6 +320,10 @@ def list_staff(window: str = "all") -> List[Dict[str, Any]]:
             "name": base.get("name", ""),
             "role": base.get("role", ""),
             "ew_number": base.get("ew_number", ""),
+            "organization": base.get("organization", ""),
+            "emc": base.get("emc", ""),
+            "email": base.get("email", ""),
+            "phone": base.get("phone", ""),
             "on_duty": bool(on_duty),
             "shift_start_utc": open_start_iso or "",
             "current_elapsed_s": current_elapsed,
