@@ -123,11 +123,11 @@
   © {{ current_year }} Kameron Markham (KG7VSN)
 </footer>
 
-<!-- ── First-request time probe: log client vs server time (once per session) ── -->
-{% if not session.get('time_probe_done') %}
+<!-- ── Time probe: always fire (server enforces once-per-BOOT_ID) ── -->
 <script>
 (function(){
   try {
+
     var m = document.querySelector('meta[name="csrf-token"]');
     var csrf = m ? m.getAttribute('content') : null;
     // Collect client local epoch, offset (minutes behind UTC), and IANA zone
@@ -136,7 +136,8 @@
       client_epoch_ms: Date.now(),
       // Keep these for logging only (do not use them to re-compute UTC on server).
       tz_offset_min:   new Date().getTimezoneOffset(),  // minutes *behind* UTC
-      iana_tz:         (Intl.DateTimeFormat().resolvedOptions().timeZone || "")
+      iana_tz:         (Intl.DateTimeFormat().resolvedOptions().timeZone || ""),
+      boot_id:         "{{ BOOT_ID }}"
     };
     // POST JSON; CSRF header is auto-added by the global fetch wrapper below
     fetch("/__time_probe__", {
@@ -147,11 +148,13 @@
       },
       body: JSON.stringify(payload),
       cache: "no-store",
-    }).catch(function(){ /* best-effort: silent */ });
+    })
+    .catch(function(_e){
+      /* best-effort: silent */
+    });
   } catch(e) {}
 })();
 </script>
-{% endif %}
 
 <!-- ── 30 s heartbeat: paint body.red when server unreachable ── -->
 <script>

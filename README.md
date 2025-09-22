@@ -40,37 +40,69 @@ services:
     volumes:
       - ./data:/app/data
       - flask_secret:/run/secrets
-    restart: unless-stopped
+    restart: always
     devices:
       - /dev/snd
       - /dev/digrig-ptt:/dev/digrig-ptt
     group_add:
       - audio
+
+    cap_add:
+      - SYS_TIME                       # required to change host clock from inside container
+
     environment:
+      # ---- System Time Autoset ----
+      AOCT_SET_HOST_TIME: "1"           # OFF by default; enable to allow host time set
+      AOCT_TIME_DRIFT_MS: "900000"      # only adjust when drift >= 15m (900s)
+      AOCT_TIME_MAX_ADJUST_SEC: "0"     # refuse adjustments bigger than value (in seconds). set to 0 to disable limits
+
+      # ---- Waitress (web app) ----
       WAITRESS_LISTEN: "0.0.0.0:5150"
       WAITRESS_THREADS: "32"
       WAITRESS_CONNECTION_LIMIT: "200"
       WAITRESS_CHANNEL_TIMEOUT: "120"
+
+      # ---- Direwolf / radio I/O ----
       DIGIRIG_ENABLE: "1"
       DIGIRIG_PTT: "/dev/digrig-ptt"
       AX25_CALLSIGN: "KG7VSN-10"
       AX25_RX_DEVICE: "plughw:CARD=Device,DEV=0"
       AX25_TX_DEVICE: "plughw:CARD=Device,DEV=0"
-      AX25_DEST: "AOCTDB"
-      AX25_PATH: ""
-      MYCALL: "KG7VSN-10"
+
+      # ---- AX.25 UI broadcaster (radio_tx.py) ----
+      AX25_DEST: "AOCTDB"        # 6-char destination
+      AX25_PATH: ""              # optional digipeater path (blank = direct)
+      MYCALL: "KG7VSN-10"        # overrides AX25_CALLSIGN if set
+
+      # KISS TCP the broadcaster talks to (Direwolf default 8001)
       KISS_HOST: "127.0.0.1"
       KISS_PORT: "8001"
+      # KISS verbosity (0/1). Turn on temporarily if you need troubleshooting.
       KISS_VERBOSE: "0"
-      CHUNK_BYTES: "200"
-      PACE_MS: "350"
-      BURST_SIZE: "6"
-      BURST_PAUSE_MS: "750"
-      KISS_WARMUP_MS: "250"
-      FULL_INTERVAL_SEC: "900"
-      DIFF_INTERVAL_SEC: "30"
-      COMPRESS: "1"
-      ENCODING: "B91"
+
+      # Payload chunking/pacing
+      CHUNK_BYTES: "200"         # bytes per frame after encoding
+      PACE_MS: "350"             # ms between frames inside a burst
+      BURST_SIZE: "6"            # frames per kissutil session
+      BURST_PAUSE_MS: "750"      # ms between bursts
+      KISS_WARMUP_MS: "250"      # ms after kissutil starts before first frame
+
+      # New timing model (full snapshot + diffs)
+      FULL_INTERVAL_SEC: "900"   # 15 minutes
+      DIFF_INTERVAL_SEC: "30"    # 30 seconds (skips empty diffs)
+
+      # Compression (payload-only)
+      COMPRESS: "1"              # 1=enable compression (zlib), 0=plain JSON
+      ENCODING: "B91"            # Encoding alphabet for compressed bytes: B91 (Base91) or B64 (Base64)
+
+      # ---- SQL slow-query logging ----
+      AOCT_SQL_SLOW_MS: "50"     # log ≥50ms
+      AOCT_SQL_EXPLAIN: "1"      # also log EXPLAIN for slow SELECTs
+      AOCT_SQL_LOG: "0"          # set "1" to log ALL dict_rows() queries
+      AOCT_SQL_TRACE: "1"        # set "1" to enable sqlite trace hook
+      AOCT_SQL_TRACE_EXPANDED: "0"
+      PYTHONUNBUFFERED: "1"      # flush logs promptly
+
     ulimits:
       nofile:
         soft: 4096

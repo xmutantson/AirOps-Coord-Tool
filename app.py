@@ -5,10 +5,11 @@
 #  • flight_history JSON-safe; CSV export; DB auto-migrate
 #  • LAN-only Flask server on :5150
 
-import os, sys, re, sqlite3, threading, time, logging, traceback, importlib, subprocess, json
+import os, sys, re, sqlite3, threading, time, logging, traceback, importlib, subprocess, json, secrets
+from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from functools import lru_cache
-from flask import Blueprint, Flask, jsonify, redirect, render_template, session, url_for
+from flask import Blueprint, Flask, jsonify, redirect, render_template, session, url_for, current_app, request
 
 import flask
 from markupsafe import Markup as _Markup
@@ -192,6 +193,18 @@ sqlite3.connect = connect
 # ──────────────────────────────────────────────────────────────────────────────
 # Flask app + CSRF + Rate limits
 app = Flask(__name__)
+
+# Generate a fresh BOOT_ID each time the process/container starts (or honor an override)
+app.config["BOOT_ID"] = os.getenv("AOCT_BOOT_ID") or secrets.token_hex(8)
+
+# Server-side once-per-boot sentinel directory
+SENTINEL_DIR = Path("/tmp/aoct-sentinels")
+SENTINEL_DIR.mkdir(parents=True, exist_ok=True)
+
+# Expose BOOT_ID to all templates
+@app.context_processor
+def _inject_boot_id():
+    return {"BOOT_ID": current_app.config.get("BOOT_ID")}
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Time probe / auto-set controls (OFF by default; safe logging only)
@@ -678,10 +691,10 @@ def __ping__():
     return jsonify(ok=True, now=datetime.utcnow().isoformat()+"Z")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# One-shot per-session browser time probe → verbose log (+ optional host set)
+# Browser time probe → verbose log (+ optional host set)
+#  - Server-side once-per-BOOT_ID gating (normal app rate limits apply)
 @app.post("/__time_probe__")
 def __time_probe_post():
-    from flask import request
     try:
         payload = request.get_json(silent=True) or {}
     except Exception:
@@ -728,6 +741,8 @@ def __time_probe_post():
     # Mark this session as probed
     try:
         session["time_probe_done"] = True
+        # Also record which server boot this session has probed for
+        session["time_probe_boot_id"] = current_app.config.get("BOOT_ID")
     except Exception:
         pass
 
@@ -735,27 +750,59 @@ def __time_probe_post():
     adjusted = False
     adjust_reason = ""
     if AOCT_SET_HOST_TIME and ok_nums and abs(delta_ms) >= AOCT_TIME_DRIFT_MS:
-        # If cap <= 0 → unlimited; otherwise enforce upper bound
-        if AOCT_TIME_MAX_ADJ_S <= 0 or abs(delta_ms) <= AOCT_TIME_MAX_ADJ_S * 1000:
-            # Round to nearest whole second (avoid fractional surprise)
-            target_dt = client_utc_dt.replace(microsecond=0)
-            iso_for_log = target_dt.isoformat().replace("+00:00","Z")
-            # Use POSIX 'date -u -s'
-            stamp = target_dt.strftime("%Y-%m-%d %H:%M:%S")
-            try:
-                rc = subprocess.run(["date","-u","-s", stamp], capture_output=True, text=True)
-                adjusted = (rc.returncode == 0)
-                adjust_reason = rc.stdout.strip() or rc.stderr.strip()
-                level = logging.INFO if adjusted else logging.WARNING
-                app.logger.log(level, "TIME_PROBE: set host UTC to %s (rc=%s) msg=%s",
-                               iso_for_log, rc.returncode, adjust_reason or "(none)")
-            except Exception as e:
-                app.logger.warning("TIME_PROBE: set host UTC failed: %s", e)
-        else:
-            app.logger.warning(
-                "TIME_PROBE: drift (%+d ms) exceeds AOCT_TIME_MAX_ADJUST_SEC=%s → not adjusting",
-                int(delta_ms), AOCT_TIME_MAX_ADJ_S
-            )
+        # Once-per-boot sentinel (atomic create)
+        boot_id = current_app.config.get("BOOT_ID")
+        sentinel = SENTINEL_DIR / f"time_set_{boot_id}"
+        can_attempt = True
+        created_line = f"created={datetime.utcnow().isoformat()}Z delta_ms={int(delta_ms)} " \
+                       f"server_utc={server_utc_dt.isoformat().replace('+00:00','Z')} " \
+                       f"client_utc={(client_utc_dt.isoformat().replace('+00:00','Z') if client_utc_dt else 'None')}\n"
+        try:
+            fd = os.open(str(sentinel), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            with os.fdopen(fd, "w") as fh:
+                fh.write(created_line)
+        except FileExistsError:
+            can_attempt = False
+            app.logger.info("TIME_PROBE: time-set already completed this boot (sentinel %s)", sentinel)
+        except Exception as e:
+            # If we can't ensure atomicity, still try once and log.
+            app.logger.warning("TIME_PROBE: sentinel create failed (%s): %s", sentinel, e)
+
+        if can_attempt:
+            # Enforce max adjust cap if configured (>0)
+            cap_ok = (AOCT_TIME_MAX_ADJ_S <= 0 or abs(delta_ms) <= AOCT_TIME_MAX_ADJ_S * 1000)
+            if not cap_ok:
+                app.logger.warning(
+                    "TIME_PROBE: drift (%+d ms) exceeds AOCT_TIME_MAX_ADJUST_SEC=%s → not adjusting",
+                    int(delta_ms), AOCT_TIME_MAX_ADJ_S
+                )
+            else:
+                target_dt = client_utc_dt.replace(microsecond=0)
+                iso_for_log = target_dt.isoformat().replace("+00:00","Z")
+                stamp = target_dt.strftime("%Y-%m-%d %H:%M:%S")
+                try:
+                    rc = subprocess.run(["date","-u","-s", stamp], capture_output=True, text=True)
+                    adjusted = (rc.returncode == 0)
+                    adjust_reason = rc.stdout.strip() or rc.stderr.strip()
+                    level = logging.INFO if adjusted else logging.WARNING
+                    app.logger.log(level, "TIME_PROBE: set host UTC to %s (rc=%s) msg=%s",
+                                   iso_for_log, rc.returncode, adjust_reason or "(none)")
+                    # Append outcome to sentinel; DO NOT delete the sentinel — gate strictly once per BOOT_ID.
+                    try:
+                        with open(sentinel, "a") as fh:
+                            fh.write(
+                                f"rc={getattr(rc,'returncode','NA')} adjusted={int(bool(adjusted))} "
+                                f"reason={adjust_reason}\n"
+                            )
+                    except Exception:
+                        pass
+                except Exception as e:
+                    app.logger.warning("TIME_PROBE: set host UTC failed: %s", e)
+                    try:
+                        with open(sentinel, "a") as fh:
+                            fh.write(f"exception={e}\n")
+                    except Exception:
+                        pass
 
     return jsonify({
         "ok": True,
