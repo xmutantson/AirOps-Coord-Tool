@@ -1643,6 +1643,16 @@ table.wg-radio-table tr.read { opacity: .8; }
   /* allow explicit left/top + translate centering from JS */
   position: fixed;
 }
+/* ── Training page scoping: ensure full-width cards inside the training container ── */
+.training-wrap .card {
+  width: 100% !important;
+  max-width: none !important;
+}
+
+/* Ensure Training directory controls float above footer comfortably */
+#dir-controls {
+  bottom: 4.25rem !important; /* sits above sticky footer */
+}
 /* ─── Cargo Requests drawer: make rows look clickable ─────────── */
 .req-group-h {
   display: flex;

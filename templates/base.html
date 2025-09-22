@@ -87,6 +87,10 @@
         <a href="{{ url_for('admin.admin') }}"
            class="{% if active=='admin' %}active{% endif %}">Admin</a>
       {% endif %}
+      <!-- Training tab (visibility controlled by hamburger prefs; default OFF) -->
+      <a href="{{ url_for('training.training_index') }}"
+         data-tab="training"
+         class="{% if active=='training' %}active{% endif %}">Training</a>
     </nav>
     <div class="hamburger-container">
       <!-- Hamburger menu for navbar preferences -->
@@ -98,6 +102,12 @@
         <label><input type="checkbox" data-toggle-tab="ramp_boss" checked> Ramp</label><br>
         <label><input type="checkbox" data-toggle-tab="queued_flights" checked> Ramp Queue</label><br>
         <label><input type="checkbox" data-toggle-tab="inventory" checked> Mat. Handling</label><br>
+        <hr>
+        <!-- Training toggle: default UNCHECKED in markup; JS also treats it as default OFF -->
+        <label style="margin-top:.25rem;">
+          <input type="checkbox" data-toggle-tab="training">
+          Training
+        </label><br>
         <hr>
         <button id="help-open" class="button button-primary">Help</button>
       </div>
@@ -112,6 +122,36 @@
 <footer>
   © {{ current_year }} Kameron Markham (KG7VSN)
 </footer>
+
+<!-- ── First-request time probe: log client vs server time (once per session) ── -->
+{% if not session.get('time_probe_done') %}
+<script>
+(function(){
+  try {
+    var m = document.querySelector('meta[name="csrf-token"]');
+    var csrf = m ? m.getAttribute('content') : null;
+    // Collect client local epoch, offset (minutes behind UTC), and IANA zone
+    var payload = {
+      // IMPORTANT: Date.now() is already UTC epoch ms — do NOT offset on server.
+      client_epoch_ms: Date.now(),
+      // Keep these for logging only (do not use them to re-compute UTC on server).
+      tz_offset_min:   new Date().getTimezoneOffset(),  // minutes *behind* UTC
+      iana_tz:         (Intl.DateTimeFormat().resolvedOptions().timeZone || "")
+    };
+    // POST JSON; CSRF header is auto-added by the global fetch wrapper below
+    fetch("/__time_probe__", {
+      method: "POST",
+      headers: {
+        "Content-Type":"application/json", "X-Requested-With":"XMLHttpRequest",
+        ...(csrf ? {"X-CSRFToken": csrf} : {})
+      },
+      body: JSON.stringify(payload),
+      cache: "no-store",
+    }).catch(function(){ /* best-effort: silent */ });
+  } catch(e) {}
+})();
+</script>
+{% endif %}
 
 <!-- ── 30 s heartbeat: paint body.red when server unreachable ── -->
 <script>
@@ -309,7 +349,7 @@ document.addEventListener('DOMContentLoaded', () => {
 document.addEventListener('DOMContentLoaded', () => {
   const hamburger  = document.getElementById('nav-hamburger');
   const dropdown   = document.getElementById('nav-dropdown');
-  const tabNames   = ['supervisor','radio','ramp_boss','queued_flights','inventory'];
+  const tabNames   = ['supervisor','radio','ramp_boss','queued_flights','inventory','training'];
   const storageKey = 'navTabPrefs_v1';
 
   if (!hamburger || !dropdown) {
@@ -331,7 +371,18 @@ document.addEventListener('DOMContentLoaded', () => {
     let prefs = {};
     try { prefs = JSON.parse(localStorage.getItem(storageKey) || '{}'); } catch {}
     tabNames.forEach(tab => {
-      const checked = prefs[tab] !== false; // default ON
+      // Default behavior:
+      //  - All tabs ON by default, EXCEPT 'training' which defaults OFF.
+      let checked;
+      if (tab === 'training') {
+        // explicit true → on; any other/unset → off
+        checked = prefs.hasOwnProperty(tab) ? !!prefs[tab] : false;
+      } else {
+        // explicit false → off; any other/unset → on
+        checked = prefs.hasOwnProperty(tab) ? !!prefs[tab] : true;
+      }
+
+      // Reflect in hamburger checkbox (if present)
       document.querySelectorAll(`[data-toggle-tab="${tab}"]`).forEach(box => box.checked = checked);
       document.querySelectorAll(`[data-tab="${tab}"]`).forEach(a => a.style.display = checked ? '' : 'none');
     });
@@ -342,8 +393,15 @@ document.addEventListener('DOMContentLoaded', () => {
     let prefs = {};
     tabNames.forEach(tab => {
       const toggle = document.querySelector(`[data-toggle-tab="${tab}"]`);
-      const checked = toggle ? toggle.checked : true;
-      prefs[tab] = checked;
+      // If a toggle exists, use its state; otherwise keep prior default semantics:
+      // - non-training tabs default true; training defaults false
+      let checked;
+      if (toggle) {
+        checked = !!toggle.checked;
+      } else {
+        checked = (tab === 'training') ? false : true;
+      }
+      prefs[tab] = checked;  // persist exact booleans
       document.querySelectorAll(`[data-tab="${tab}"]`).forEach(a => a.style.display = checked ? '' : 'none');
     });
     localStorage.setItem(storageKey, JSON.stringify(prefs));

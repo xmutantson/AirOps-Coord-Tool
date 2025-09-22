@@ -1,0 +1,210 @@
+{% extends "base.html" %}
+{% block title %}Training – Aircraft Ops{% endblock %}
+{% block content %}
+<div class="container training-wrap" style="max-width: 960px;">
+  <h1 class="page-title">Training</h1>
+
+  <!-- PDFs directory panel (full width) -->
+  <section class="card"
+           style="border:1px solid #ddd; border-radius:.6rem; padding:1rem; margin-bottom:1rem; width:100%;">
+    <div style="display:flex; justify-content:space-between; align-items:baseline; gap:.5rem; flex-wrap:wrap;">
+      <h2 style="margin:0;">Training Files</h2>
+      {# Only show the directory hint when there are no files #}
+      {% if not files %}
+        <div class="muted" style="font-size:.9rem;">No files found yet. Place files in <code>{{ training_dir }}</code> and refresh.</div>
+      {% endif %}
+    </div>
+    {% if files %}
+      <ul style="list-style:none; padding:0; margin:.75rem 0 0;">
+        {% for f in files %}
+          <li style="display:flex; justify-content:space-between; align-items:center;
+                     padding:.6rem .25rem; border-bottom:1px dashed #eee;
+                     gap:.75rem;">
+            <a href="{{ f.url }}" target="_blank" rel="noopener" style="text-decoration:none;">
+              📄 {{ f.name }}
+            </a>
+            <span class="muted" style="font-variant-numeric: tabular-nums; font-size:.9rem;">
+              {{ (f.bytes // 1024) or 1 }} KB
+            </span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </section>
+
+  <!-- All Help Topics (collapsible, full width) -->
+  <section class="card"
+           style="border:1px solid #ddd; border-radius:.6rem; padding:1rem; position:relative; width:100%;">
+    <h2 style="margin:0 0 .5rem;">All Help Topics</h2>
+    <div class="muted" style="font-size:.95rem; margin-bottom:.5rem;">
+      A directory of help for each section. Click a topic to open its help article here (pop-up window).
+    </div>
+
+    {% set groups = [
+      {"title":"Supervisor",    "links":[{"label":"Supervisor Overview", "route": url_for('supervisor.supervisor')}]},
+      {"title":"Dashboard",     "links":[{"label":"Dashboard Overview",  "route": url_for('core.dashboard')}]},
+      {"title":"Radio",         "links":[{"label":"Radio Ops",           "route": url_for('radio.radio')}]},
+      {"title":"Ramp",          "links":[
+        {"label":"Ramp Boss",   "route": url_for('ramp.ramp_boss')},
+        {"label":"Ramp Queue",  "route": url_for('ramp.queued_flights')}
+      ]},
+      {"title":"Materials Handling", "links":[
+        {"label":"Inventory Overview", "route": url_for('inventory.inventory_overview')}
+      ]},
+      {"title":"Preferences",   "links":[{"label":"Preferences",         "route": url_for('preferences.preferences')}]}
+    ] %}
+    {% if admin_unlocked %}
+      {% set _ = groups.append({"title":"Admin", "links":[{"label":"Admin Panel", "route": url_for('admin.admin')}]} ) %}
+    {% endif %}
+
+    <div id="help-directory" style="display:flex; flex-direction:column; gap:.4rem;">
+      {% for g in groups %}
+        <details class="help-group" style="border:1px solid #eee; border-radius:.4rem; padding:.5rem;">
+          <summary style="cursor:pointer; font-weight:600;">{{ g.title }}</summary>
+          <ul style="list-style:none; padding:.4rem .2rem .2rem; margin:0;">
+            {% for l in g.links %}
+              <li style="padding:.15rem 0;">
+                <a href="#"
+                   class="js-help-link"
+                   data-help-route="{{ l.route }}"
+                   style="text-decoration:none;">
+                  {{ l.label }}
+                </a>
+              </li>
+            {% endfor %}
+          </ul>
+        </details>
+      {% endfor %}
+    </div>
+
+    <!-- Floating controls (fixed, above footer) -->
+    <div id="dir-controls"
+         style="position:fixed; right:1rem; bottom:4.25rem; display:flex; gap:.5rem;
+                z-index: 2000;">
+      <button id="expand-all"  class="button"
+              style="border:1px solid #ccc; border-radius:.4rem; padding:.45rem .7rem;">Expand All</button>
+      <button id="collapse-all" class="button"
+              style="border:1px solid #ccc; border-radius:.4rem; padding:.45rem .7rem;">Collapse All</button>
+    </div>
+  </section>
+</div>
+
+<!-- Centered, draggable modal for Help (harmonized with WinLink) -->
+<dialog id="trainingHelpDialog" class="wg-modal" aria-modal="true">
+  <form method="dialog" class="help-modal">
+    <div id="trainingHelpDrag" class="wg-modal-header">
+      <h3 id="trainingHelpTitle" class="wg-modal-subject" style="margin:0; flex:1;">Help</h3>
+      <button type="button" id="trainingHelpClose" class="wg-modal-close" aria-label="Close">✕</button>
+    </div>
+    <div class="wg-modal-body">
+      <div id="trainingHelpBody" class="help-content">
+        <!-- help HTML injected here -->
+      </div>
+    </div>
+  </form>
+  </dialog>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function(){
+  const container = document.getElementById('help-directory');
+  const expandBtn = document.getElementById('expand-all');
+  const collapseBtn = document.getElementById('collapse-all');
+  function allDetails(){ return Array.from(container.querySelectorAll('details.help-group')); }
+  expandBtn?.addEventListener('click', ()=> allDetails().forEach(d => d.open = true));
+  collapseBtn?.addEventListener('click', ()=> allDetails().forEach(d => d.open = false));
+})();
+
+// Open help content in a centered, draggable modal (harmonized with WinLink)
+(function(){
+  const links   = Array.from(document.querySelectorAll('.js-help-link'));
+  const dlg     = document.getElementById('trainingHelpDialog');
+  const dragBar = document.getElementById('trainingHelpDrag');
+  const closeBtn= document.getElementById('trainingHelpClose');
+  const bodyEl  = document.getElementById('trainingHelpBody');
+  const titleEl = document.getElementById('trainingHelpTitle');
+
+  function centerDialogEl(d){
+    if (!d) return;
+    d.style.left = '50%';
+    d.style.top = '50%';
+    d.style.transform = 'translate(-50%, -50%)';
+  }
+  function dlgOpen(d){ if (d?.showModal) d.showModal(); else d?.setAttribute('open','open'); }
+  function dlgClose(d){ if (d?.close) d.close(); else d?.removeAttribute('open'); }
+
+  async function fetchHelp(prefix){
+    // Normalize to clean path (no origin, query, or hash), default "/"
+    const p = (String(prefix || '')
+                .replace(/^https?:\/\/[^/]+/, '')
+                .replace(/[#?].*$/, '') || '/');
+    // Single JSON request; render best-available field
+    // NOTE: backend expects ?path (or ?for / ?p); using ?path avoids Dashboard fallback.
+    const r = await fetch(`/help/api/article?path=${encodeURIComponent(p)}`, {
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      cache: 'no-store'
+    });
+    if (r.ok){
+      const j = await r.json();
+      if (j?.html) return j.html;
+      if (j?.body_html) return j.body_html;
+      if (j?.body_md){
+        const esc = s => String(s).replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]));
+        return `<div class="help-md"><pre>${esc(j.body_md)}</pre></div>`;
+      }
+    }
+    throw new Error('help fetch failed');
+  }
+
+  links.forEach(a => {
+    a.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const route = a.getAttribute('data-help-route') || '';
+      const title = a.textContent.trim();
+      try{
+        const html = await fetchHelp(route);
+        titleEl.textContent = title || 'Help';
+        bodyEl.innerHTML = html || '<div class="muted">No content.</div>';
+        centerDialogEl(dlg);
+        dlgOpen(dlg);
+      } catch(_){
+        titleEl.textContent = title || 'Help';
+        bodyEl.innerHTML = '<p class="muted">Could not load help for this section.</p>';
+        centerDialogEl(dlg);
+        dlgOpen(dlg);
+      }
+    });
+  });
+
+  // Close controls and outside click
+  closeBtn?.addEventListener('click', ()=> dlgClose(dlg));
+  dlg?.addEventListener('cancel', (ev)=> { ev.preventDefault(); dlgClose(dlg); });
+  dlg?.addEventListener('click', (ev)=> { if (ev.target === dlg) dlgClose(dlg); });
+
+  // Draggable header (same pattern as WinLink)
+  (function enableDrag() {
+    if (!dlg || !dragBar) return;
+    let dragging=false, startX=0, startY=0, startLeft=0, startTop=0;
+    dragBar.addEventListener('mousedown', (ev) => {
+      const box = dlg.getBoundingClientRect();
+      dlg.style.left = box.left + 'px';
+      dlg.style.top  = box.top  + 'px';
+      dlg.style.transform = '';
+      dragging = true;
+      startLeft = box.left; startTop = box.top;
+      startX = ev.clientX; startY = ev.clientY;
+      ev.preventDefault();
+    });
+    window.addEventListener('mousemove', (ev) => {
+      if (!dragging) return;
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      dlg.style.left = (startLeft + dx) + 'px';
+      dlg.style.top  = (startTop  + dy) + 'px';
+    });
+    window.addEventListener('mouseup', () => { dragging = false; });
+  })();
+})();
+</script>
+{% endblock %}

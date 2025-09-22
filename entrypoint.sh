@@ -37,6 +37,10 @@ for s in slugs: os.makedirs(os.path.join(root,s), exist_ok=True)
 print("Help video dirs ready for:", ", ".join(slugs))
 PY
 
+# 1.6) Ensure training docs directory exists
+echo "Ensuring training docs directory…"
+mkdir -p "$DATA_DIR/training"
+
 # 2) auto‐detect the “real” LAN IP if not overridden
 if [ -z "$HOST_LAN_IP" ] && [ -z "$HOST_LAN_IFACE" ]; then
   route_line=$(ip route show default | grep -vE 'dev (docker|br-|tun)' | head -n1 || true)

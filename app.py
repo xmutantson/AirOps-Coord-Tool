@@ -5,8 +5,8 @@
 #  • flight_history JSON-safe; CSV export; DB auto-migrate
 #  • LAN-only Flask server on :5150
 
-import os, sys, re, sqlite3, threading, time, logging, traceback, importlib
-from datetime import datetime
+import os, sys, re, sqlite3, threading, time, logging, traceback, importlib, subprocess, json
+from datetime import datetime, timezone, timedelta
 from functools import lru_cache
 from flask import Blueprint, Flask, jsonify, redirect, render_template, session, url_for
 
@@ -192,6 +192,18 @@ sqlite3.connect = connect
 # ──────────────────────────────────────────────────────────────────────────────
 # Flask app + CSRF + Rate limits
 app = Flask(__name__)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Time probe / auto-set controls (OFF by default; safe logging only)
+AOCT_SET_HOST_TIME       = os.getenv("AOCT_SET_HOST_TIME","0").lower() in ("1","true","yes")
+try:
+    AOCT_TIME_DRIFT_MS   = int(float(os.getenv("AOCT_TIME_DRIFT_MS","30000")))
+except Exception:
+    AOCT_TIME_DRIFT_MS   = 30000
+try:
+    AOCT_TIME_MAX_ADJ_S  = int(float(os.getenv("AOCT_TIME_MAX_ADJUST_SEC","900")))
+except Exception:
+    AOCT_TIME_MAX_ADJ_S  = 900
 
 # ──────────────────────────────────────────────────────────────────────────────
 # On-demand per-request profiler (profiles only when ?__profile=1 is present)
@@ -467,6 +479,7 @@ staff_bp       = _get_bp("modules.routes.staff")
 comms_bp       = _get_bp("modules.routes.comms")
 aircraft_bp    = _get_bp("modules.utils.aircraft")   # ← merged utils+routes
 locates_bp     = _get_bp("modules.routes.locates")   # /api/locates/*
+training_bp    = _get_bp("modules.routes.training")  # /training (PDF hub + help directory)
 
 # Register blueprints with unique names to avoid collisions
 tiles_bp       = _get_bp("modules.services.tiles")   # /tiles/{z}/{x}/{y}.png
@@ -493,6 +506,7 @@ _reg(locates_bp,     name="locates")
 _reg(staff_bp,       name="staff")
 _reg(comms_bp,       name="comms")
 _reg(aircraft_bp,    name="aircraft")   # /aircraft routes
+_reg(training_bp,    name="training")   # /training routes
 
 # Shutdown hook from services
 _jobs = _safe_import("modules.services.jobs")
@@ -662,6 +676,95 @@ def __routes__():
 @app.get("/__ping__")
 def __ping__():
     return jsonify(ok=True, now=datetime.utcnow().isoformat()+"Z")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# One-shot per-session browser time probe → verbose log (+ optional host set)
+@app.post("/__time_probe__")
+def __time_probe_post():
+    from flask import request
+    try:
+        payload = request.get_json(silent=True) or {}
+    except Exception:
+        payload = {}
+
+    client_epoch_ms = payload.get("client_epoch_ms")
+    tz_offset_min   = payload.get("tz_offset_min")  # for logs only
+    iana_tz         = (payload.get("iana_tz") or "").strip()
+
+    ok_nums = True
+    try:
+        client_epoch_ms = float(client_epoch_ms)
+    except Exception:
+        ok_nums = False
+
+    server_utc_dt = datetime.utcnow().replace(tzinfo=timezone.utc)
+    server_utc_ms = int(server_utc_dt.timestamp() * 1000)
+
+    # Compute client UTC from local time + offset if numbers are good
+    if ok_nums:
+        # Date.now() is already UTC epoch ms
+        client_utc_ms = int(client_epoch_ms)
+        client_utc_dt = datetime.fromtimestamp(client_utc_ms/1000.0, tz=timezone.utc)
+        delta_ms      = client_utc_ms - server_utc_ms
+    else:
+        client_utc_dt = None
+        delta_ms      = 0
+
+    # Verbose dev log to terminal
+    try:
+        app.logger.info(
+            "TIME_PROBE: client_local_ms=%s iana_tz=%s tz_offset_min=%s | "
+            "client_utc=%s server_utc=%s | delta_ms=%+d",
+            payload.get("client_epoch_ms"),
+            iana_tz or "(unknown)",
+            payload.get("tz_offset_min"),
+            client_utc_dt.isoformat().replace("+00:00","Z") if client_utc_dt else "(bad-input)",
+            server_utc_dt.isoformat().replace("+00:00","Z"),
+            int(delta_ms)
+        )
+    except Exception:
+        pass
+
+    # Mark this session as probed
+    try:
+        session["time_probe_done"] = True
+    except Exception:
+        pass
+
+    # Optional: set host time (requires SYS_TIME and explicit env opt-in)
+    adjusted = False
+    adjust_reason = ""
+    if AOCT_SET_HOST_TIME and ok_nums and abs(delta_ms) >= AOCT_TIME_DRIFT_MS:
+        # If cap <= 0 → unlimited; otherwise enforce upper bound
+        if AOCT_TIME_MAX_ADJ_S <= 0 or abs(delta_ms) <= AOCT_TIME_MAX_ADJ_S * 1000:
+            # Round to nearest whole second (avoid fractional surprise)
+            target_dt = client_utc_dt.replace(microsecond=0)
+            iso_for_log = target_dt.isoformat().replace("+00:00","Z")
+            # Use POSIX 'date -u -s'
+            stamp = target_dt.strftime("%Y-%m-%d %H:%M:%S")
+            try:
+                rc = subprocess.run(["date","-u","-s", stamp], capture_output=True, text=True)
+                adjusted = (rc.returncode == 0)
+                adjust_reason = rc.stdout.strip() or rc.stderr.strip()
+                level = logging.INFO if adjusted else logging.WARNING
+                app.logger.log(level, "TIME_PROBE: set host UTC to %s (rc=%s) msg=%s",
+                               iso_for_log, rc.returncode, adjust_reason or "(none)")
+            except Exception as e:
+                app.logger.warning("TIME_PROBE: set host UTC failed: %s", e)
+        else:
+            app.logger.warning(
+                "TIME_PROBE: drift (%+d ms) exceeds AOCT_TIME_MAX_ADJUST_SEC=%s → not adjusting",
+                int(delta_ms), AOCT_TIME_MAX_ADJ_S
+            )
+
+    return jsonify({
+        "ok": True,
+        "probed": True,
+        "server_utc": server_utc_dt.isoformat().replace("+00:00","Z"),
+        "client_utc": (client_utc_dt.isoformat().replace("+00:00","Z") if client_utc_dt else None),
+        "delta_ms": int(delta_ms),
+        "adjusted": bool(adjusted)
+    })
 
 # Fallback landing: redirect to a common home if present, else show routes
 @app.route("/")
