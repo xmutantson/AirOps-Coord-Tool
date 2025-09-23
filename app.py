@@ -377,6 +377,18 @@ def _inject_preferences_helpers():
     """
     return {"get_preference": get_preference}
 
+@app.context_processor
+def _inject_mission_number():
+    """
+    Expose the current Mission Number (from Preferences) to all templates
+    as {{ mission_number }}. Falls back to empty string if unavailable.
+    """
+    try:
+        mn = (get_preference('mission_number') or '').strip()
+    except Exception:
+        mn = ''
+    return {'mission_number': mn}
+
 # Make scheduler available via app.extensions to avoid importing from app in routes
 app.extensions['scheduler'] = scheduler
 

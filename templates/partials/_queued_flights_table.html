@@ -42,14 +42,11 @@
         <td>{{ q.created_at }}</td>
         <!-- Labels action cell (aligns with <th>Labels) -->
         <td style="text-align:center; white-space:nowrap;">
-          <a
-            href="/docs/labels/cargo?queued_id={{ q.id }}&scope=all"
-            title="Print labels"
-            target="_blank" rel="noopener"
-            class="button small"
-            style="padding:.2rem .5rem;">
-            📦
-          </a>
+          <a href="/docs/labels/cargo?queued_id={{ q.id }}&scope=all"
+             title="Print labels"
+             aria-label="Print labels"
+             target="_blank" rel="noopener"
+             class="icon-btn">📦</a>
         </td>
         <td>
           <form method="post"

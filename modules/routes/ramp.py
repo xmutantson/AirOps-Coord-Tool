@@ -1,6 +1,6 @@
 
 from markupsafe import escape
-import sqlite3, json, uuid
+import sqlite3, json, uuid, os, base64, io
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -25,9 +25,10 @@ from app import publish_inventory_event
 from app import DB_FILE
 from modules.utils.common import aggregate_manifest_net, flip_session_pending_to_committed
 from flask import Blueprint, current_app
-from flask import flash, jsonify, redirect, render_template, request, url_for
+from flask import flash, jsonify, redirect, render_template, request, url_for, send_file, abort
 bp = Blueprint(__name__.rsplit('.', 1)[-1], __name__)
 app = current_app  # legacy shim if route body references 'app'
+from weasyprint import HTML, CSS
 
 def _compute_fcode_from_form(airfield_takeoff: str, airfield_landing: str, hhmm: str) -> str | None:
     # 1) accept a valid client-provided code as-is
@@ -920,6 +921,21 @@ def send_queued_flight(qid):
         return redirect(url_for('ramp.edit_queued_flight', qid=qid))
 
     q = q[0]
+
+    # ── HARD GATE: pilot acknowledgment must exist before sending ─────────
+    try:
+        ack = dict_rows("""
+            SELECT pilot_ack_signed_at FROM queued_flights WHERE id=? LIMIT 1
+        """, (qid,))
+        has_ack = bool(ack and (ack[0].get('pilot_ack_signed_at') or '').strip())
+    except Exception:
+        has_ack = False
+    if not has_ack:
+        msg = "Pilot acknowledgment required before sending this flight."
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({'error': 'pilot_ack_required', 'message': msg}), 400
+        flash(msg, 'error')
+        return redirect(url_for('ramp.edit_queued_flight', qid=qid))
 
     # ── take-off & ETA come **from the browser** when available ─────────────
     cli_dep = request.form.get("takeoff_time","").strip()
@@ -1815,6 +1831,127 @@ def api_flight_ack(flight_id):
         current_app.logger.exception('Ack fetch failed')
         return jsonify({}), 500
     return jsonify(data or {})
+
+# ──────────────────────────────────────────────────────────────────────────
+# Ramp Manifest PDF (Step 8): canonical builder + storage path convention
+# ──────────────────────────────────────────────────────────────────────────
+def _save_manifest_path(queue_id: int, path: str) -> None:
+    with sqlite3.connect(DB_FILE) as c:
+        c.execute("UPDATE queued_flights SET manifest_pdf_path=? WHERE id=?", (path, int(queue_id)))
+
+def _get_queue_row(qid: int) -> dict | None:
+    rows = dict_rows("SELECT * FROM queued_flights WHERE id=?", (int(qid),))
+    return rows[0] if rows else None
+
+@bp.post('/ramp/pilot_ack/<int:queue_id>')
+def ramp_pilot_ack(queue_id: int):
+    """
+    Persist pilot acknowledgment on a queued flight (draft).
+    Accepts form or JSON:
+      - typed_name (optional if signature_data present)
+      - signature_data (data:image/png;base64,...; optional if typed_name present)
+      - build_pdf = yes|no  (optional; default yes)
+    Returns JSON: { ok, pdf_url? }
+    """
+    # Ensure columns exist on queued_flights
+    try:
+        ensure_column("queued_flights", "pilot_ack_name", "TEXT")
+        ensure_column("queued_flights", "pilot_ack_method", "TEXT")
+        ensure_column("queued_flights", "pilot_ack_signature_b64", "TEXT")
+        ensure_column("queued_flights", "pilot_ack_signed_at", "TEXT")
+    except Exception:
+        pass
+
+    payload = request.get_json(silent=True) or request.form
+    typed = (payload.get('typed_name') or '').strip()
+    sig   = (payload.get('signature_data') or '').strip()
+    if not typed and not sig:
+        return jsonify(ok=False, error='signature_required',
+                       message='Type name or draw a signature.'), 400
+    method = 'drawn' if sig else 'typed'
+    now_iso = datetime.utcnow().isoformat()
+    with sqlite3.connect(DB_FILE) as c:
+        c.execute("""
+          UPDATE queued_flights
+             SET pilot_ack_name          = ?,
+                 pilot_ack_method        = ?,
+                 pilot_ack_signature_b64 = ?,
+                 pilot_ack_signed_at     = ?
+           WHERE id = ?
+        """, (typed or '', method, sig or None, now_iso, queue_id))
+
+    # Optionally build & persist a PDF using utils.build_manifest_pdf
+    build_pdf = (str(payload.get('build_pdf', 'yes')).lower() != 'no')
+    out = {'ok': True, 'pilot_ack_at': now_iso}
+    if build_pdf:
+        try:
+            from modules.utils.manifest import build_manifest_pdf as _build_pdf
+            qrow = _get_queue_row(queue_id)
+            if qrow:
+                _, pdf_path = _build_pdf(current_app, qrow)
+                _save_manifest_path(queue_id, pdf_path)
+                out['pdf_url'] = url_for('ramp.view_manifest_pdf', queue_id=queue_id)
+        except Exception:
+            current_app.logger.exception("PDF build failed for queue %s", queue_id)
+    return jsonify(out)
+
+@bp.get('/ramp/manifest/<int:queue_id>.pdf', endpoint='view_manifest_pdf')
+def view_manifest_pdf(queue_id: int):
+    """
+    Lazy stream of the manifest PDF, rebuilding if necessary via the Step-8
+    utilities. Persists the canonical path onto queued_flights.manifest_pdf_path.
+    """
+    row = _get_queue_row(queue_id)
+    if not row:
+        abort(404)
+    pdf_path = (row.get('manifest_pdf_path') or '').strip()
+    if not pdf_path or not os.path.isfile(pdf_path):
+        # lazily rebuild and persist
+        try:
+            from modules.utils.manifest import build_manifest_pdf as _build_pdf
+            _, pdf_path = _build_pdf(current_app, row)
+            _save_manifest_path(queue_id, pdf_path)
+        except Exception:
+            current_app.logger.exception("Lazy manifest build failed for Q%s", queue_id)
+            abort(500)
+    download = f"manifest-{queue_id}.pdf"
+    return send_file(pdf_path, mimetype='application/pdf',
+                     as_attachment=False, download_name=download)
+
+@bp.post('/ramp/manifest/<int:queue_id>/build')
+def force_build_manifest_pdf(queue_id: int):
+    """Force rebuild PDF and return its URL (compat with existing JS button)."""
+    row = _get_queue_row(queue_id)
+    if not row:
+        return jsonify(ok=False, error='not_found'), 404
+    try:
+        from modules.utils.manifest import build_manifest_pdf as _build_pdf
+        _, pdf_path = _build_pdf(current_app, row)
+        _save_manifest_path(queue_id, pdf_path)
+        return jsonify(ok=True, pdf_url=url_for('ramp.view_manifest_pdf', queue_id=queue_id))
+    except Exception:
+        current_app.logger.exception("Manifest build failed.")
+        return jsonify(ok=False, error='build_failed'), 500
+
+@bp.post('/ramp/send_now')
+def api_send_now():
+    """
+    JSON: { "queue_id": int }
+    Enforces pilot_ack on the queued draft before allowing any send flow.
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        qid = int(data.get('queue_id'))
+    except Exception:
+        return jsonify({'error': 'missing queue_id'}), 400
+    row = dict_rows("SELECT pilot_ack_signed_at FROM queued_flights WHERE id=? LIMIT 1", (qid,))
+    if not row:
+        return jsonify({'error': 'not_found'}), 404
+    has_ack = bool((row[0].get('pilot_ack_signed_at') or '').strip())
+    if not has_ack:
+        return jsonify({'error': 'pilot_ack_required', 'message': 'Pilot acknowledgement required.'}), 400
+    # You can call your existing send_queued_flight(qid) logic here, or return ok:
+    return jsonify({'ok': True, 'queue_id': qid}), 200
 
 # ──────────────────────────────────────────────────────────────────────────
 # Quick Add to Ramp Queue

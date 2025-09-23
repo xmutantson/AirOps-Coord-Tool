@@ -1,5 +1,6 @@
 
 import sqlite3, csv, io, zipfile, json, os, re, base64
+from pathlib import Path
 
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
 from app import DB_FILE
@@ -12,6 +13,87 @@ app = current_app  # legacy shim if route body references 'app'
 
 # HTML → PDF (pure-Python)
 from weasyprint import HTML, CSS
+
+@bp.get('/exports/ramp/manifest/<int:queue_id>.pdf')
+def exports_ramp_manifest_passthrough(queue_id: int):
+    """Optional: serve Ramp Manifest PDFs beneath /exports/…"""
+    try:
+        from modules.routes.ramp import _manifest_pdf_path  # late import to avoid circulars
+    except Exception:
+        abort(404)
+    path = _manifest_pdf_path(queue_id)
+    if not os.path.isfile(path):
+        abort(404)
+    return send_file(path, mimetype='application/pdf',
+                     as_attachment=True,
+                     download_name=f"manifest_q{queue_id}.pdf")
+
+def _manifests_root() -> str:
+    """Canonical manifests root: data/manifests"""
+    d = os.path.join(_data_root(), "manifests")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+def _zip_add_manifests(zf: zipfile.ZipFile) -> int:
+    """
+    Add all manifest PDFs into the provided ZipFile.
+    Sources:
+      1) Files under data/manifests/** (canonical tree)
+      2) Any DB rows (queued_flights / flights) that have manifest_pdf_path set
+         and point to an existing file (covers legacy paths).
+    Returns the count of files added.
+    """
+    count = 0
+    root = Path(_manifests_root())
+    # 1) Canonical tree
+    if root.exists():
+        for pdf in root.rglob("*.pdf"):
+            rel = pdf.relative_to(root)
+            arc = Path("manifests") / rel  # preserve YYYY/MM/... inside zip
+            try:
+                zf.write(str(pdf), str(arc).replace("\\","/"))
+                count += 1
+            except Exception:
+                current_app.logger.exception("Failed adding manifest to zip: %s", pdf)
+    # 2) Legacy DB paths (if any)
+    try:
+        with sqlite3.connect(DB_FILE) as c:
+            c.row_factory = sqlite3.Row
+            # queued_flights
+            rows_q = c.execute(
+                "SELECT manifest_pdf_path FROM queued_flights WHERE manifest_pdf_path IS NOT NULL"
+            ).fetchall()
+            # flights (some deployments may also stamp here)
+            rows_f = c.execute(
+                "SELECT manifest_pdf_path FROM flights WHERE manifest_pdf_path IS NOT NULL"
+            ).fetchall()
+            for r in list(rows_q or []) + list(rows_f or []):
+                p = (r["manifest_pdf_path"] or "").strip()
+                if not p or not os.path.isfile(p):
+                    continue
+                # Put these under manifests/_legacy/<filename>
+                arc = Path("manifests/_legacy") / os.path.basename(p)
+                try:
+                    zf.write(p, str(arc).replace("\\","/"))
+                    count += 1
+                except Exception:
+                    current_app.logger.exception("Failed adding legacy manifest to zip: %s", p)
+    except Exception:
+        # Never break export-all if DB is odd
+        pass
+    return count
+
+@bp.get('/exports/manifests.zip')
+def export_manifests_only_zip():
+    """Zip of all saved manifests (canonical + any legacy DB paths)."""
+    mem = io.BytesIO()
+    with zipfile.ZipFile(mem, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
+        added = _zip_add_manifests(zf)
+        zf.writestr('manifests/_index.json', json.dumps({"kind":"manifests","added":added}, indent=2))
+    mem.seek(0)
+    ts = datetime.utcnow().strftime('%Y%m%d-%H%M%S')
+    return send_file(mem, mimetype='application/zip', as_attachment=True, download_name=f'manifests_{ts}.zip')
+
 
 @bp.route('/export_csv')
 def export_csv():
@@ -114,6 +196,19 @@ def export_all_csv():
                         full = os.path.join(pai_root, fn)
                         arc  = ("PilotAircraftInformation/" + fn).replace("\\", "/")
                         zf.write(full, arc)
+        except Exception:
+            pass
+
+        # ── Include all Ramp Manifest PDFs under manifests/ ─────────
+        #   - Picks up canonical data/manifests/YYYY/MM/…/*.pdf
+        #   - Also sweeps any DB-stamped legacy paths to manifests/_legacy/
+        try:
+            added = _zip_add_manifests(zf)
+            # Optional: a tiny count marker in the zip root (not required)
+            try:
+                zf.writestr('manifests/_COUNT.txt', str(added))
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -362,10 +457,23 @@ def _ics309_context_from_filters(f):
     radio_operator = _arg_or_pref("radio_operator", "radio_operator", operator_lbl)
     prepared_by    = _arg_or_pref("prepared_by", "ics309_prepared_by", radio_operator)
 
+    # Build display value that appends Mission Number (if available)
+    mission_number_val = _arg_or_pref("mission_number", "mission_number", "").strip()
+    if mission_number_val:
+        suffix = f"Mission Number: {mission_number_val}"
+        if suffix.lower() in incident_name.lower():
+            incident_name_display = incident_name
+        else:
+            incident_name_display = (incident_name + (" — " if incident_name else "") + suffix).strip(" —")
+    else:
+        incident_name_display = incident_name
+
     ctx = {
         "filters": f,
         "rows": table,
         "incident_name": incident_name,
+        # Display value always appends Mission Number if available
+        "incident_name_display": incident_name_display,
         "op_from_date": _fmt_dt(op_from)["date"],
         "op_from_time": _fmt_dt(op_from)["time"],
         "op_to_date":   _fmt_dt(op_to)["date"],

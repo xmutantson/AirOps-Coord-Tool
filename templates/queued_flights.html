@@ -82,6 +82,29 @@
   </div>
 
   <script>
+    // Remember which queued rows we’ve successfully acked (survives soft refreshes)
+    // so we don’t re-lock the SEND button when the table re-renders without an ack flag.
+    window._ackedQids = window._ackedQids || new Set();
+    const ACKED = window._ackedQids;
+
+    // Robustly resolve a queued_id from a form or element
+    function resolveQid(el) {
+      const r = (root) => {
+        if (!root) return '';
+        // direct dataset / attributes
+        if (root.dataset?.qid) return String(root.dataset.qid).trim();
+        if (root.getAttribute && root.getAttribute('data-id')) return String(root.getAttribute('data-id')).trim();
+        // hidden field
+        const hid = root.querySelector?.('[name="queued_id"]');
+        if (hid?.value) return String(hid.value).trim();
+        // URL forms: action or any button.formAction like /ramp/send_queued_flight/123
+        const url = (root.action || root.formAction || '');
+        const m = String(url||'').match(/\/(\d+)(?:[./?]|$)/);
+        if (m) return m[1];
+        return '';
+      };
+      return r(el) || r(el?.form) || r(el?.closest?.('form')) || r(el?.closest?.('[data-qid],[data-id]')) || '';
+    }
     // ---------- helpers (same math used in Ramp-Boss) ----------
     function nowHHMM () {
       const d = new Date();
@@ -102,10 +125,98 @@
         // Avoid stacking multiple listeners across refreshes
         if (f._aoctBound) return;
         f._aoctBound = true;
+
+        // More robust id resolution
+        const qid   = resolveQid(f);
+        const ackAt = (f.dataset.pilotAckAt || '').trim();
+        const tt    = (f.dataset.tt || '').trim(); // HHMM delta (optional, ETA math)
+        const btn   = f.querySelector('button[type="submit"]');
+        // Single place to decide if this row is acked:
+        // - server set data-pilot-ack-at
+        // - or we locally acked it during this session
+        const isAcked = !!ackAt || (qid && ACKED.has(String(qid)));
+
+        // Helper to build a small control row next to the submit button
+        function ensureControls() {
+          let wrap = f.querySelector('.q-gate-wrap');
+          if (!wrap) {
+            wrap = document.createElement('span');
+            wrap.className = 'q-gate-wrap';
+            wrap.style.marginLeft = '.5rem';
+            wrap.style.display = 'inline-flex';
+            wrap.style.gap = '.4rem';
+            btn?.after(wrap);
+          }
+          return wrap;
+        }
+
+        // Always render a Manifest link; hide it until ack is set (or PDF exists)
+        function upsertManifestLink(wrap) {
+          let a = wrap.querySelector('a[data-role="manifest-link"]');
+          if (!a) {
+            a = document.createElement('a');
+            a.textContent = 'View Manifest PDF';
+            a.target = '_blank';
+            a.rel = 'noopener';
+            a.dataset.role = 'manifest-link';
+            a.className = 'btn btn-secondary';
+            a.style.display = 'none';
+            wrap.appendChild(a);
+          }
+          a.href = `/ramp/manifest/${qid}.pdf`;
+          return a;
+        }
+
+        // Conditionally inject the Pilot Ack button if not acknowledged
+        function upsertAckButton(wrap) {
+          let ack = wrap.querySelector('button[data-action="pilot-ack"]');
+          if (!ack) {
+            ack = document.createElement('button');
+            ack.type = 'button';
+            ack.className = 'btn btn-primary';
+            ack.textContent = 'Pilot Ack';
+            ack.dataset.action = 'pilot-ack';
+            ack.dataset.qid = qid;
+            wrap.prepend(ack);
+          }
+          return ack;
+        }
+
+        // Initial state based on ack
+        const wrap = ensureControls();
+        const link = upsertManifestLink(wrap);
+
+        if (!qid) {
+          console.warn('[queued] Missing queued_id on row; Pilot Ack will be disabled for this line.');
+        }
+
+        if (!isAcked) {
+          // Not acked yet → disable send and show Pilot Ack button
+          if (btn) {
+            btn.disabled = true;
+            btn.dataset.originalLabel = btn.textContent;
+            btn.textContent = 'Pilot Ack Required';
+            btn.classList.add('btn-disabled');
+          }
+          const ackBtn = upsertAckButton(wrap);
+          if (!qid) {
+            ackBtn.disabled = true;
+          }
+          link.style.display = 'none';
+        } else {
+          // Already acked → enable send and show manifest link
+          if (btn) {
+            btn.disabled = false;
+            if (btn.dataset.originalLabel) btn.textContent = btn.dataset.originalLabel;
+            btn.classList.remove('btn-disabled');
+          }
+          link.style.display = '';
+        }
+
+        // Submit enrichment (time fields); keep your existing behavior
         f.addEventListener('submit', () => {
           const dep = nowHHMM();
-          const tt  = f.dataset.tt || '';
-          const eta = tt.length === 4 ? addHHMM(dep, tt) : '';
+          const eta = (tt.length === 4) ? addHHMM(dep, tt) : '';
           [['takeoff_time', dep], ['eta', eta]].forEach(([n, v]) => {
             if (!v) return;
             const inp = document.createElement('input');
@@ -113,6 +224,118 @@
             f.appendChild(inp);
           });
         });
+      });
+    }
+
+    // Delegate click handlers for Pilot Ack / Manifest actions inside the table
+    function attachQueueActionHandlers(root) {
+      // Elements don't have getElementById; scope correctly when root is provided.
+      const tbl = (function(){
+        if (!root) return document.getElementById('queued-table');
+        // If the passed root *is* the table, use it; otherwise find it within root.
+        return (root.id === 'queued-table') ? root : root.querySelector('#queued-table');
+      })();
+      if (!tbl || tbl._aoctActionsBound) return;
+      tbl._aoctActionsBound = true;
+      tbl.addEventListener('click', async (ev) => {
+        const btn = ev.target.closest('[data-action]');
+        if (!btn) return;
+        const action = btn.dataset.action;
+        let qid = btn.dataset.qid || resolveQid(btn);
+        if (!qid) {
+          console.warn('[queued] Could not resolve queued_id for action', action, btn);
+          if (action === 'pilot-ack') {
+            alert('Missing queued id for this row.');
+          }
+          return;
+        }
+        try {
+          if (action === 'pilot-ack') {
+            // Guard: prevent double-firing (which caused double prompts)
+            if (btn.dataset.busy === '1') return;
+            btn.dataset.busy = '1';
+            btn.disabled = true;
+            const qidStr = String(qid);
+            try {
+              // Minimal prompt UI: name or signature data URL can be posted; start with typed name
+              const typed = prompt('Pilot name (This is a digital signature):', '');
+              const fd = new FormData();
+              if (typed) fd.append('typed_name', typed);
+              fd.append('build_pdf', 'yes');
+              const resp = await fetch(`/ramp/pilot_ack/${qid}`, {
+                method: 'POST',
+                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                body: fd
+              });
+              if (!resp.ok) {
+                const j = await resp.json().catch(() => ({}));
+                alert(j.message || 'Pilot acknowledgment failed.');
+                return;
+              }
+              const j = await resp.json().catch(() => ({}));
+
+              // --- In-place unlock/morph so SEND becomes available immediately ---
+              const rowForm = btn.closest('form.q-send-form');
+              const qWrap   = rowForm?.querySelector('.q-gate-wrap') || btn.closest('.q-gate-wrap');
+
+              // 1) Mark as acked locally FIRST (before any refresh)
+              const ts = j.pilot_ack_at || new Date().toISOString();
+              ACKED.add(qidStr);
+              if (rowForm) rowForm.dataset.pilotAckAt = ts;
+
+              // 2) Remove the Pilot Ack button immediately so it doesn't reappear
+              const ackBtnInRow = qWrap?.querySelector('[data-action="pilot-ack"]');
+              if (ackBtnInRow) ackBtnInRow.remove();
+
+              // 3) Enable SEND and reveal manifest link right away
+              if (rowForm) {
+                const sendBtn = rowForm.querySelector('button[type="submit"]');
+                if (sendBtn) {
+                  sendBtn.disabled = false;
+                  if (sendBtn.dataset.originalLabel) sendBtn.textContent = sendBtn.dataset.originalLabel;
+                  sendBtn.classList.remove('btn-disabled');
+                }
+                let link = rowForm.querySelector('a[data-role="manifest-link"]');
+                if (!link && qWrap) {
+                  link = document.createElement('a');
+                  link.dataset.role = 'manifest-link';
+                  link.className = 'btn btn-secondary';
+                  qWrap.appendChild(link);
+                }
+                if (link) {
+                  link.href = (j.pdf_url || `/ramp/manifest/${qid}.pdf`);
+                  link.textContent = 'View Manifest PDF';
+                  link.style.display = '';
+                }
+              }
+
+              // 4) Refresh shortly AFTER UI mutation to avoid race with PDF write
+              setTimeout(() => { try { refreshQueued(); } catch(_) {} }, 3000);
+            } finally {
+              delete btn.dataset.busy;
+              btn.disabled = false;
+            }
+          } else if (action === 'manifest-preview') {
+            // Attempt to open if generated; if 404, try to build then open
+            const url = `/ramp/manifest/${qid}.pdf`;
+            const head = await fetch(url, { method: 'HEAD' });
+            // Don’t auto-open to avoid popup blockers; just reveal link on ack.
+            if (head.ok) { return; }
+            const b = await fetch(`/ramp/manifest/${qid}/build`, { method: 'POST', headers:{'X-Requested-With':'XMLHttpRequest'} });
+            const j = await b.json().catch(() => ({}));
+            // Avoid auto-open; rely on the visible link. If it didn't build, warn.
+            if (!(j.ok && j.pdf_url)) alert('Unable to generate manifest PDF.');
+          } else if (action === 'manifest-build') {
+            const b = await fetch(`/ramp/manifest/${qid}/build`, { method: 'POST', headers:{'X-Requested-With':'XMLHttpRequest'} });
+            const j = await b.json().catch(() => ({}));
+            // Avoid opening popups automatically
+            if (j.ok && j.pdf_url) { /* optionally surface a toast here */ }
+            else alert('Regeneration failed.');
+          }
+        } catch (err) {
+          console.error(err);
+          alert('Network error.');
+        }
       });
     }
 
@@ -126,6 +349,7 @@
         const container = document.getElementById('queued-table');
         container.innerHTML = html;
         attachSendFormHandlers(container);
+        attachQueueActionHandlers(container);
       } catch (err) {
         console.error('Queued refresh failed:', err);
       }

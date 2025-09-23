@@ -409,8 +409,20 @@ def _ics214_context(window: str):
     # allow incident_name override too
     incident_name     = (request.args.get("incident_name") or incident_name).strip()
 
+    # ── Build a display value that always appends the mission number (if present) ──
+    mission_number = (request.args.get("mission_number") or (get_preference("mission_number") or "")).strip()
+    if mission_number:
+        suffix = f"Mission Number: {mission_number}"
+        if suffix.lower() in incident_name.lower():
+            incident_name_display = incident_name
+        else:
+            incident_name_display = (incident_name + (" — " if incident_name else "") + suffix).strip(" —")
+    else:
+        incident_name_display = incident_name
+
     ctx = {
-        "incident_name": incident_name,
+        "incident_name": incident_name,                  # base (editable in modal)
+        "incident_name_display": incident_name_display,  # rendered in labeled field
         "op_from_date": _fmt_date(op_from_dt),
         "op_from_time": _fmt_time(op_from_dt),
         "op_to_date":   _fmt_date(op_to_dt),

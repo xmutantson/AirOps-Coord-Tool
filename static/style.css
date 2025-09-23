@@ -186,6 +186,58 @@ thead { background: var(--table-head-bg); color: var(--table-head-fg); }
 th, td { padding: 0.75em 1em; text-align: left; border-bottom: 1px solid #eee; }
 tbody tr:hover { background: rgba(30,144,255,0.05); }
 
+/* Queue actions: Pilot Ack gate + menu */
+.btn-disabled {
+  opacity: .6;
+  cursor: not-allowed !important;
+}
+.queue-actions {
+  display: inline-flex; gap: .35rem; align-items: center;
+}
+
+/* Icon-sized action links (edit, delete, labels) */
+.queue-actions a { text-decoration: none; }
+
+/* Labels “button” should look like the emoji buttons (no underline, same scale) */
+.labels-btn,
+a[data-action="labels"] {
+  font-size: 2.0em;         /* match ✏️ / 🗑️ scale */
+  line-height: 1;
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+/* Inline control cluster beside SEND: consistent spacing/flow */
+.q-gate-wrap{
+  display:inline-flex;
+  gap:.4rem;
+  align-items:center;
+}
+
+/* Ensure variant-only buttons still get base chrome */
+.btn-primary, .btn-secondary, a.btn-primary, a.btn-secondary { 
+  display:inline-block; padding: 0.6em 1.2em; border-radius: var(--radius); text-decoration:none; line-height:1.2; border:1px solid transparent;
+}
+.queue-actions .more {
+  position: relative;
+}
+.queue-actions .more-menu {
+  position: absolute; top: 110%; right: 0;
+  min-width: 200px; background: #fff; border: 1px solid #ddd;
+  border-radius: 6px; box-shadow: 0 6px 24px rgba(0,0,0,.15);
+  display: none; z-index: 50; padding: .35rem;
+}
+.queue-actions .more.open .more-menu { display: block; }
+.queue-actions .more-menu button,
+.queue-actions .more-menu a {
+  display: block; width: 100%; text-align: left; background: #fff;
+  border: 0; padding: .4rem .5rem; border-radius: 4px; text-decoration: none; color: inherit;
+}
+.queue-actions .more-menu button:hover,
+.queue-actions .more-menu a:hover { background: #f5f7fb; }
+
 /* Adaptive sizing for flight-list tables (Dashboard/Radio) */
 table.ops-flight-table th,
 table.ops-flight-table td {
@@ -991,6 +1043,9 @@ table.wg-radio-table tr.read { opacity: .8; }
   body.inventory details + details {
     page-break-before: always !important;
   }
+
+  /* Ensure queue action chrome is hidden when printing general pages */
+  .queue-actions .more-menu { display: none !important; }
 }
 /* ───────────────────────────────────────────────────────────────
    generic primary / secondary buttons

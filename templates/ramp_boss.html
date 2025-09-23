@@ -4,7 +4,8 @@
 {% set d = draft if draft else {} %}
 
 {% block content %}
-
+  <!-- Expose draft id early so any early-running scripts can read it -->
+  <script>window.draftId = {{ (draft.id if draft else none)|tojson }};</script>
   <!-- EARLY RB SHIM v2
        Runs before any other script can cache fetch/XHR.
        If Remove-mode is active (or payload says op=remove), rewrite:
@@ -225,7 +226,6 @@
   })();
   </script>
 
-  <script>window.draftId = {{ (draft.id if draft else none)|tojson }};</script>
   <div class="ramp-form-container">
     <form id="rb-form" method="POST">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -357,14 +357,13 @@
       <div class="form-buttons" style="margin-top:1rem; display:flex; gap:0.5rem;">
         {% if draft %}
           {# ── edit-draft mode (OUTBOUND-only) ── #}
-          <button id="sendBtn" type="submit"
-                  class="btn-primary"
-                  name="action" value="send"
-                  formaction="{{ url_for('ramp.send_queued_flight', qid=d.id) }}">
-            SEND NOW
+          <!-- Morphing primary: starts as Pilot Ack, becomes SEND NOW after ack -->
+          <button id="rb-ack-send" type="button" class="btn-primary" data-mode="ack" aria-live="polite"
+                  data-force-hidden="1" hidden aria-hidden="true" disabled style="display:none;">
+            Pilot Ack
           </button>
           <button id="queueBtn" type="submit"
-                  class="btn-secondary"
+             class="btn-secondary is-hidden"
                   name="action" value="queue"
                   formaction="{{ url_for('ramp.edit_queued_flight', qid=d.id) }}">
             SAVE TO QUEUE
@@ -375,18 +374,31 @@
              target="_blank" rel="noopener"
              class="btn-secondary"
              title="Print cargo labels"
-             style="margin-left:auto; opacity:.5; pointer-events:none;"
-             aria-disabled="true">📦 Print Labels</a>
+             data-force-hidden="1" hidden aria-hidden="true" aria-disabled="true"
+             style="margin-left:auto; display:none; opacity:.5; pointer-events:none;">📦 Print Labels</a>
+          {# ───── Pilot Ack gating UI (only in edit-draft mode) ───── #}
+          {% set _acked = d.get('pilot_ack_at') %}
+          <div id="rb-ack-row"
+               data-force-hidden="1"
+               hidden aria-hidden="true"
+               style="display:none; gap:.5rem; align-items:center;">
+            <a id="rb-manifest" class="btn-secondary"
+               href="{{ url_for('ramp.view_manifest_pdf', queue_id=d.id) }}"
+               target="_blank"
+               {% if not _acked %}style="display:none"{% endif %}>View Manifest PDF</a>
+            <small class="muted">Ack: <span id="rb-ack-ts">{% if _acked %}{{ _acked }}{% else %}—{% endif %}</span></small>
+          </div>
         {% else %}
           {# ── brand-new Ramp-Boss entry ── #}
           <button id="sendBtn" type="submit"
-                  class="btn-primary"
+                  class="btn-primary is-hidden"
+                  data-force-hidden="1" hidden aria-hidden="true" disabled style="display:none;"
                   name="action" value="send"
                   formaction="{{ url_for('ramp.ramp_boss') }}">
             SEND NOW
           </button>
           <button id="queueBtn" type="submit"
-                  class="btn-secondary"
+             class="btn-secondary"
                   name="action" value="queue"
                   formaction="{{ url_for('ramp.queue_flight') }}">
             Add To Queue
@@ -395,10 +407,10 @@
           <a id="rb-print-labels"
              href="#"
              target="_blank" rel="noopener"
-             class="btn-secondary"
+             class="btn-secondary is-hidden"
              title="Print cargo labels"
-             style="margin-left:auto; opacity:.5; pointer-events:none;"
-             aria-disabled="true">📦 Print Labels</a>
+             data-force-hidden="1" hidden aria-hidden="true" aria-disabled="true"
+             style="margin-left:auto; display:none; opacity:.5; pointer-events:none;">📦 Print Labels</a>
         {% endif %}
       </div>
     </form>
@@ -884,7 +896,11 @@
     const destField   = document.getElementById('destination');
     const dirRadios   = [...document.querySelectorAll('input[name="direction"]')];
     const queueBtn    = document.getElementById('queueBtn');
-    const sendBtn     = document.getElementById('sendBtn');
+    const sendBtn     = document.getElementById('sendBtn');          // may not exist (morphing mode)
+    const rbAckBtn    = document.getElementById('rb-ack');           // removed in morphing mode
+    const rbAckRow    = document.getElementById('rb-ack-row');
+    const rbAckTs     = document.getElementById('rb-ack-ts');
+    const rbPdfLink   = document.getElementById('rb-manifest');
     const manifestId  = document.getElementById('manifest-id');
     const csrfToken   = document.querySelector('input[name="csrf_token"]').value;
     // Centralized headers for XHR/CSRF (aligns with backend CSRF expectations)
@@ -896,6 +912,63 @@
       }
       return Object.assign(h, extra);
     }
+
+    /* ───────── Ack gate SEND when editing a queued draft ─────────
+       Only render this block when a draft exists to avoid touching d.id. */
+
+    {% if draft %}
+    /* Morphing Pilot Ack → Send Now */
+    (function pilotAckGate(){
+      const ackSend = document.getElementById('rb-ack-send');
+      /* NEW: if we’re intentionally hiding the Pilot Ack/Send control,
+         skip all morphing/handlers so nothing gets wired up behind the scenes. */
+      if (ackSend && ackSend.dataset && ackSend.dataset.forceHidden === '1') {
+        return;
+      }
+      const pdfLink = document.getElementById('rb-manifest');
+      const ackTs   = document.getElementById('rb-ack-ts');
+      const sendUrl = "{{ url_for('ramp.send_queued_flight', qid=d.id) }}";
+      const acked   = {{ 'true' if (draft and draft.get('pilot_ack_at')) else 'false' }};
+      function setAckMode(){
+        if (!ackSend) return;
+        ackSend.type = 'button';
+        ackSend.dataset.mode = 'ack';
+        ackSend.textContent = 'Pilot Ack';
+        ackSend.onclick = doAck;
+      }
+      function setSendMode(){
+        if (!ackSend) return;
+        ackSend.type = 'submit';
+        ackSend.name = 'action';
+        ackSend.value = 'send';
+        ackSend.formAction = sendUrl;
+        ackSend.dataset.mode = 'send';
+        ackSend.textContent = 'SEND NOW';
+        ackSend.onclick = null;
+      }
+      async function doAck(){
+        if (!confirm('Confirm pilot acknowledgement and generate manifest?')) return;
+        try{
+          const r = await fetch('/ramp/pilot_ack/{{ d.id }}', {
+            method:'POST',
+            headers: xhrHeaders({ 'Content-Type':'application/json' }),
+            body: JSON.stringify({ build_pdf: 'yes' })
+          });
+          const j = await r.json().catch(()=>({}));
+          if (!r.ok) throw new Error(j.message || 'Pilot Ack failed');
+          setSendMode();
+          if (pdfLink) pdfLink.style.display = '';
+          if (ackTs)   ackTs.textContent = j.pilot_ack_at || '(set)';
+          try{ window.showToast?.('Pilot acknowledged; manifest ready.','success'); }catch(_){}
+        }catch(err){
+          console.error(err);
+          alert(err.message || 'Pilot Ack failed');
+        }
+      }
+      if (acked){ setSendMode(); if (pdfLink) pdfLink.style.display = ''; }
+      else { setAckMode(); if (pdfLink) pdfLink.style.display = 'none'; }
+    })();
+    {% endif %}
 
     // Flight code widgets
     const fcInput        = document.getElementById('flight_code');
@@ -964,7 +1037,14 @@
       const outbound = (dir === 'outbound');
       /* drafts are *always* outbound, but keep logic symmetrical */
       queueBtn.style.display = outbound ? '' : 'none';
-      sendBtn.textContent    = outbound ? 'SEND NOW' : 'LOG ARRIVAL';
+      /* Only change label if primary is currently a submit (send mode) */
+      (function(){
+        const primary = document.getElementById('rb-ack-send') || document.getElementById('sendBtn');
+        if (!primary) return;
+        if (primary.dataset.mode === 'send' || primary.type === 'submit') {
+          primary.textContent = outbound ? 'SEND NOW' : 'LOG ARRIVAL';
+        }
+      })();
 
     }
     dirRadios.forEach(r => r.addEventListener('change', applyDirUI));
@@ -1560,13 +1640,14 @@
           btn.disabled = true;
           btn.textContent = '⏳ Working…';
         }
-        if (sendBtn && btn !== sendBtn) sendBtn.disabled = true;
+        const primaryBtn = document.getElementById('rb-ack-send') || document.getElementById('sendBtn');
+        if (primaryBtn && btn !== primaryBtn) primaryBtn.disabled = true;
         if (queueBtn && btn !== queueBtn) queueBtn.disabled = true;
       } catch(_){}
     }
     function unlockButtons(){
       rbSubmitting = false;
-      [sendBtn, queueBtn].forEach(b=>{
+      [(document.getElementById('rb-ack-send') || document.getElementById('sendBtn')), queueBtn].forEach(b=>{
         if (!b) return;
         b.disabled = false;
         if (b.dataset.originalText) b.textContent = b.dataset.originalText;

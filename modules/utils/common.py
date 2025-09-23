@@ -1120,10 +1120,15 @@ def run_migrations():
     ensure_column("flights", "pilot_ack_method",      "TEXT")   # 'typed' | 'drawn'
     ensure_column("flights", "pilot_ack_signature_b64","TEXT")  # base64 PNG (no data: prefix)
     ensure_column("flights", "pilot_ack_signed_at",   "TEXT")
+    # Optional metadata for gating/audit + manifest storage
+    ensure_column("flights", "pilot_ack_boot_id",     "TEXT")
+    ensure_column("flights", "manifest_pdf_path",     "TEXT")
     ensure_column("queued_flights", "pilot_ack_name",         "TEXT")
     ensure_column("queued_flights", "pilot_ack_method",       "TEXT")
     ensure_column("queued_flights", "pilot_ack_signature_b64","TEXT")
     ensure_column("queued_flights", "pilot_ack_signed_at",    "TEXT")
+    ensure_column("queued_flights", "pilot_ack_boot_id",      "TEXT")
+    ensure_column("queued_flights", "manifest_pdf_path",      "TEXT")
 
     # Helpful index for inventory reconciliation lookups
     with sqlite3.connect(get_db_file()) as c:
@@ -3170,9 +3175,10 @@ def set_pilot_ack_for_flight(
              SET pilot_ack_name         = ?,
                  pilot_ack_method       = ?,
                  pilot_ack_signature_b64= ?,
-                 pilot_ack_signed_at    = ?
+                 pilot_ack_signed_at    = ?,
+                 pilot_ack_boot_id      = COALESCE(pilot_ack_boot_id, ?)
            WHERE id=?
-        """, (name.strip(), m, sig_b64, ts, int(flight_id)))
+        """, (name.strip(), m, sig_b64, ts, get_boot_id(), int(flight_id)))
 
 def set_pilot_ack_for_queue(
     qid: int,
@@ -3197,9 +3203,10 @@ def set_pilot_ack_for_queue(
              SET pilot_ack_name          = ?,
                  pilot_ack_method        = ?,
                  pilot_ack_signature_b64 = ?,
-                 pilot_ack_signed_at     = ?
+                 pilot_ack_signed_at     = ?,
+                 pilot_ack_boot_id       = COALESCE(pilot_ack_boot_id, ?)
            WHERE id=?
-        """, (name.strip(), m, sig_b64, ts, int(qid)))
+        """, (name.strip(), m, sig_b64, ts, get_boot_id(), int(qid)))
 
 def copy_pilot_ack_from_queue(qid: int, flight_id: int) -> None:
     """
@@ -3220,9 +3227,10 @@ def copy_pilot_ack_from_queue(qid: int, flight_id: int) -> None:
              SET pilot_ack_name         = COALESCE(?, pilot_ack_name),
                  pilot_ack_method       = COALESCE(?, pilot_ack_method),
                  pilot_ack_signature_b64= COALESCE(?, pilot_ack_signature_b64),
-                 pilot_ack_signed_at    = COALESCE(?, pilot_ack_signed_at)
+                 pilot_ack_signed_at    = COALESCE(?, pilot_ack_signed_at),
+                 pilot_ack_boot_id      = COALESCE(pilot_ack_boot_id, ?)
            WHERE id=?
-        """, (row[0], row[1], row[2], row[3], int(flight_id)))
+        """, (row[0], row[1], row[2], row[3], get_boot_id(), int(flight_id)))
 
 def get_pilot_ack_for_flight(flight_id: int) -> dict:
     """
@@ -3235,10 +3243,25 @@ def get_pilot_ack_for_flight(flight_id: int) -> dict:
       SELECT pilot_ack_name AS name,
              pilot_ack_method AS method,
              pilot_ack_signature_b64 AS signature_b64,
-             pilot_ack_signed_at AS signed_at
+             pilot_ack_signed_at AS signed_at,
+             pilot_ack_boot_id   AS boot_id
         FROM flights WHERE id=? LIMIT 1
     """, (int(flight_id),))
     return rows[0] if rows else {}
+
+def get_boot_id() -> str:
+    """
+    Return the current process BOOT_ID (fresh each container/process start),
+    or '' if unavailable. Used to stamp pilot-ack provenance.
+    """
+    try:
+        return (current_app.config.get("BOOT_ID") or "").strip()
+    except Exception:
+        try:
+            from app import app as _app  # best-effort fallback during early import
+            return (_app.config.get("BOOT_ID") or "").strip()
+        except Exception:
+            return ""
 
 def _parse_manifest(manifest: str):
     """
