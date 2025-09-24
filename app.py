@@ -8,6 +8,7 @@
 import os, sys, re, sqlite3, threading, time, logging, traceback, importlib, subprocess, json, secrets
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
+import socket, select  # for GPSD client
 from functools import lru_cache
 from flask import Blueprint, Flask, jsonify, redirect, render_template, session, url_for, current_app, request
 
@@ -217,6 +218,170 @@ try:
     AOCT_TIME_MAX_ADJ_S  = int(float(os.getenv("AOCT_TIME_MAX_ADJUST_SEC","900")))
 except Exception:
     AOCT_TIME_MAX_ADJ_S  = 900
+
+# ──────────────────────────────────────────────────────────────────────────────
+# GPS time (via gpsd) — prefer GPS when healthy
+AOCT_GPS_TIME_ENABLE   = os.getenv("AOCT_GPS_TIME_ENABLE","1").lower() in ("1","true","yes")
+AOCT_GPSD_HOST         = os.getenv("AOCT_GPSD_HOST","127.0.0.1")
+AOCT_GPSD_PORT         = int(os.getenv("AOCT_GPSD_PORT","2947"))
+AOCT_GPS_MIN_MODE      = int(os.getenv("AOCT_GPS_MIN_MODE","2"))   # 2D=2, 3D=3
+AOCT_GPS_POLL_SEC      = float(os.getenv("AOCT_GPS_POLL_SEC","1.0"))
+AOCT_GPS_CONF_SECS     = float(os.getenv("AOCT_GPS_CONF_SECS","3.0"))  # require this many consecutive good TPV seconds
+AOCT_GPS_EPT_MAX_S     = float(os.getenv("AOCT_GPS_EPT_MAX_S","0.50"))
+AOCT_GPS_REQUIRE_MODE  = os.getenv("AOCT_GPS_REQUIRE_MODE","0").lower() in ("1","true","yes")
+
+# Shared GPS state
+_gps_state = {
+    "confident": False,          # true when we’ve seen sustained valid TPV (mode>=min) recently
+    "last_good_iso": None,       # str ISO 8601 (Z) from TPV.time
+    "last_good_dt":  None,       # datetime(UTC)
+    "last_seen":     0.0,        # monotonic seconds
+    "good_streak":   0.0,        # consecutive seconds of good TPV
+    "last_fix_mode": 0,          # 0/1/2/3
+}
+
+_GPS_THREAD_STARTED = False
+_GPS_LOCK = threading.Lock()
+
+def _now_monotonic():
+    try:
+        return time.monotonic()
+    except Exception:
+        return time.time()
+
+def _parse_gpsd_json_line(line: str):
+    try:
+        obj = json.loads(line)
+    except Exception:
+        return None, None
+    # We only care about TPV reports for time+mode
+    if obj.get("class") == "TPV":
+        tpv_time = obj.get("time")
+        mode     = int(obj.get("mode") or 0)
+        ept      = obj.get("ept")  # seconds (float)
+        try:
+            ept = float(ept) if ept is not None else None
+        except Exception:
+            ept = None
+        return (tpv_time, mode, ept), "TPV"
+    return (None, None, None), None
+
+def _set_host_time_if_needed(target_dt_utc: datetime, reason: str) -> tuple[bool,str]:
+    """
+    Compare host UTC to target UTC and set if drift exceeds AOCT_TIME_DRIFT_MS and within cap.
+    Returns (adjusted, message).
+    """
+    server_utc_dt = datetime.utcnow().replace(tzinfo=timezone.utc)
+    target_dt_utc = target_dt_utc.replace(tzinfo=timezone.utc, microsecond=0)
+    delta_ms = int((target_dt_utc - server_utc_dt).total_seconds() * 1000)
+
+    if abs(delta_ms) < AOCT_TIME_DRIFT_MS:
+        return False, f"drift {delta_ms}ms < threshold {int(AOCT_TIME_DRIFT_MS)}ms"
+    if AOCT_TIME_MAX_ADJ_S > 0 and abs(delta_ms) > AOCT_TIME_MAX_ADJ_S * 1000:
+        return False, f"drift {delta_ms}ms exceeds cap AOCT_TIME_MAX_ADJUST_SEC={AOCT_TIME_MAX_ADJ_S}"
+
+    stamp = target_dt_utc.strftime("%Y-%m-%d %H:%M:%S")
+    rc = subprocess.run(["date","-u","-s", stamp], capture_output=True, text=True)
+    ok = (rc.returncode == 0)
+    msg = rc.stdout.strip() or rc.stderr.strip() or "(no message)"
+    level = logging.INFO if ok else logging.WARNING
+    logger.log(level, "GPS_TIME: set host UTC to %s (rc=%s) via %s; %s",
+               target_dt_utc.isoformat().replace("+00:00","Z"), rc.returncode, reason, msg)
+    return ok, msg
+
+def _gps_time_thread():
+    """
+    Minimal gpsd JSON client:
+      - connects to gpsd at AOCT_GPSD_HOST:AOCT_GPSD_PORT
+      - WATCH enable
+      - reads TPV; when mode>=AOCT_GPS_MIN_MODE, treats TPV.time as authoritative UTC
+      - after AOCT_GPS_CONF_SECS of consecutive good TPV, marks confident and (optionally) sets host time
+    """
+    backoff = 1.0
+    WATCH = '?WATCH={"enable":true,"json":true}\n'
+    while True:
+        try:
+            with socket.create_connection((AOCT_GPSD_HOST, AOCT_GPSD_PORT), timeout=5.0) as s:
+                s.setblocking(False)
+                try:
+                    s.sendall(WATCH.encode("ascii"))
+                except Exception:
+                    pass
+                backoff = 1.0
+                last_tick = _now_monotonic()
+                while True:
+                    r, _, _ = select.select([s], [], [], AOCT_GPS_POLL_SEC)
+                    if not r:
+                        # periodic “no data” tick to age confidence
+                        now = _now_monotonic()
+                        dt = now - last_tick
+                        last_tick = now
+                        with _GPS_LOCK:
+                            _gps_state["good_streak"] = max(0.0, _gps_state["good_streak"] - dt)
+                            _gps_state["confident"] = (_gps_state["good_streak"] >= AOCT_GPS_CONF_SECS)
+                        continue
+                    chunk = s.recv(8192)
+                    if not chunk:
+                        raise ConnectionError("gpsd closed")
+                    for line in chunk.splitlines():
+                        try:
+                            line_s = line.decode("utf-8","ignore").strip()
+                        except Exception:
+                            continue
+                        (tpv_time, mode, ept), cls = _parse_gpsd_json_line(line_s)
+                        now = _now_monotonic()
+                        with _GPS_LOCK:
+                            _gps_state["last_seen"] = now
+                            if mode is not None:
+                                _gps_state["last_fix_mode"] = int(mode or 0)
+                        # Decide if this TPV conveys trustworthy time:
+                        has_time = bool(tpv_time)
+                        ept_ok   = (ept is not None and ept <= AOCT_GPS_EPT_MAX_S)
+                        mode_ok  = ((mode or 0) >= AOCT_GPS_MIN_MODE) if AOCT_GPS_REQUIRE_MODE else True
+                        good_time = has_time and ept_ok and mode_ok
+
+                        if not good_time:
+                            # degrade streak
+                            with _GPS_LOCK:
+                                _gps_state["good_streak"] = max(0.0, _gps_state["good_streak"] - AOCT_GPS_POLL_SEC)
+                                _gps_state["confident"] = (_gps_state["good_streak"] >= AOCT_GPS_CONF_SECS)
+                            continue
+                        # Good TPV with acceptable time accuracy
+                        try:
+                            # gpsd TPV time is ISO8601 with Z
+                            dt_utc = datetime.fromisoformat(tpv_time.replace("Z","+00:00")).astimezone(timezone.utc)
+                        except Exception:
+                            continue
+                        with _GPS_LOCK:
+                            _gps_state["last_good_dt"]  = dt_utc
+                            _gps_state["last_good_iso"] = dt_utc.isoformat().replace("+00:00","Z")
+                            _gps_state["good_streak"]   = min(AOCT_GPS_CONF_SECS + 5.0, _gps_state["good_streak"] + AOCT_GPS_POLL_SEC)
+                            became_conf = (not _gps_state["confident"]) and (_gps_state["good_streak"] >= AOCT_GPS_CONF_SECS)
+                            _gps_state["confident"] = (_gps_state["good_streak"] >= AOCT_GPS_CONF_SECS)
+                            confident = _gps_state["confident"]
+                            last_iso  = _gps_state["last_good_iso"]
+
+                        if confident and AOCT_SET_HOST_TIME and dt_utc:
+                            _set_host_time_if_needed(dt_utc, reason="GPS")
+                        #if became_conf:
+                            #logger.info("GPS_TIME: confidence achieved (mode=%s, time=%s)", mode, last_iso)
+        except Exception as e:
+            logger.warning("GPS_TIME: gpsd stream error: %s (reconnecting in %.1fs)", e, backoff)
+            time.sleep(backoff)
+            backoff = min(10.0, backoff * 1.5)
+
+def _start_gps_time_once():
+    global _GPS_THREAD_STARTED
+    if not AOCT_GPS_TIME_ENABLE:
+        logger.info("GPS_TIME: disabled via AOCT_GPS_TIME_ENABLE=0")
+        return
+    if _GPS_THREAD_STARTED:
+        return
+    t = threading.Thread(target=_gps_time_thread, name="gps-time", daemon=True)
+    t.start()
+    _GPS_THREAD_STARTED = True
+    logger.info("GPS_TIME: background thread started (gpsd %s:%s, min_mode=%s)",
+                AOCT_GPSD_HOST, AOCT_GPSD_PORT, AOCT_GPS_MIN_MODE)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # On-demand per-request profiler (profiles only when ?__profile=1 is present)
@@ -588,6 +753,15 @@ except Exception as e:
     except Exception:
         pass
 
+# Start GPS time watcher after scheduler init (daemon thread, non-blocking)
+try:
+    _start_gps_time_once()
+except Exception as e:
+    try:
+        logger.warning("GPS_TIME: start failed: %s", e)
+    except Exception:
+        pass
+
 # ──────────────────────────────────────────────────────────────────────────────
 # App state & constants
 
@@ -761,7 +935,20 @@ def __time_probe_post():
     # Optional: set host time (requires SYS_TIME and explicit env opt-in)
     adjusted = False
     adjust_reason = ""
-    if AOCT_SET_HOST_TIME and ok_nums and abs(delta_ms) >= AOCT_TIME_DRIFT_MS:
+    gps_preempted = False
+    # If GPS time is confident, we **preempt** client time corrections entirely.
+    gps_conf = False
+    gps_dt   = None
+    with _GPS_LOCK:
+        gps_conf = bool(_gps_state["confident"])
+        gps_dt   = _gps_state["last_good_dt"]
+
+    if gps_conf and gps_dt:
+        gps_preempted = True
+        if AOCT_SET_HOST_TIME:
+            _set_host_time_if_needed(gps_dt, reason="GPS(preempt-client)")
+        # return without using client time to adjust; still log/probe as usual below
+    elif AOCT_SET_HOST_TIME and ok_nums and abs(delta_ms) >= AOCT_TIME_DRIFT_MS:
         # Once-per-boot sentinel (atomic create)
         boot_id = current_app.config.get("BOOT_ID")
         sentinel = SENTINEL_DIR / f"time_set_{boot_id}"
@@ -822,7 +1009,24 @@ def __time_probe_post():
         "server_utc": server_utc_dt.isoformat().replace("+00:00","Z"),
         "client_utc": (client_utc_dt.isoformat().replace("+00:00","Z") if client_utc_dt else None),
         "delta_ms": int(delta_ms),
-        "adjusted": bool(adjusted)
+        "adjusted": bool(adjusted),
+        "gps_preempted": bool(gps_preempted),
+        "gps_confident": bool(gps_conf),
+        "gps_time": (_gps_state["last_good_iso"] if gps_conf else None),
+        "gps_fix_mode": int(_gps_state["last_fix_mode"]),
+    })
+
+@app.get("/__gps_status__")
+def __gps_status__():
+    with _GPS_LOCK:
+        s = dict(_gps_state)
+    # Make datetimes JSON-friendly
+    iso = s.get("last_good_iso")
+    return jsonify({
+        "confident": bool(s.get("confident")),
+        "last_good_iso": iso,
+        "last_fix_mode": int(s.get("last_fix_mode") or 0),
+        "good_streak_sec": float(s.get("good_streak") or 0.0),
     })
 
 # Fallback landing: redirect to a common home if present, else show routes

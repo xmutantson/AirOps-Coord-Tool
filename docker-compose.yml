@@ -21,6 +21,13 @@ services:
       AOCT_TIME_DRIFT_MS: "300000"      # only adjust when drift >= 5m (600s)
       AOCT_TIME_MAX_ADJUST_SEC: "0"     # refuse adjustments bigger than value (in seconds). set to 0 to disable limits
 
+      # ---- GPS time via gpsd (host) ----
+      AOCT_GPS_TIME_ENABLE: "1"     # enable GPS preference (preempts client time adjustment)
+      AOCT_GPSD_HOST: "127.0.0.1"   # host-mode container can reach host gpsd here
+      AOCT_GPSD_PORT: "2947"
+      AOCT_GPS_POLL_SEC: "1.0"      # read cadence
+      AOCT_GPS_CONF_SECS: "3.0"     # require 3s of good TPV before “confident”
+
       # ---- Waitress (web app) ----
       WAITRESS_LISTEN: "0.0.0.0:5150"
       WAITRESS_THREADS: "32"
