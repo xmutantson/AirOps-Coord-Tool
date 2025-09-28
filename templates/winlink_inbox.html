@@ -49,6 +49,12 @@
         &nbsp;·&nbsp;<span id="winlinkModalTimestamp"></span>
       </div>
 
+      <!-- Attachments list (shown when present) -->
+      <div id="winlinkModalAttachments" style="display:none; margin:.25rem 0 .75rem;">
+        <div style="font-weight:600; margin-bottom:.25rem;">Attachments</div>
+        <ul id="winlinkModalAttachList" style="margin:0; padding-left:1.1rem;"></ul>
+      </div>
+
       <!-- Cargo Intake Prefill (STRUCTURED) — sits ABOVE the email body; toggled by the header button -->
       <div id="wl-intake-panel" style="display:none; margin:.5rem 0 .75rem; border:1px solid #ddd; padding:.75rem; border-radius:.4rem;">
         <h4 style="margin:.25rem 0 .5rem;">Cargo Intake Form</h4>
@@ -194,7 +200,7 @@ async function markAllReadAcrossFilters(){
 /* ───── Inbox loading ───────────────────────────────────────────── */
 let wlMsgs = [];
 async function loadInbox() {
-  const resp = await fetch('/winlink/inbox.json');
+  const resp = await fetch('/winlink/inbox.json', { cache:'no-store', credentials:'same-origin' });
   wlMsgs = await resp.json();
   const tb = document.querySelector('#wl-inbox-table tbody');
   tb.innerHTML = wlMsgs.map(m=>`
@@ -207,6 +213,7 @@ async function loadInbox() {
         <a href="#" class="winlink-open-msg" data-msg-id="${m.id}">
           ${m.subject ? m.subject.replace(/</g,"&lt;").replace(/>/g,"&gt;") : '—'}
         </a>
+        ${(+m.attach_count>0 || +m.has_attachments===1) ? ` <span title="Attachments">📎 (${m.attach_count||0})</span>` : ''}
       </td>
       <td>${m.timestamp}</td>
     </tr>
@@ -351,6 +358,8 @@ document.addEventListener('DOMContentLoaded', function () {
   const dragBar  = document.getElementById('winlinkModalDrag');
   const sender   = document.getElementById('winlinkModalSender');
   const ts       = document.getElementById('winlinkModalTimestamp');
+  const attWrap  = document.getElementById('winlinkModalAttachments');
+  const attList  = document.getElementById('winlinkModalAttachList');
 
   // Inline intake elements
   const panel       = document.getElementById('wl-intake-panel');
@@ -367,11 +376,30 @@ document.addEventListener('DOMContentLoaded', function () {
     apHint.style.display = 'none';
   }
 
-  function openMsgModal(msg) {
+  async function openMsgModal(msg) {
     subj.textContent   = msg.subject || '(no subject)';
     body.textContent   = msg.body || '(No message body)';
     sender.textContent = msg.sender || '';
     ts.textContent     = msg.timestamp || '';
+    // Populate attachments (fresh each open)
+    attWrap.style.display = 'none';
+    attList.innerHTML = '';
+    try{
+      const r = await fetch(`/winlink/attachment/${encodeURIComponent(msg.id)}/`, { cache:'no-store', credentials:'same-origin' });
+      if (r.ok){
+        const j = await r.json();
+        const files = Array.isArray(j.files) ? j.files : [];
+        if (files.length){
+          attList.innerHTML = files.map(f=>{
+            const name = (f.name||'').replace(/"/g,'&quot;');
+            const size = f.size ? ` (${f.size} bytes)` : '';
+            const href = `/winlink/attachment/${encodeURIComponent(msg.id)}/${encodeURIComponent(f.name)}`;
+            return `<li><a href="${href}" rel="noopener">${name}</a>${size}</li>`;
+          }).join('');
+          attWrap.style.display = '';
+        }
+      }
+    }catch(_){}
     dlg.style.left = '50%';
     dlg.style.top  = '50%';
     dlg.style.transform = 'translate(-50%, -50%)';

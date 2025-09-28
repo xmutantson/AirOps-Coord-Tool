@@ -673,6 +673,9 @@ training_bp    = _get_bp("modules.routes.training")  # /training (PDF hub + help
 
 # Register blueprints with unique names to avoid collisions
 tiles_bp       = _get_bp("modules.services.tiles")   # /tiles/{z}/{x}/{y}.png
+# Weather (page + API)
+weather_page_bp = _get_bp("modules.routes.weather", "bp_page")
+weather_api_bp = _get_bp("modules.routes.weather", "bp_api")
 app.register_blueprint(inventory_bp, name="inventory")
 _reg(wginventory_bp,  name="wginventory")
 _reg(radio_bp,       name="radio")
@@ -697,6 +700,8 @@ _reg(staff_bp,       name="staff")
 _reg(comms_bp,       name="comms")
 _reg(aircraft_bp,    name="aircraft")   # /aircraft routes
 _reg(training_bp,    name="training")   # /training routes
+_reg(weather_page_bp, name="weather_page")  # /weather
+_reg(weather_api_bp,  name="weather_api")   # /api/weather/*
 
 # Shutdown hook from services
 _jobs = _safe_import("modules.services.jobs")

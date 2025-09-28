@@ -41,6 +41,14 @@ PY
 echo "Ensuring training docs directory…"
 mkdir -p "$DATA_DIR/training"
 
+# 1.7) Ensure Winlink attachment directories (persisted next to the DB)
+#      DATA_DIR defaults to ./data but can be overridden via AOCT_DATA_DIR
+echo "Ensuring Winlink attachment directories…"
+mkdir -p "$DATA_DIR/winlink/attachments"
+mkdir -p "$DATA_DIR/winlink/tmp"
+# Best-effort permissions (don't fail if chown is unavailable in container)
+chmod -R 755 "$DATA_DIR/winlink" || true
+
 # 2) auto‐detect the “real” LAN IP if not overridden
 if [ -z "$HOST_LAN_IP" ] && [ -z "$HOST_LAN_IFACE" ]; then
   route_line=$(ip route show default | grep -vE 'dev (docker|br-|tun)' | head -n1 || true)

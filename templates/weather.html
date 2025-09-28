@@ -1,0 +1,327 @@
+{% extends "base.html" %}
+{% block title %}Weather{% endblock %}
+{% block content %}
+<h2>Weather</h2>
+
+<div class="wx-toolbar">
+  <button id="wx-refresh" type="button">Refresh list</button>
+  <div class="wx-reqbox">
+    <strong>Request updates:</strong>
+    <label class="wx-inline">
+      <input type="radio" name="wxMode" value="pat" checked> via PAT
+    </label>
+    <label class="wx-inline">
+      <input type="radio" name="wxMode" value="preview"> manual compose
+    </label>
+    <!-- keep split in DOM but hard-hidden/disabled so we can re-enable later -->
+    <label class="wx-inline hidden" title="Send one message per product (recommended)"
+           aria-hidden="true" style="display:none">
+      <input type="checkbox" id="wx-split"> split
+    </label>
+    <button id="wx-request" type="button">Go</button>
+  </div>
+  <span id="wx-request-status" class="wx-status"></span>
+</div>
+
+<div id="wx-cards" class="wx-cards"></div>
+
+<!-- Manual Compose Modal -->
+<div id="wx-compose-backdrop" class="modal" style="display:none;">
+  <div class="modal-window" role="dialog" aria-modal="true" aria-labelledby="wx-compose-title">
+    <h3 id="wx-compose-title">Manual compose (copy into Winlink)</h3>
+    <p class="muted">Prepared messages (To, Subject, Body). Copy/paste into Winlink.</p>
+    <div id="wx-preview-body" class="wx-preview-body"></div>
+    <div class="actions">
+      <button type="button" id="wx-compose-close" class="button">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(async function(){
+  const $ = s => document.querySelector(s);
+
+  const refreshBtn = $('#wx-refresh');
+  const requestBtn = $('#wx-request');
+  const requestStatus = $('#wx-request-status');
+
+  const splitBox = $('#wx-split');           // retained for future use
+  if (splitBox){
+    splitBox.checked = false;                // force OFF
+    splitBox.disabled = true;                // cannot be toggled
+  }
+
+  const root = document.getElementById("wx-cards");
+
+  // Flicker control: keep DOM/card & signature maps so we only update what changed
+  const cardEls = new Map();   // key -> card element
+  const sigMap  = new Map();   // key -> "mime|etag|received_at"
+
+  // Modal bits
+  const composeBackdrop = $('#wx-compose-backdrop');
+  const composeClose    = $('#wx-compose-close');
+  const previewBody     = $('#wx-preview-body');
+
+  const csrf = (document.querySelector('meta[name="csrf-token"]')?.content) || '';
+
+  // ---------- modal helpers ----------
+  function openCompose(){ composeBackdrop.style.display = 'flex'; }
+  function closeCompose(){ composeBackdrop.style.display = 'none'; previewBody.innerHTML = ''; }
+  composeClose?.addEventListener('click', closeCompose);
+  composeBackdrop?.addEventListener('click', (e)=>{ if (e.target === composeBackdrop) closeCompose(); });
+  document.addEventListener('keydown', (e)=>{ if (e.key === 'Escape' && composeBackdrop.style.display !== 'none') closeCompose(); });
+
+  async function loadCatalog(){
+    const r = await fetch("/api/weather/catalog");
+    return await r.json();
+  }
+
+  function buildCard(p){
+    const k = p.key, name = p.display_name || k;
+    const isImage = p.mime && p.mime.startsWith("image/");
+    const el = document.createElement('div');
+    el.className = isImage ? 'wx-card wx-card--image' : 'wx-card wx-card--text';
+    el.dataset.key = k;
+    el.innerHTML = `
+      <div class="wx-card__meta">
+        <div class="wx-name"></div>
+        <div class="wx-sub"></div>
+      </div>
+      <div data-body></div>
+      <form data-wx-upload="1" action="/api/weather/upload" method="POST" enctype="multipart/form-data" class="wx-upload">
+        <input type="hidden" name="csrf_token" value="${csrf}">
+        <input type="hidden" name="key" value="${k}">
+        <input type="file" name="file" required>
+        <button type="submit">Upload to “${name}”</button>
+      </form>
+    `;
+    el.querySelector('.wx-name').textContent = name;
+    el.querySelector('.wx-sub').textContent = p.received_at_utc ? ("Last received: " + p.received_at_utc) : "No data yet";
+
+    const body = el.querySelector('[data-body]');
+    if (isImage){
+      const a = document.createElement('a');
+      a.target = '_blank'; a.rel = 'noopener';
+      const img = document.createElement('img');
+      img.decoding = 'async'; img.loading = 'lazy';
+      a.appendChild(img); body.appendChild(a);
+    } else {
+      const pre = document.createElement('pre');
+      pre.className = 'wx-textbody';
+      body.appendChild(pre);
+    }
+    return el;
+  }
+
+  function sortForLayout(list){
+    // Images first (fill first row), then text (e.g., WA_FOR_WA) which spans full row.
+    return list.slice().sort((a,b)=>{
+      const ai = a.mime && a.mime.startsWith('image/');
+      const bi = b.mime && b.mime.startsWith('image/');
+      if (ai === bi) return 0;
+      return ai ? -1 : 1;
+    });
+  }
+
+  function updateCardDOM(p){
+    let el = cardEls.get(p.key);
+    const isImage = p.mime && p.mime.startsWith('image/');
+    const sig = `${p.mime}|${p.etag||''}|${p.received_at_utc||''}`;
+    const prev = sigMap.get(p.key);
+
+    if (!el){
+      el = buildCard(p);
+      cardEls.set(p.key, el);
+    }
+
+    // If nothing changed, bail (prevents flicker)
+    if (prev === sig) return el;
+
+    // Update meta
+    el.querySelector('.wx-name').textContent = p.display_name || p.key;
+    el.querySelector('.wx-sub').textContent  = p.received_at_utc ? ("Last received: " + p.received_at_utc) : "No data yet";
+
+    const body = el.querySelector('[data-body]');
+    if (isImage){
+      let a = body.querySelector('a');
+      let img = a?.querySelector('img');
+      if (!a){ a = document.createElement('a'); a.target = '_blank'; a.rel = 'noopener'; }
+      if (!img){ img = document.createElement('img'); img.decoding='async'; img.loading='lazy'; a.appendChild(img); }
+      if (prev == null || (prev.split('|')[1] !== (p.etag||''))){
+        const v = p.etag ? ("&v=" + encodeURIComponent(p.etag)) : "";
+        const href = `/api/weather/blob/${encodeURIComponent(p.key)}?${v}`;
+        a.href = href;
+        Promise.resolve().then(()=> { img.src = href; }); // microtask to avoid flash
+      }
+      if (!a.parentNode) body.appendChild(a);
+      el.className = 'wx-card wx-card--image';
+    } else {
+      let pre = body.querySelector('pre.wx-textbody');
+      if (!pre){ pre = document.createElement('pre'); pre.className = 'wx-textbody'; body.innerHTML=''; body.appendChild(pre); }
+      fetch(`/api/weather/text/${encodeURIComponent(p.key)}`)
+        .then(r => r.ok ? r.text() : '')
+        .then(t => { pre.textContent = t || ''; })
+        .catch(()=> { pre.textContent = ''; });
+      el.className = 'wx-card wx-card--text';
+    }
+
+    sigMap.set(p.key, sig);
+    return el;
+  }
+
+  function reconcileOrder(sorted){
+    const frag = document.createDocumentFragment();
+    for (const p of sorted){
+      const el = cardEls.get(p.key) || updateCardDOM(p);
+      frag.appendChild(el);
+    }
+    // Remove any stale cards that are no longer in the catalog
+    for (const [k, el] of Array.from(cardEls.entries())){
+      if (!sorted.find(p => p.key === k)){
+        el.remove(); cardEls.delete(k); sigMap.delete(k);
+      }
+    }
+    root.appendChild(frag);
+  }
+
+  async function syncCatalog(){
+    const catalog = await loadCatalog();
+    const sorted = sortForLayout(catalog);
+    for (const p of sorted){ updateCardDOM(p); }
+    reconcileOrder(sorted);
+  }
+
+  await syncCatalog();
+
+  // Manual refresh
+  refreshBtn?.addEventListener('click', async ()=>{
+    try { await syncCatalog(); } catch(_){}
+  });
+
+  // Copy helper for modal (with feedback)
+  function wireCopy(container){
+    container.querySelectorAll('[data-copy]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const target = btn.closest('.wx-msg')?.querySelector(btn.dataset.copy);
+        if (!target) return;
+        if (target.select) target.select();
+        try { document.execCommand('copy'); } catch(_) {}
+        const old = btn.textContent;
+        btn.textContent = 'Copied';
+        setTimeout(()=> btn.textContent = old, 800);
+      });
+    });
+  }
+
+  function renderPreview(list){
+    if (!Array.isArray(list) || !list.length){
+      closeCompose();
+      return;
+    }
+    // To + Subject on one line with individual copy buttons; Body with copy below.
+    previewBody.innerHTML = list.map((m,i)=>`
+      <div class="wx-msg">
+        <div class="wx-msg__title">Message ${i+1}</div>
+
+        <div class="wx-row two">
+          <label class="wx-field">
+            <span>To</span>
+            <div class="wx-inline-row">
+              <input class="wx-to" value="${m.to}">
+              <button type="button" class="button small" data-copy=".wx-to">Copy</button>
+            </div>
+          </label>
+
+          <label class="wx-field">
+            <span>Subject</span>
+            <div class="wx-inline-row">
+              <input class="wx-subject" value="${m.subject}">
+              <button type="button" class="button small" data-copy=".wx-subject">Copy</button>
+            </div>
+          </label>
+        </div>
+
+        <label class="wx-field">
+          <span>Body</span>
+          <textarea class="wx-body" rows="8">${m.body}</textarea>
+          <div class="wx-actions">
+            <button type="button" class="button small" data-copy=".wx-body">Copy Body</button>
+          </div>
+        </label>
+      </div>
+    `).join('');
+    wireCopy(previewBody);
+    openCompose();
+  }
+
+  // Request updates → POST /api/weather/request (pat or preview)
+  requestBtn?.addEventListener('click', async ()=>{
+    requestBtn.disabled = true;
+    requestStatus.textContent = 'requesting…';
+    const mode = (document.querySelector('input[name="wxMode"]:checked')?.value || 'pat');
+
+    // Force split OFF regardless of hidden checkbox state
+    const payload = { mode, split: false, async: true };
+
+    try{
+      const r = await fetch('/api/weather/request', {
+        method:'POST',
+        headers: { 'Content-Type':'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const j = await r.json();
+      if (mode === 'preview'){
+        if (j.ok){
+          renderPreview(j.messages||[]);
+          requestStatus.textContent = `prepared ${j.count||0} message(s)`;
+        }else{
+          requestStatus.textContent = `error: ${j.error||'failed'}`;
+        }
+      }else{
+        if (j.ok && j.mode === 'pat_async'){
+          requestStatus.textContent = `queued ${j.enqueued||0} message(s) at ${j.requested_at||''}`;
+        } else if (j.ok){
+          const ok = (j.results||[]).filter(x=>x.ok).length;
+          requestStatus.textContent = `sent ${ok}/${j.count||0} at ${j.requested_at||''}`;
+        } else {
+          requestStatus.textContent = `error: ${j.error||'failed'}`;
+        }
+      }
+    }catch(e){
+      requestStatus.textContent = 'error';
+    }finally{
+      requestBtn.disabled = false;
+    }
+  });
+
+  // Auto-refresh every 15s; incremental updates avoid flicker
+  setInterval(async ()=>{
+    try { await syncCatalog(); } catch(_) {}
+  }, 15000);
+
+  // Intercept uploads → POST via fetch and refresh cards
+  root.addEventListener('submit', async (e)=>{
+    const form = e.target;
+    if (!form.matches('form[data-wx-upload="1"]')) return;
+    e.preventDefault();
+    try{
+      const fd = new FormData(form);
+      const r = await fetch(form.action, {
+        method: 'POST',
+        body: fd,
+        headers: csrf ? {'X-CSRFToken': csrf} : undefined
+      });
+      const j = await r.json().catch(()=> ({}));
+      if (j && j.ok){
+        await syncCatalog();
+      }else{
+        console.warn('Upload failed', j);
+      }
+    }catch(err){
+      console.error('Upload error', err);
+    }
+  });
+})();
+</script>
+{% endblock %}
+

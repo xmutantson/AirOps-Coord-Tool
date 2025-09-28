@@ -74,6 +74,10 @@
          class="{% if active=='inventory' %}active{% endif %}">Mat. Handling</a>
       <a href="{{ url_for('preferences.preferences') }}"
          class="{% if active=='preferences' %}active{% endif %}">Preferences</a>
+      <!-- Weather tab (visibility controlled by hamburger prefs; default OFF) -->
+      <a href="{{ url_for('weather_page.index') }}"
+         data-tab="weather"
+         class="{% if active=='weather' %}active{% endif %}">Weather</a>
       {% if embedded_name and embedded_url %}
         <a href="{{ url_for('core.embedded') }}"
            class="{% if active=='embedded' %}active{% endif %}">{{ embedded_name }}</a>
@@ -107,6 +111,11 @@
         <label style="margin-top:.25rem;">
           <input type="checkbox" data-toggle-tab="training">
           Training
+        </label><br>
+        <!-- Weather toggle: default UNCHECKED in markup; JS also treats it as default OFF -->
+        <label style="margin-top:.25rem;">
+          <input type="checkbox" data-toggle-tab="weather">
+          Weather
         </label><br>
         <hr>
         <button id="help-open" class="button button-primary">Help</button>
@@ -352,7 +361,7 @@ document.addEventListener('DOMContentLoaded', () => {
 document.addEventListener('DOMContentLoaded', () => {
   const hamburger  = document.getElementById('nav-hamburger');
   const dropdown   = document.getElementById('nav-dropdown');
-  const tabNames   = ['supervisor','radio','ramp_boss','queued_flights','inventory','training'];
+  const tabNames   = ['supervisor','radio','ramp_boss','queued_flights','inventory','training','weather'];
   const storageKey = 'navTabPrefs_v1';
 
   if (!hamburger || !dropdown) {
@@ -375,9 +384,9 @@ document.addEventListener('DOMContentLoaded', () => {
     try { prefs = JSON.parse(localStorage.getItem(storageKey) || '{}'); } catch {}
     tabNames.forEach(tab => {
       // Default behavior:
-      //  - All tabs ON by default, EXCEPT 'training' which defaults OFF.
+      //  - All tabs ON by default, EXCEPT 'training' and 'weather' which default OFF.
       let checked;
-      if (tab === 'training') {
+      if (tab === 'training' || tab === 'weather') {
         // explicit true → on; any other/unset → off
         checked = prefs.hasOwnProperty(tab) ? !!prefs[tab] : false;
       } else {
@@ -402,7 +411,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (toggle) {
         checked = !!toggle.checked;
       } else {
-        checked = (tab === 'training') ? false : true;
+        checked = (tab === 'training' || tab === 'weather') ? false : true;
       }
       prefs[tab] = checked;  // persist exact booleans
       document.querySelectorAll(`[data-tab="${tab}"]`).forEach(a => a.style.display = checked ? '' : 'none');

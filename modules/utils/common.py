@@ -114,7 +114,7 @@ import random, string
 
 import uuid
 from markupsafe import escape
-import sqlite3, csv, re, os, json, base64
+import sqlite3, csv, re, os, json, base64, mimetypes
 from datetime import datetime, timedelta, timezone
 import threading, time, socket, math
 from urllib.request import urlopen
@@ -495,6 +495,20 @@ def get_session_salt():
 def get_db_file():
     from app import DB_FILE
     return DB_FILE
+
+def get_data_dir() -> str:
+    """
+    Return the *persisted* data directory (sibling of the DB file).
+    Example: if DB is /app/data/aoct.sqlite → /app/data
+    """
+    return os.path.dirname(get_db_file())
+
+def winlink_attachments_root() -> str:
+    """
+    Canonical base folder for extracted Winlink attachments.
+    Created by entrypoint; callers should still os.makedirs(..., exist_ok=True) when needed.
+    """
+    return os.path.join(get_data_dir(), "winlink", "attachments")
 
 def expand_text_macros(text: str) -> str:
     """
@@ -950,6 +964,22 @@ def init_db():
           )
         """)
 
+        # ── Weather Tab storage (latest-per-key) ────────────────────────────
+        c.execute("""
+          CREATE TABLE IF NOT EXISTS weather_products (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            key             TEXT NOT NULL UNIQUE,   -- e.g., 'WCCOL.JPG', 'WA_FOR_WA'
+            display_name    TEXT NOT NULL,          -- UI label; fallback = key
+            mime            TEXT NOT NULL,          -- 'image/jpeg', 'image/gif', 'text/plain'
+            content         BLOB NOT NULL,          -- raw bytes (latest only)
+            content_hash    TEXT NOT NULL,          -- sha256 for dedupe
+            source          TEXT NOT NULL,          -- 'winlink' | 'manual'
+            received_at_utc TEXT NOT NULL,          -- when we ingested it
+            updated_at_utc  TEXT NOT NULL           -- last time this row changed
+          )
+        """)
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS weather_products_key_uq ON weather_products(key)")
+
         # Defaults for Remote-Airport feature flags
         c.execute("""
           INSERT OR IGNORE INTO preferences(name,value)
@@ -969,6 +999,17 @@ def init_db():
             ('map_tiles_path', ?),
             ('map_offline_seed','yes')
         """, (os.path.join(os.path.dirname(get_db_file()), 'tiles'),))
+
+        # ── Weather Tab defaults (public; no admin required) ────────────────
+        c.execute("""
+          INSERT OR IGNORE INTO preferences(name,value) VALUES
+            ('wx_catalog_body', 'WCCOL.JPG\nWCIR.JPG\nWCVS.JPG\nUSWXRAD.GIF\nWA_FOR_WA')
+        """)
+        c.execute("""
+          INSERT OR IGNORE INTO preferences(name,value) VALUES
+            ('wx_display_names',
+             'WCCOL.JPG=West Coast (Color)\nWCIR.JPG=West Coast (Infrared)\nWCVS.JPG=West Coast (Visible)\nUSWXRAD.GIF=US Radar Mosaic\nWA_FOR_WA=WA Area Forecast (Text)')
+        """)
 
     # ── Staff tables (idempotent; separated util owns schema) ────────────────
     try:
@@ -1113,6 +1154,26 @@ def run_migrations():
     ensure_column("queued_flights", "travel_time",      "TEXT")
     ensure_column("queued_flights", "cargo_weight",     "REAL DEFAULT 0")
     ensure_column("winlink_messages", "sender",         "TEXT")
+
+    # Winlink attachments: minimal DB pointers (files live on disk under /app/data/winlink/attachments)
+    ensure_column("winlink_messages", "has_attachments", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column("winlink_messages", "attachment_dir",  "TEXT")
+
+    with sqlite3.connect(get_db_file()) as c:
+        c.execute("""
+          CREATE TABLE IF NOT EXISTS winlink_message_files (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            message_id   INTEGER NOT NULL,
+            filename     TEXT    NOT NULL,   -- e.g., 'WCCOL.JPG'
+            mime         TEXT,               -- best-effort (e.g., 'image/jpeg')
+            size_bytes   INTEGER,            -- best-effort size on disk
+            saved_path   TEXT    NOT NULL,   -- full path under /app/data/winlink/attachments/...
+            created_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            UNIQUE(message_id, filename),
+            FOREIGN KEY(message_id) REFERENCES winlink_messages(id)
+          )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_wl_files_msg ON winlink_message_files(message_id)")
 
     # ─── Pilot acknowledgment (signatures) ───────────────────────────────
     # Store both on flights (final record) and queued_flights (drafts).
@@ -1519,6 +1580,163 @@ def iso8601_ceil_utc(dt: datetime | None = None) -> str:
     dt = dt.replace(microsecond=0)
     return dt.isoformat().replace("+00:00", "Z")
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Weather Tab helpers (schema utils + upsert)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Built-in catalog (used when prefs are absent/missing)
+WX_DEFAULT_KEYS = [
+    "WCCOL.JPG",     # West Coast (Color)
+    "WCIR.JPG",      # West Coast (Infrared)
+    "WCVS.JPG",      # West Coast (Visible)
+    "USWXRAD.GIF",   # US Radar Mosaic
+    "WA_FOR_WA",     # WA Area Forecast (Text)
+]
+
+def get_wx_display_names() -> dict[str, str]:
+    """
+    Built-in labels with preference overrides applied.
+    """
+    base = {
+        "WCCOL.JPG":   "West Coast (Color)",
+        "WCIR.JPG":    "West Coast (Infrared)",
+        "WCVS.JPG":    "West Coast (Visible)",
+        "USWXRAD.GIF": "US Radar Mosaic",
+        "WA_FOR_WA":   "WA Area Forecast (Text)",
+    }
+    # Preference map wins over built-ins
+    try:
+        base.update(_wx_display_map())
+    except Exception:
+        pass
+    return base
+
+def wx_normalize_key(raw: str) -> str:
+    """
+    Normalize a product key:
+      • Upper-case
+      • Special-case WA_FOR_WA: strip a trailing .TXT/.TEXT if present
+    """
+    k = (raw or "").strip().upper()
+    if not k:
+        return ""
+    if k.startswith("WA_FOR_WA"):
+        # Accept WA_FOR_WA, WA_FOR_WA.TXT, WA_FOR_WA.TEXT → WA_FOR_WA
+        if k in ("WA_FOR_WA.TXT", "WA_FOR_WA.TEXT"):
+            return "WA_FOR_WA"
+    return k
+
+def get_wx_keys() -> list[str]:
+    """
+    Keys that the Weather tab should track, in configured order.
+    Public install defaults to 5 Winlink products.
+    """
+    body = (get_preference("wx_catalog_body") or "").splitlines()
+    keys = [wx_normalize_key(x) for x in body if wx_normalize_key(x)]
+    # De-dupe while preserving order
+    out, seen = [], set()
+    for k in keys:
+        if k not in seen:
+            out.append(k); seen.add(k)
+    # Fallback to built-in catalog when pref is empty/missing
+    return out if out else WX_DEFAULT_KEYS[:]
+
+def _wx_display_map() -> dict[str, str]:
+    """
+    Parse wx_display_names preference into {KEY: 'Label'}.
+    """
+    raw = get_preference("wx_display_names") or ""
+    out: dict[str, str] = {}
+    for line in raw.splitlines():
+        if "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k = wx_normalize_key(k)
+        v = (v or "").strip()
+        if k and v:
+            out[k] = v
+    return out
+
+def get_wx_display_name(key: str) -> str:
+    k = wx_normalize_key(key)
+    return get_wx_display_names().get(k, k)
+
+def wx_guess_mime(filename: str, data: bytes | None = None) -> str:
+    """
+    Light-touch mime inference. Most products are images; WA_FOR_WA is text.
+    """
+    name = (filename or "").lower()
+    if name.endswith((".jpg", ".jpeg")): return "image/jpeg"
+    if name.endswith(".gif"):            return "image/gif"
+    if name.endswith(".png"):            return "image/png"
+    # WA_FOR_WA (no extension) → prefer text/plain
+    if wx_normalize_key(filename) == "WA_FOR_WA":
+        return "text/plain"
+    # Fallback: sniff ASCII → text/plain
+    try:
+        if data is not None:
+            bs = bytes(data[:1024])
+            if all((32 <= b <= 126) or b in (9, 10, 13) for b in bs):
+                return "text/plain"
+    except Exception:
+        pass
+    return "application/octet-stream"
+
+def upsert_weather_product(key: str, data: bytes, mime: str | None, source: str) -> dict:
+    """
+    Insert/update a product row. De-dupe by sha256(content).
+    Returns {'changed': bool, 'etag': sha, 'received_at_utc': iso, 'updated_at_utc'?: iso}
+    """
+    import hashlib, sqlite3
+    k    = wx_normalize_key(key)
+    if not k:
+        return {"changed": False, "etag": "", "received_at_utc": iso8601_ceil_utc()}
+    sha  = hashlib.sha256(data or b"").hexdigest()
+    now  = iso8601_ceil_utc()
+    mime = (mime or wx_guess_mime(k, data)).strip().lower()
+    disp = get_wx_display_name(k)
+
+    with sqlite3.connect(get_db_file(), timeout=30) as c:
+        c.row_factory = sqlite3.Row
+        row = c.execute("SELECT content_hash FROM weather_products WHERE key=?", (k,)).fetchone()
+        if row and (row["content_hash"] or "") == sha:
+            c.execute("UPDATE weather_products SET received_at_utc=? WHERE key=?", (now, k))
+            return {"changed": False, "etag": sha, "received_at_utc": now}
+        if row:
+            c.execute("""
+              UPDATE weather_products
+                 SET display_name=?, mime=?, content=?, content_hash=?, source=?,
+                     received_at_utc=?, updated_at_utc=?
+               WHERE key=?""",
+              (disp, mime, sqlite3.Binary(data), sha, (source or "manual"), now, now, k)
+            )
+        else:
+            c.execute("""
+              INSERT INTO weather_products
+                (key, display_name, mime, content, content_hash, source, received_at_utc, updated_at_utc)
+              VALUES (?,?,?,?,?,?,?,?)""",
+              (k, disp, mime, sqlite3.Binary(data), sha, (source or "manual"), now, now)
+            )
+    return {"changed": True, "etag": sha, "received_at_utc": now, "updated_at_utc": now}
+
+# ── Light MIME/text helpers (generic) ────────────────────────────────────────
+def looks_ascii_text(b: bytes) -> bool:
+    """
+    Best-effort check: decodes as UTF-8 → treat as text.
+    """
+    try:
+        b.decode("utf-8")
+        return True
+    except Exception:
+        return False
+
+def infer_mime_for_upload(filename: str, data: bytes) -> str:
+    """
+    Try extension first, then sniff ASCII vs binary.
+    """
+    mt = (mimetypes.guess_type(filename or "")[0] or "").lower()
+    return mt if mt else ("text/plain" if looks_ascii_text(data) else "application/octet-stream")
+
 def _parse_iso_utc(ts: str | None) -> datetime | None:
     """
     Parse ISO-8601 (optionally with 'Z') into an aware UTC datetime.
@@ -1747,6 +1965,14 @@ def get_preference(name: str) -> str | None:
         v = blankish_to_none(val)
         return v if v is not None else '24'
     return val
+
+    if key == 'wx_catalog_body':
+        # default 5 weather products
+        v = blankish_to_none(val)
+        return v if v is not None else 'WCCOL.JPG\nWCIR.JPG\nWCVS.JPG\nUSWXRAD.GIF\nWA_FOR_WA'
+    if key == 'wx_display_names':
+        v = val or ''
+        return v
 
 # ── ADS-B Adapter (Step 6) ──────────────────────────────────────────────────
 def _epoch_to_iso_utc(val) -> str:

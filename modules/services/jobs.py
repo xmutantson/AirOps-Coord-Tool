@@ -8,6 +8,8 @@ import sqlite3, os, json
 from datetime import datetime, timedelta, timezone
 import subprocess
 import glob
+import hashlib
+import mimetypes
 from apscheduler.schedulers.base import STATE_RUNNING
 from apscheduler.jobstores.base import JobLookupError
 from modules.utils.http import http_post_json
@@ -30,6 +32,7 @@ from modules.utils.remote_inventory import (
     upsert_remote_inventory,
 )
 from modules.utils.common import adsb_fetch_stream_snapshot, adsb_bulk_upsert, get_preference
+from modules.utils.common import winlink_attachments_root
 from app import DB_FILE, scheduler
 from flask import current_app
 app = current_app  # legacy shim for helpers
@@ -236,6 +239,57 @@ def _wl_ascii(s):
          .replace('–', '-')
          .replace('×', 'x')
     )
+
+# --- tighten _pat_read_message0 body parsing ---------------------------------
+# Only treat "Attachments:" as a terminator before the body starts.
+# Once in the body, stop only at the "===" separator or receipt line.
+def _pat_read_message0():
+    """
+    Drive `pat read` interactively to read IN mailbox index 0.
+    Returns dict with keys: mid, subject, from, body (best-effort).
+    """
+    try:
+        p = subprocess.run(
+            ["pat", "read"],
+            input="0\n0\nn\nq\n",
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+    except Exception:
+        return {}
+    out = p.stdout or ""
+    mid = subject = sender = ""
+    body_lines = []
+    in_detail = False
+    in_body = False
+    for line in out.splitlines():
+        s = line.strip()
+        if s.startswith("MID:"):
+            in_detail = True
+            try: mid = s.split(":", 1)[1].strip()
+            except Exception: mid = ""
+            continue
+        if not in_detail:
+            continue
+        if (not in_body) and s.lower().startswith("attachments"):
+            # attachments header/footer area; ignore until body starts
+            continue
+        if s.startswith("From:"):
+            sender = s.split(":", 1)[1].strip()
+            continue
+        if s.startswith("Subject:"):
+            subject = s.split(":", 1)[1].strip()
+            continue
+        if in_body:
+            ls = s.lower()
+            if ls.startswith("[message receipt requested]") or line.startswith("==="):
+                break
+            body_lines.append(line)
+        elif (not in_body) and (s == "") and subject:
+            in_body = True
+    return {"mid": mid, "subject": subject, "from": sender, "body": "\n".join(body_lines).rstrip()}
 
 # --- AOCT flight reply (key:value) parser ------------------------------------
 def _parse_aoct_flight_reply(body: str) -> dict:
@@ -891,58 +945,399 @@ def poll_winlink_job():
 
         # 2) find all inbound .b2f files for this callsign
         inbox_dir = os.path.expanduser(f"~/.local/share/pat/mailbox/{cs}/in")
-        for b2f in glob.glob(os.path.join(inbox_dir, "*.b2f")):
-            try:
-                # feed "0\n0\nq\n" to choose mailbox 0, message 0, then quit
-                p = subprocess.run(
-                    ["pat", "read", b2f],
-                    input="0\n0\nq\n",
-                    check=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True
-                )
-            except subprocess.CalledProcessError:
-                continue
-
-            # 3) parse Subject and body
-            raw = p.stdout.splitlines()
-            subject = ""
-            sender  = ""
-            body_lines = []
-            in_body = False
-
-            for line in raw:
-                if line.startswith("Subject:"):
-                    subject = line.split(":", 1)[1].strip()
-                elif line.startswith("From:"):
-                    sender = line.split(":", 1)[1].strip()
-                if in_body:
-                    if line.startswith("==="):
-                        break
-                    body_lines.append(line)
-                # once we’ve captured the Subject header, an empty line signals body start
-                if subject and line.strip() == "":
-                    in_body = True
-
-            body = "\n".join(body_lines).strip()
+        # Process messages by repeatedly selecting index 0 from the interactive mailbox.
+        # After we handle MID.b2f we delete it; next loop will see the next message at index 0.
+        while True:
+            pending = glob.glob(os.path.join(inbox_dir, "*.b2f"))
+            if not pending:
+                break
+            meta = _pat_read_message0()
+            if not meta or not meta.get("mid"):
+                # If we can't read/parse the top message, stop to avoid an infinite loop.
+                break
+            mid = meta.get("mid", "")
+            subject = meta.get("subject", "")
+            sender  = meta.get("from", "")
+            body    = meta.get("body", "")
+            # Heuristics used later for weather-product ingestion
+            inquiry_id_hint = None
+            declared_attachment = None
+            subject_url = None
+            # Pull URL out of "INQUIRY - <url>" subjects, if present
+            if subject.upper().startswith("INQUIRY - "):
+                subject_url = subject.split("INQUIRY - ", 1)[1].strip()
+            # Scan body for inline hints
+            for ln in (body or "").splitlines():
+                low = ln.lower()
+                if "inquiry id:" in low and inquiry_id_hint is None:
+                    try: inquiry_id_hint = ln.split(":", 1)[1].strip()
+                    except Exception: pass
+                if "attachment:" in low and declared_attachment is None:
+                    try: declared_attachment = ln.split(":", 1)[1].strip()
+                    except Exception: pass
 
             # Use RECEIVE time (now), not the b2f Date header
-            ts_iso = iso8601_ceil_utc()
+            # Use a high-resolution timestamp to avoid collisions when
+            # multiple messages share identical subject/sender/time buckets.
+            # (Keep it ISO8601; no trailing 'Z' so we don't break existing parses.)
+            ts_iso = datetime.utcnow().isoformat()
 
             # 4) insert into SQLite
             with sqlite3.connect(DB_FILE) as conn:
-                conn.execute(
+                cur = conn.cursor()
+                cur.execute(
                     "INSERT OR IGNORE INTO winlink_messages "
-                    "(direction, callsign, sender, subject, body, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-                    ("in", cs, sender, subject, body, ts_iso)
+                    "(direction, callsign, sender, subject, body, timestamp, has_attachments) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    ("in", cs, sender, subject, body, ts_iso, 1)  # assume attachments possible; corrected after extract
                 )
-                # remove the .b2f so we don’t re-read it next time
+                # idempotent fetch of the row id we just inserted (or existing one)
+                cur.execute("""
+                    SELECT id FROM winlink_messages
+                     WHERE direction='in' AND callsign=? AND sender=? AND subject=? AND timestamp=?
+                     ORDER BY id DESC LIMIT 1
+                """, (cs, sender, subject, ts_iso))
+                row = cur.fetchone()
+                msg_id = int(row[0]) if row else None
+
+            # 5) Extract attachments.
+            #    IMPORTANT: Many PAT builds (incl. ours) ignore "-d" and always write into the *current working dir*.
+            #    So we run `pat extract <b2f>` with cwd=<dest_dir> to force files to land where we expect.
+            saved_any = False
+            dest_dir = None
+            weather_handled = False
+            if msg_id:
                 try:
-                    os.remove(b2f)
-                except OSError:
-                    # if deletion fails, ignore and move on
+                    base = winlink_attachments_root()
+                    dest_dir = os.path.join(base, f"msg_{msg_id}")
+                    os.makedirs(dest_dir, exist_ok=True)
+                    # Snapshot pre-existing files to detect what this run produced.
+                    before = {os.path.basename(p) for p in glob.glob(os.path.join(dest_dir, "*")) if os.path.isfile(p)}
+                    extract_ok = False
+                    try:
+                        # Use MID to target the on-disk frame directly: ~/.local/share/pat/mailbox/<cs>/in/<MID>.b2f
+                        b2f_path = os.path.join(inbox_dir, f"{mid}.b2f")
+                        subprocess.run(
+                            ["pat", "extract", b2f_path],
+                            check=True,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                            cwd=dest_dir,  # <-- make CWD the attachment folder
+                        )
+                        extract_ok = True
+                    except subprocess.CalledProcessError as e:
+                        extract_ok = False
+                        try:
+                            LOG.warning("PAT extract failed for %s (rc=%s): %s", b2f_path, e.returncode, e)
+                        except Exception:
+                            pass
+
+                    # Determine newly created files (this run only)
+                    after = {os.path.basename(p) for p in glob.glob(os.path.join(dest_dir, "*")) if os.path.isfile(p)}
+                    new_files = sorted(after - before)
+                    saved_any = bool(new_files)
+
+                    if saved_any:
+                        with sqlite3.connect(DB_FILE) as conn:
+                            MAX_BYTES = 15 * 1024 * 1024  # 15 MiB per file cap
+                            for fname in new_files:
+                                fp = os.path.join(dest_dir, fname)
+                                if not os.path.isfile(fp):
+                                    continue
+                                st = os.stat(fp)
+                                if st.st_size > MAX_BYTES:
+                                    try:
+                                        LOG.warning("Winlink skip oversize attachment (%d bytes): %s", st.st_size, fp)
+                                    except Exception:
+                                        pass
+                                    continue
+                                # Best-effort MIME sniff
+                                try:
+                                    mime, _ = mimetypes.guess_type(fp)
+                                except Exception:
+                                    mime = None
+                                conn.execute("""
+                                  INSERT OR IGNORE INTO winlink_message_files
+                                    (message_id, filename, mime, size_bytes, saved_path)
+                                  VALUES (?,?,?,?,?)
+                                """, (msg_id, fname, mime or None, int(st.st_size), fp))
+                            # Mark parent row with attachment_dir and has_attachments based on actual save
+                            conn.execute("""
+                                UPDATE winlink_messages
+                                   SET has_attachments=?, attachment_dir=?
+                                 WHERE id=?
+                            """, (1 if saved_any else 0, dest_dir, msg_id))
+
+                        # ─────────────────────────────────────────────────────────────
+                        # NEW: Weather product ingestion (attachments path)
+                        # Prefer declared attachment (if any); map known URLs → stable keys;
+                        # otherwise fall back to filename stem.
+                        # ─────────────────────────────────────────────────────────────
+                        def _weather_key_from_filename(name: str) -> str:
+                            """
+                            Normalize attachment filename → weather slot key.
+                            Strategy: uppercase basename without extension.
+                            (Ex: 'wa_for_wa.txt' -> 'WA_FOR_WA')
+                            """
+                            base = os.path.splitext(os.path.basename(name or ""))[0]
+                            return (base or "").strip().upper()
+                        def _key_from_inquiry_id(token):
+                            """'WCVS.JPG' → 'WCVS' (uppercased). Blank on None/empty."""
+                            if not token:
+                                return ""
+                            stem = os.path.splitext(os.path.basename(str(token).strip()))[0]
+                            return (stem or "").strip().upper()
+                        def _key_from_subject_url(url: str) -> str:
+                            """
+                            Map known source URLs to stable weather keys.
+                            Falls back to filename stem if nothing matches.
+                            """
+                            if not url:
+                                return ""
+                            u = url.strip()
+                            low = u.lower()
+                            # GOES West VIS/CIR per your current convention
+                            if "cdn.star.nesdis.noaa.gov" in low and "/abi/sector/wus/" in low:
+                                if "/wus/02/" in low:
+                                    return "WCVS"
+                                if "/wus/13/" in low:
+                                    return "WCIR"
+                            # AccuWeather US composite radar gif
+                            if "accuweather.com" in low and "inmsirus_.gif" in low:
+                                return "USWXRAD"
+                            # NWS State Forecast (Spokane) text
+                            if ("tgftp.nws.noaa.gov" in low and "/data/raw/fp/" in low and low.endswith(".txt")):
+                                return "WA_FOR_WA"
+                            # fallback to filename stem
+                            try:
+                                stem = os.path.splitext(os.path.basename(u))[0]
+                                return (stem or "").strip().upper()
+                            except Exception:
+                                return ""
+                        def _normalize_stem(s: str) -> str:
+                            s = (s or "").strip()
+                            return os.path.splitext(os.path.basename(s))[0].lower()
+                        def _choose_files(files, declared, inquiry_id):
+                            """
+                            Pick exactly one file only when we have an explicit signal:
+                              1) 'Attachment:' filename (case-insensitive exact basename match)
+                              2) 'Inquiry ID' match on basename (then stem), case-insensitive
+                            Otherwise, keep the original list unchanged.
+                            """
+                            files = list(files or [])
+                            if not files:
+                                return []
+                            # (1) Declared filename takes precedence
+                            if declared:
+                                want = os.path.basename(str(declared).strip())
+                                for f in files:
+                                    if os.path.basename(f).lower() == want.lower():
+                                        return [f]
+                            # (2) Inquiry ID match (basename, then stem)
+                            if inquiry_id:
+                                want_full = str(inquiry_id).strip()
+                                want_base = os.path.basename(want_full).lower()
+                                want_stem = _normalize_stem(want_full)
+                                for f in files:
+                                    if os.path.basename(f).lower() == want_base:
+                                        return [f]
+                                for f in files:
+                                    if _normalize_stem(f) == want_stem:
+                                        return [f]
+                            return files
+
+                        # Read bytes off disk (no DB lock yet)
+                        pick = _choose_files(new_files, declared_attachment, inquiry_id_hint)
+                        # Determine a stable target key from Inquiry ID or subject URL (if available)
+                        weather_key = _key_from_inquiry_id(inquiry_id_hint) or _key_from_subject_url(subject_url or "")
+                        to_ingest: list[tuple[str, bytes, str | None]] = []
+                        if weather_key and pick:
+                            # When we have a specific key, ingest only the chosen file (first if none declared)
+                            fname = pick[0]
+                            fp = os.path.join(dest_dir or "", fname)
+                            try:
+                                with open(fp, "rb") as f:
+                                    data = f.read()
+                            except Exception as e:
+                                try: LOG.warning("Weather ingest: failed to read %s: %s", fp, e)
+                                except Exception: pass
+                                data = b""
+                            if data:
+                                try:
+                                    mime, _ = mimetypes.guess_type(fp)
+                                except Exception:
+                                    mime = None
+                                to_ingest.append((weather_key, data, mime))
+                        else:
+                            # No mapping → ingest each file under its filename-derived key (existing behavior)
+                            for fname in pick:
+                                fp = os.path.join(dest_dir or "", fname)
+                                try:
+                                    with open(fp, "rb") as f:
+                                        data = f.read()
+                                except Exception as e:
+                                    try: LOG.warning("Weather ingest: failed to read %s: %s", fp, e)
+                                    except Exception: pass
+                                    continue
+                                try:
+                                    mime, _ = mimetypes.guess_type(fp)
+                                except Exception:
+                                    mime = None
+                                to_ingest.append((_weather_key_from_filename(fname), data, mime))
+
+                        if to_ingest:
+                            now_iso = iso8601_ceil_utc()
+                            try:
+                                with sqlite3.connect(DB_FILE) as conn:
+                                    conn.execute("PRAGMA busy_timeout=10000;")
+                                    # Assumes table weather_products exists with:
+                                    # key TEXT PRIMARY KEY, display_name TEXT, mime TEXT, content BLOB,
+                                    # content_hash TEXT, source TEXT, received_at_utc TEXT, updated_at_utc TEXT
+                                    for key, data, mime in to_ingest:
+                                        if not key or not data:
+                                            continue
+                                        h = hashlib.sha256(data).hexdigest()
+                                        # UPSERT: always bump received_at_utc; only overwrite bytes when hash differs
+                                        conn.execute("""
+                                            INSERT INTO weather_products
+                                                (key, display_name, mime, content, content_hash, source, received_at_utc, updated_at_utc)
+                                            VALUES (?, ?, ?, ?, ?, 'winlink', ?, ?)
+                                            ON CONFLICT(key) DO UPDATE SET
+                                                received_at_utc = excluded.received_at_utc,
+                                                -- only rewrite heavy columns when content actually changed
+                                                content         = CASE
+                                                                     WHEN weather_products.content_hash IS NOT excluded.content_hash
+                                                                     THEN excluded.content ELSE weather_products.content END,
+                                                mime            = CASE
+                                                                     WHEN weather_products.content_hash IS NOT excluded.content_hash
+                                                                     THEN excluded.mime ELSE weather_products.mime END,
+                                                content_hash    = CASE
+                                                                     WHEN weather_products.content_hash IS NOT excluded.content_hash
+                                                                     THEN excluded.content_hash ELSE weather_products.content_hash END,
+                                                updated_at_utc  = CASE
+                                                                     WHEN weather_products.content_hash IS NOT excluded.content_hash
+                                                                     THEN excluded.updated_at_utc ELSE weather_products.updated_at_utc END
+                                        """, (
+                                            key, key, (mime or "application/octet-stream"),
+                                            sqlite3.Binary(data), h, now_iso, now_iso
+                                        ))
+                                try:
+                                    LOG.info("Weather ingest: %d file(s) from msg %s → weather_products", len(to_ingest), msg_id)
+                                except Exception:
+                                    pass
+                                # mark that we handled a weather product from attachments
+                                weather_handled = True
+                            except Exception as e:
+                                try: LOG.exception("Weather ingest failed for msg %s: %s", msg_id, e)
+                                except Exception: pass
+                    else:
+                        # No files appeared. Ensure attachment_dir is set AND has_attachments is reset to 0.
+                        with sqlite3.connect(DB_FILE) as conn:
+                            conn.execute("""
+                                UPDATE winlink_messages
+                                   SET attachment_dir=COALESCE(attachment_dir, ?),
+                                       has_attachments=0
+                                 WHERE id=?
+                            """, (dest_dir, msg_id))
+                    # ─────────────────────────────────────────────────────────────
+                    # Inline-text weather ingestion (no attachments)
+                    # Handles products like WA_FOR_WA where the body contains the text.
+                    # ─────────────────────────────────────────────────────────────
+                    if msg_id and (not saved_any):
+                        try:
+                            def _key_from_inquiry_id(token):
+                                if not token:
+                                    return ""
+                                stem = os.path.splitext(os.path.basename(str(token).strip()))[0]
+                                return (stem or "").strip().upper()
+                            def _key_from_subject_url(url: str) -> str:
+                                if not url:
+                                    return ""
+                                u = url.strip()
+                                low = u.lower()
+                                if "cdn.star.nesdis.noaa.gov" in low and "/abi/sector/wus/" in low:
+                                    if "/wus/02/" in low:
+                                        return "WCVS"
+                                    if "/wus/13/" in low:
+                                        return "WCIR"
+                                if "accuweather.com" in low and "inmsirus_.gif" in low:
+                                    return "USWXRAD"
+                                if ("tgftp.nws.noaa.gov" in low and "/data/raw/fp/" in low and low.endswith(".txt")):
+                                    return "WA_FOR_WA"
+                                try:
+                                    stem = os.path.splitext(os.path.basename(u))[0]
+                                    return (stem or "").strip().upper()
+                                except Exception:
+                                    return ""
+                            def _strip_service_headers(text):
+                                if not text:
+                                    return ""
+                                drops = ("resource url:", "inquiry id:", "attachment:", "note:")
+                                out = []
+                                for ln in str(text).splitlines():
+                                    if any(ln.lower().lstrip().startswith(d) for d in drops):
+                                        continue
+                                    out.append(ln)
+                                return "\n".join(out).strip()
+
+                            weather_key = _key_from_inquiry_id(inquiry_id_hint) or _key_from_subject_url(subject_url or "")
+                            cleaned = _strip_service_headers(body)
+                            if weather_key and cleaned:
+                                data = cleaned.encode("utf-8", errors="replace")
+                                now_iso = iso8601_ceil_utc()
+                                h = hashlib.sha256(data).hexdigest()
+                                with sqlite3.connect(DB_FILE) as conn:
+                                    conn.execute("PRAGMA busy_timeout=10000;")
+                                    conn.execute("""
+                                    INSERT INTO weather_products
+                                        (key, display_name, mime, content, content_hash, source, received_at_utc, updated_at_utc)
+                                    VALUES (?, ?, 'text/plain', ?, ?, 'winlink', ?, ?)
+                                    ON CONFLICT(key) DO UPDATE SET
+                                        received_at_utc = excluded.received_at_utc,
+                                        content         = CASE
+                                                            WHEN weather_products.content_hash IS NOT excluded.content_hash
+                                                            THEN excluded.content ELSE weather_products.content END,
+                                        mime            = CASE
+                                                            WHEN weather_products.content_hash IS NOT excluded.content_hash
+                                                            THEN excluded.mime ELSE weather_products.mime END,
+                                        content_hash    = CASE
+                                                            WHEN weather_products.content_hash IS NOT excluded.content_hash
+                                                            THEN excluded.content_hash ELSE weather_products.content_hash END,
+                                        updated_at_utc  = CASE
+                                                            WHEN weather_products.content_hash IS NOT excluded.content_hash
+                                                            THEN excluded.updated_at_utc ELSE weather_products.updated_at_utc END
+                                    """, (weather_key, weather_key, sqlite3.Binary(data), h, now_iso, now_iso))
+                                try:
+                                    LOG.info("Weather ingest (inline): %s (text/plain, %d bytes)", weather_key, len(data))
+                                except Exception:
+                                    pass
+                                # handled a weather product from inline text
+                                weather_handled = True
+                        except Exception as e:
+                            try: LOG.exception("Inline weather ingest error for msg %s: %s", msg_id, e)
+                            except Exception: pass
+                except Exception as e:
+                    try:
+                        LOG.warning("PAT attachment handling error for MID %s: %s", mid, e)
+                    except Exception:
+                        pass
+
+            # If we ingested any weather product (attachments or inline), mark the message parsed now
+            if msg_id and weather_handled:
+                try:
+                    with sqlite3.connect(DB_FILE) as conn:
+                        conn.execute("UPDATE winlink_messages SET parsed=1 WHERE id=?", (msg_id,))
+                except Exception:
                     pass
+
+            # 6) remove the .b2f so we don’t re-read it next time
+            try:
+                b2f_path = os.path.join(inbox_dir, f"{mid}.b2f")
+                if os.path.exists(b2f_path):
+                    os.remove(b2f_path)
+            except OSError:
+                pass
 
 def process_unparsed_winlink_messages():
     """APScheduler job: parse any new inbound WinLink messages."""
@@ -1229,7 +1624,7 @@ def process_unparsed_winlink_messages():
                     continue
                 requested_tokens.append(ct)
             try:
-                logger.debug("AOCT query tokens: raw=%r → requested=%r", raw_tokens, requested_tokens)
+                LOG.debug("AOCT query tokens: raw=%r → requested=%r", raw_tokens, requested_tokens)
             except Exception:
                 pass
             snapshot, human, csv_text = build_inventory_snapshot(requested_tokens)

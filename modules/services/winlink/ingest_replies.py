@@ -4,6 +4,10 @@ import csv
 import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
+import os
+import mimetypes
+
+from modules.utils.common import upsert_weather_product, looks_ascii_text, get_wx_keys
 
 from modules.utils.common import (
     get_db_file,
@@ -266,3 +270,36 @@ def ingest_aoct_flight_reply(msg: dict) -> bool:
     except Exception:
         # never hard-fail the poll endpoint
         return False
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Weather auto-ingestion (optional): call this for each Winlink attachment
+# whose filename and bytes you’ve extracted from an INBOUND message.
+# Slots are keyed by filename (uppercased); WA_FOR_WA is forced to text/plain.
+# Returns True only if the attachment was recognized and ingested.
+# ─────────────────────────────────────────────────────────────────────────────
+WX_KEYS = set(k.upper() for k in get_wx_keys())
+
+def maybe_ingest_weather_attachment(filename: str, data: bytes) -> bool:
+    """
+    Decide if an inbound attachment should be ingested into weather_products.
+    Recognizes any configured key from get_wx_keys(), plus WA_FOR_WA* aliasing.
+    """
+    try:
+        base = (os.path.basename(filename) or "").strip().upper()
+        if not base:
+            return False
+        key = "WA_FOR_WA" if base.startswith("WA_FOR_WA") else base
+        if key not in WX_KEYS:
+            return False
+        # Guess MIME; prefer text/plain when bytes look like ASCII
+        mime = (mimetypes.guess_type(filename)[0]
+                or ("text/plain" if looks_ascii_text(data) else "application/octet-stream"))
+        if key == "WA_FOR_WA":
+            mime = "text/plain"
+        upsert_weather_product(key, data, mime, source="winlink")
+        return True
+    except Exception:
+        return False
+
+# NOTE: If/when your Winlink parser extracts attachments in the polling path,
+# call maybe_ingest_weather_attachment(...) for each attachment payload.

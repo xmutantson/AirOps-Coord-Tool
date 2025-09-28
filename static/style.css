@@ -1780,3 +1780,90 @@ details.req-group[open] > summary.req-group-h::before { transform: rotate(90deg)
 }
 /* If any global rule targets direct children (form > button), dodge it: */
 #setup-wizard-form > button[type="button"]{ grid-column: 1 / -1 !important; }
+
+/* ===============================================================
+   Page: Weather – grid & card layout
+   =============================================================== */
+.wx-toolbar{
+  display:flex;
+  flex-wrap:wrap;
+  gap:.75rem;
+  align-items:center;
+  margin:.5rem 0 1rem;
+}
+.wx-request-box{
+  display:flex;
+  gap:.5rem;
+  align-items:center;
+  border:1px solid #ddd;
+  padding:.5rem .75rem;
+  border-radius:8px;
+  background:#fff;
+}
+.wx-inline{
+  display:inline-flex;
+  gap:.25rem;
+  align-items:center;
+  margin-left:.25rem;
+}
+.wx-status{
+  font-size:12px;
+  color:var(--muted);
+}
+.wx-cards{
+  display:grid;
+  grid-template-columns:repeat(4, minmax(0, 1fr));
+  gap:0;                 /* no spacing between cards */
+  width:100%;
+}
+.wx-card{
+  border:1px solid #ddd;
+  border-right:0;        /* inner vertical borders only */
+  border-bottom:0;       /* inner horizontal borders */
+  padding:0;
+  background:#fff;
+  overflow:hidden;
+}
+/* Restore right border on every 4th card to close the row */
+.wx-cards > .wx-card:nth-child(4n){
+  border-right:1px solid #ddd;
+}
+.wx-card__meta{
+  padding:8px 10px;
+  border-bottom:1px solid #eee;
+  font-size:14px;
+  line-height:1.3;
+}
+.wx-name{ font-weight:600; }
+.wx-sub { color:#666; font-size:12px; }
+.wx-card--image img{
+  display:block;
+  width:100%;
+  height:auto;
+  object-fit:contain;
+}
+/* Text product spans full width of the 4 image columns */
+.wx-card--text{
+  grid-column:1 / -1;
+  border-right:1px solid #ddd; /* close the row edge */
+}
+.wx-textbody{
+  white-space:pre-wrap;
+  font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  min-height:8em;
+  padding:12px;
+  background:#fafafa;
+  border-top:1px solid #eee;
+}
+.wx-upload{
+  padding:10px 12px;
+  border-top:1px solid #eee;
+}
+.wx-preview{
+  margin-top:8px;
+}
+.wx-preview-body{
+  margin-top:8px;
+  display:grid;
+  gap:.75rem;
+}
