@@ -120,6 +120,23 @@ docker compose up -d
 
 ```
 
+### Build strings:
+
+```
+# (re-tag & push to GHCR)
+export TAG="v$(date +%Y.%m.%d)"
+export GHCR_USER="xmutantson"
+
+docker buildx build \
+  --platform "linux/amd64,linux/386,linux/arm/v7,linux/arm64" \
+  --cache-from=type=registry,ref=ghcr.io/$GHCR_USER/aircraft_ops_tool:buildcache \
+  --cache-to=type=registry,ref=ghcr.io/$GHCR_USER/aircraft_ops_tool:buildcache,mode=max \
+  -t ghcr.io/$GHCR_USER/aircraft_ops_tool:latest \
+  -t ghcr.io/$GHCR_USER/aircraft_ops_tool:$TAG \
+  --push .
+
+```
+
 > The container can optionally **start Direwolf** itself (using your DigiRig CM108 PTT). If you already run Direwolf externally, set `DIGIRIG_ENABLE=0` and just keep KISS-TCP reachable at `KISS_HOST:KISS_PORT`.
 
 ---
