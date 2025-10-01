@@ -295,7 +295,7 @@ def locates_index():
     """
     tail = (request.args.get('tail') or '').strip().upper()
     if tail:
-        return render_template('locates.html', view='map', tail=tail)
+        return render_template('locates.html', active='supervisor', view='map', tail=tail)
 
     q = (request.args.get('q') or '').strip().upper()
     where = ""
@@ -312,7 +312,7 @@ def locates_index():
          ORDER BY id DESC
          LIMIT 500
     """, params)
-    return render_template('locates.html', view='list', locates=rows, q=q)
+    return render_template('locates.html', active='supervisor', view='list', locates=rows, q=q)
 
 @bp.route('/_supervisor_counts')
 def supervisor_counts_partial():

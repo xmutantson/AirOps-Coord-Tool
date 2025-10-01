@@ -41,7 +41,10 @@ def _list_files() -> List[Dict]:
 def training_index():
     """Training hub: lists files and shows the collapsible 'All Help Topics' directory."""
     files = _list_files()
-    return render_template("training.html", files=files, training_dir=_training_dir())
+    return render_template("training.html",
+                           active="training",
+                           files=files,
+                           training_dir=_training_dir())
 
 @bp.get("/files/<path:filename>")
 def training_file(filename: str):

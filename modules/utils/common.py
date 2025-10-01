@@ -1406,7 +1406,7 @@ def load_airports_from_csv():
                 """, (ident, name, icao, iata, gps, local))
             except sqlite3.IntegrityError as e:
                 # If a uniqueness clash on iata/icao occurs, just skip that row.
-                logger.debug("airports.csv upsert skipped for ident=%s (%s)", ident, e)
+                # logger.debug("airports.csv upsert skipped for ident=%s (%s)", ident, e) #this is LOUD
                 continue
 
     # Any refresh invalidates cached lookups.

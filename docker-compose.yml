@@ -9,11 +9,15 @@ services:
     devices:
       - /dev/snd
       - /dev/digrig-ptt:/dev/digrig-ptt
+      - /dev/bus/usb:/dev/bus/usb
+    device_cgroup_rules:
+      - "c 189:* rwm"   # allow USB devices
     group_add:
       - audio
 
     cap_add:
       - SYS_TIME                       # required to change host clock from inside container
+      - NET_RAW                        # required for ICMPPING to test internet status
 
     environment:
       # ---- System Time Autoset ----
@@ -74,6 +78,25 @@ services:
       AOCT_SQL_TRACE: "1"        # set "1" to enable sqlite trace hook
       AOCT_SQL_TRACE_EXPANDED: "0"
       PYTHONUNBUFFERED: "1"      # flush logs promptly
+
+      # ---- SAME decoding (managed by app) ----
+      AOCT_SAME_ENABLE: "1"
+      # Modes: rtl_fm | udp | airband
+      # Use 'airband' to have the app write a 7-channel rtl_airband config and run it.
+      AOCT_SAME_MODE: "airband"
+      AOCT_SAME_SERIAL: "978"     # USB iSerial of the freed dongle
+      AOCT_SAME_INDEX: ""         # <— force serial-based selection
+      AOCT_SAME_GAIN: "38.6"      # rtl-sdr gain
+      # For rtl_fm fallback (single-channel):
+      AOCT_SAME_FREQ: "162.550"
+
+      # UDP fan-out config used by airband & udp modes
+      # Base port for WX freqs (162.400→162.550): will allocate 7 ports sequentially.
+      AOCT_SAME_UDP_BASE: "5551"
+      # Expected UDP input rate from rtl_airband (NFM usually 16000; otherwise 8000)
+      AOCT_SAME_UDP_RATE: "16000"
+      # De-dupe identical SAME headers within N seconds (cross-station)
+      AOCT_SAME_DEDUPE_SEC: "60"
 
     ulimits:
       nofile:

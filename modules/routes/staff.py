@@ -45,8 +45,8 @@ def staff_list():
     rows = list_staff(window)
     # Partial table refresh for AJAX
     if request.args.get("partial") == "1" or request.headers.get("X-Requested-With") == "XMLHttpRequest":
-        return render_template("partials/_staff_table.html", rows=rows, window=window)
-    return render_template("supervisor_staff.html", rows=rows, window=window)
+        return render_template("partials/_staff_table.html", active='supervisor', rows=rows, window=window)
+    return render_template("supervisor_staff.html", active='supervisor', rows=rows, window=window)
 
 @bp.route("/supervisor/staff/new", methods=["POST"])
 def staff_new():

@@ -8,10 +8,16 @@
   <div class="wx-reqbox">
     <strong>Request updates:</strong>
     <label class="wx-inline">
-      <input type="radio" name="wxMode" value="pat" checked> via PAT
+      {% set wl_ok = winlink_job_active|default(False) %}
+      <input type="radio" name="wxMode" value="pat"
+             {% if wl_ok %}checked{% else %}disabled{% endif %}> via PAT
+      {% if not wl_ok %}
+        <span class="muted" style="margin-left:.25rem;"
+              title="Start WinLink polling from the Radio page">requires WinLink polling</span>
+      {% endif %}
     </label>
     <label class="wx-inline">
-      <input type="radio" name="wxMode" value="preview"> manual compose
+      <input type="radio" name="wxMode" value="preview" {% if not wl_ok %}checked{% endif %}> manual compose
     </label>
     <!-- keep split in DOM but hard-hidden/disabled so we can re-enable later -->
     <label class="wx-inline hidden" title="Send one message per product (recommended)"
@@ -21,6 +27,17 @@
     <button id="wx-request" type="button">Go</button>
   </div>
   <span id="wx-request-status" class="wx-status"></span>
+  <!-- Right-justified SAME toggle -->
+  <button id="same-toggle" type="button" class="button" style="margin-left:auto">
+    SAME Alerts <span id="same-badge" style="display:none;margin-left:.35rem;border-radius:9px;padding:.05rem .4rem;font-size:.8em;background:#b00020;color:#fff;">NEW</span>
+  </button>
+</div>
+
+<!-- Collapsible SAME panel (pushes maps down when opened) -->
+<div id="same-panel" style="display:none; margin:.5rem 0 1rem;">
+  <!-- content injected by script below -->
+  <div id="same-panel-body"></div>
+  <hr>
 </div>
 
 <div id="wx-cards" class="wx-cards"></div>
@@ -321,6 +338,226 @@
       console.error('Upload error', err);
     }
   });
+})();
+</script>
+
+<script>
+(function(){
+  // Pick best stream format that the browser can play; fall back to WAV.
+  function detectStreamFmt(){
+    const a = document.createElement('audio');
+    if (a && typeof a.canPlayType === 'function') {
+      if (a.canPlayType('audio/ogg; codecs="opus"')) return 'ogg';
+      if (a.canPlayType('audio/webm; codecs=opus')) return 'webm';
+    }
+    return 'wav';
+  }
+  const $ = s => document.querySelector(s);
+  const panel = $('#same-panel');
+  const panelBody = $('#same-panel-body');
+  const toggleBtn = $('#same-toggle');
+  const badge = $('#same-badge');
+  const STORAGE_SEEN = 'same_last_seen';
+  let showHidden = false;
+  const STREAM_FMT = detectStreamFmt();  // 'ogg' | 'webm' | 'wav'
+
+  function renderPanelShell(){
+    panelBody.innerHTML = `
+      <div class="wx-toolbar" style="gap:.5rem; flex-wrap:wrap;">
+        <div>
+          <button id="same-start" type="button">Start SAME</button>
+          <button id="same-stop"  type="button">Stop SAME</button>
+          <span id="same-status" class="wx-status"></span>
+          <button id="same-refresh" type="button" style="margin-left:.5rem;">Refresh</button>
+        </div>
+        <div style="margin-left:auto; display:flex; align-items:center; gap:.75rem;">
+          <label class="wx-inline"><input id="same-show-hidden" type="checkbox"> show hidden</label>
+          <button id="same-mark-read" type="button" title="Mark newest as seen">Mark read</button>
+        </div>
+      </div>
+
+      <!-- Live Monitor -->
+      <div class="wx-toolbar" style="gap:.5rem; flex-wrap:wrap;">
+        <div id="same-mon-chans"></div>
+        <div style="margin-left:auto; display:flex; gap:.5rem;">
+          <button id="same-audio-start" type="button">Start audio</button>
+          <button id="same-mon-stop" type="button">Stop audio</button>
+        </div>
+      </div>
+      <audio id="same-audio" controls preload="none" style="width:100%;max-width:520px;display:block;margin:.25rem 0 1rem;"></audio>
+
+      <table id="same-table" class="table">
+        <thead>
+          <tr><th>Received (UTC)</th><th>Freq</th><th>Event</th><th>Areas</th><th>Header</th><th></th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    `;
+
+    // Wire buttons
+    const status = $('#same-status');
+    const tBody = $('#same-table tbody');
+    const btnStart = $('#same-start');
+    const btnStop  = $('#same-stop');
+    const btnRef   = $('#same-refresh');
+    const btnMark  = $('#same-mark-read');
+    const chkHidden= $('#same-show-hidden');
+    const audio    = $('#same-audio');
+    const monList  = $('#same-mon-chans');
+    const monStop  = $('#same-mon-stop');
+
+    async function loadAlerts(){
+      const r = await fetch(`/api/weather/alerts?n=50&include_hidden=${showHidden?1:0}`);
+      const j = await r.json().catch(()=>({ok:false}));
+      if (!j.ok) return;
+      const run = j.status?.running ? 'listening' : 'stopped';
+      const mode = j.status?.mode || '';
+      status.textContent = `${run} (${mode})`;
+      const rows = (j.alerts||[]).map(a=>{
+        const d = a.decoded || {};
+        const event = d.event || d.EEE || (d.text||'');
+        const areas = Array.isArray(d?.areas) ? d.areas.join(',') :
+                      (Array.isArray(d?.FIPS) ? d.FIPS.join(',') : '');
+        const mhz = (a.frequency_mhz!=null)? a.frequency_mhz.toFixed(3) : '';
+        const action = a.is_hidden
+          ? `<button data-unhide="${a.id}" class="button small">Restore</button>`
+          : `<button data-hide="${a.id}" class="button small">Hide</button>`;
+        const muted = a.is_hidden ? ' style="opacity:.5;"' : '';
+        return `<tr${muted}>
+          <td>${a.received_at_utc||''}</td>
+          <td>${mhz}</td>
+          <td>${event}</td>
+          <td>${areas}</td>
+          <td><code style="font-size:.85em">${a.header}</code></td>
+          <td>${action}</td>
+        </tr>`;
+      }).join('');
+      tBody.innerHTML = rows || `<tr><td colspan="6" class="muted">no alerts yet</td></tr>`;
+
+      // NEW badge logic
+      const latest = j.latest_utc || '';
+      const lastSeen = localStorage.getItem(STORAGE_SEEN) || '';
+      if (latest && (!lastSeen || latest > lastSeen)){
+        badge.style.display = 'inline-block';
+      } else {
+        badge.style.display = 'none';
+      }
+      // Expose to base template (navbar) to clear red state when marked
+      window.__sameLatest = latest;
+    }
+
+    // Hide/unhide actions
+    tBody.addEventListener('click', async (e)=>{
+      const btn = e.target.closest('button');
+      if (!btn) return;
+      if (btn.dataset.hide || btn.dataset.unhide){
+        const id = parseInt(btn.dataset.hide || btn.dataset.unhide, 10);
+        const hide = !!btn.dataset.hide;
+        await fetch('/api/weather/alerts/hide', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({id, hide})
+        });
+        loadAlerts();
+      }
+    });
+
+    // Monitor UI
+    async function loadChans(){
+      const r = await fetch('/api/weather/same/channels');
+      const j = await r.json().catch(()=>({ok:false}));
+      if (!j.ok) return;
+      monList.innerHTML = '';
+      (j.channels||[]).forEach((c)=>{
+        const b = document.createElement('button');
+        b.type='button';
+        b.textContent = `${c.freq_mhz.toFixed(3)} MHz`;
+        b.addEventListener('click', ()=>{
+          // Ensure clean handoff to new stream to avoid UA aborts
+          try { audio.pause(); } catch(_) {}
+          try { audio.removeAttribute('src'); audio.load(); } catch(_) {}
+          // cache-bust so the browser doesn’t reuse a half-open connection
+          const ts = Date.now();
+          audio.src = `/api/weather/same/stream?ch=${c.ch}&fmt=${STREAM_FMT}&ts=${ts}`;
+          audio.play().catch(()=>{ /* ignore autoplay/gesture errors */ });
+        });
+        monList.appendChild(b);
+      });
+    }
+    monStop.addEventListener('click', ()=>{
+      audio.pause(); audio.removeAttribute('src'); audio.load();
+    });
+    loadChans();
+
+    // Manual "Start audio" button (satisfies autoplay policies & helps testing)
+    const btnAudioStart = $('#same-audio-start');
+    btnAudioStart?.addEventListener('click', ()=>{
+      try { audio.muted = false; } catch(_) {}
+      try { audio.volume = 1; } catch(_) {}
+      if (!audio.src) {
+        const ts = Date.now();
+        audio.src = `/api/weather/same/stream?ch=0&fmt=${STREAM_FMT}&ts=${ts}`;
+      }
+      audio.play().catch(()=>{
+        // On failure (e.g., libopus missing or UA quirk), try WAV once.
+        if (!/fmt=wav/.test(audio.src)) {
+          try { audio.pause(); } catch(_) {}
+          try { audio.removeAttribute('src'); audio.load(); } catch(_) {}
+          const ts2 = Date.now();
+          audio.src = `/api/weather/same/stream?ch=0&fmt=wav&ts=${ts2}`;
+          audio.play().catch(()=>{});
+        }
+      });
+    });
+
+    // Panel controls
+    btnStart?.addEventListener('click', async ()=>{ await fetch('/api/weather/same/start', {method:'POST'}); loadAlerts(); });
+    btnStop ?.addEventListener('click', async ()=>{ await fetch('/api/weather/same/stop',  {method:'POST'}); loadAlerts(); });
+    btnRef  ?.addEventListener('click', loadAlerts);
+    chkHidden?.addEventListener('change', ()=>{ showHidden = !!chkHidden.checked; loadAlerts(); });
+    btnMark ?.addEventListener('click', ()=>{
+      const ts = window.__sameLatest || new Date().toISOString();
+      localStorage.setItem(STORAGE_SEEN, ts);
+      badge.style.display = 'none';
+      if (typeof window.__sameMarkSeen === 'function') window.__sameMarkSeen(ts);
+    });
+
+    loadAlerts();
+    // Keep updating while panel is open
+    panel._sameTimer && clearInterval(panel._sameTimer);
+    panel._sameTimer = setInterval(loadAlerts, 10000);
+  }
+
+  // Toggle handler
+  toggleBtn.addEventListener('click', ()=>{
+    const open = panel.style.display !== 'none';
+    if (open){
+      panel.style.display = 'none';
+      if (panel._sameTimer) { clearInterval(panel._sameTimer); panel._sameTimer = null; }
+    }else{
+      panel.style.display = 'block';
+      renderPanelShell();
+      // mark seen immediately on open (UX: you saw the panel)
+      const ts = window.__sameLatest || new Date().toISOString();
+      localStorage.setItem(STORAGE_SEEN, ts);
+      badge.style.display = 'none';
+      if (typeof window.__sameMarkSeen === 'function') window.__sameMarkSeen(ts);
+    }
+  });
+
+  // Background poll to update NEW badge while collapsed
+  async function pollHead(){
+    try{
+      const r = await fetch('/api/weather/alerts/head');
+      const j = await r.json().catch(()=>({ok:false}));
+      if (!j.ok) return;
+      const latest = j.latest || '';
+      window.__sameLatest = latest;
+      const lastSeen = localStorage.getItem(STORAGE_SEEN) || '';
+      badge.style.display = (latest && (!lastSeen || latest > lastSeen)) ? 'inline-block' : 'none';
+    }catch(_){}
+  }
+  setInterval(pollHead, 20000);
 })();
 </script>
 {% endblock %}

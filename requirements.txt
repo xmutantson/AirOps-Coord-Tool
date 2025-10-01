@@ -16,3 +16,5 @@ zeroconf==0.147.0
 APScheduler==3.10.4
 PyYAML>=6.0.1,<7
 WeasyPrint>=60.0
+dsame3_simple
+pyrtlsdr>=0.3.0

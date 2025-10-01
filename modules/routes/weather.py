@@ -1,15 +1,20 @@
 from __future__ import annotations
 
-from flask import Blueprint, render_template, jsonify, request, abort, make_response
+from modules.services import same_ingest
+from flask import Blueprint, render_template, jsonify, request, abort, make_response, Response
+from flask import stream_with_context
+import subprocess
+import socket, array, select, math
+import time
 from datetime import datetime, timezone
 from werkzeug.utils import secure_filename
 from jinja2 import TemplateNotFound
 from threading import Thread
 from typing import List, Dict
 import os  # for stem handling (canonicalization)
-import time
 import hashlib
 import json
+from app import scheduler
 
 from modules.utils.common import (
     dict_rows,
@@ -29,6 +34,12 @@ from modules.services.winlink.core import (
 bp_page = Blueprint("weather_page", __name__, url_prefix="/weather")
 bp_api  = Blueprint("weather_api",  __name__, url_prefix="/api/weather")
 
+# Start the SAME monitor (idempotent; honors AOCT_SAME_ENABLE/… env)
+try:
+    same_ingest.maybe_start_same_monitor()
+except Exception:
+    pass
+
 # ----------------------------- Helpers --------------------------------
 def _stem(s: str) -> str:
     """
@@ -37,12 +48,260 @@ def _stem(s: str) -> str:
     """
     return os.path.splitext((s or "").strip())[0].upper()
 
+# ----------------------------- SAME API ------------------------------
+@bp_api.get("/alerts")
+def alerts():
+    """
+    Recent SAME alerts (decoded + raw header).
+    Query params:
+      - n= count (<=200)
+      - include_hidden= 0|1
+    """
+    n = 50
+    try:
+        n = max(1, min(200, int(request.args.get("n", "50"))))
+    except Exception:
+        pass
+    include_hidden = str(request.args.get("include_hidden", "0")).lower() in ("1","true","yes")
+    alerts = same_ingest.same_recent(n, include_hidden=include_hidden)
+    latest = alerts[0]["received_at_utc"] if alerts else same_ingest.latest_nonhidden_utc()
+    return jsonify({
+        "ok": True,
+        "status": same_ingest.same_status(),
+        "alerts": alerts,
+        "latest_utc": latest,
+    })
+
+@bp_api.post("/same/start")
+def same_start():
+    try:
+        same_ingest.maybe_start_same_monitor()
+        return jsonify({"ok": True, "status": same_ingest.same_status()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@bp_api.get("/same/channels")
+def same_channels():
+    try:
+        return jsonify({"ok": True, "channels": same_ingest.same_channels(), "status": same_ingest.same_status()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@bp_api.get("/same/stream")
+def same_stream():
+    """
+    Stream a live channel as audio (PCM/WAV by default for easy debugging).
+    Pick by ?ch=0..6 or ?port=<udp|monitor>.
+    Optional: ?fmt=wav|ogg|webm (default: wav to avoid codec deps)
+    """
+    try:
+        ch = request.args.get("ch")
+        port = request.args.get("port")
+        fmt = (request.args.get("fmt") or "wav").strip().lower()
+        cmap = same_ingest.same_channels()
+        if fmt not in ("wav", "ogg", "webm"):
+            fmt = "wav"
+        if ch is not None:
+            i = max(0, min(6, int(ch)))
+            mon = cmap[i]["monitor_port"]
+        elif port is not None:
+            p = int(port)
+            rec = next((c for c in cmap if c["monitor_port"] == p or c["udp_port"] == p), None)
+            if not rec:
+                return jsonify({"ok": False, "error": "unknown port"}), 400
+            mon = rec["monitor_port"]
+        else:
+            mon = cmap[0]["monitor_port"]
+
+        # Use reuse=1 so a new reader can bind while the previous ffmpeg is tearing down.
+        input_url = f"udp://127.0.0.1:{mon}?listen=1&reuse=1&fifo_size=1048576&overrun_nonfatal=1"
+        if fmt == "wav":
+            container = "wav"
+            content_type = "audio/wav"
+            codec_args = "-c:a pcm_s16le"
+        else:
+            container = "ogg" if fmt == "ogg" else "webm"
+            content_type = "audio/ogg" if fmt == "ogg" else "audio/webm"
+            # Use libopus when available
+            codec_args = "-c:a libopus -application lowdelay -b:a 64k -frame_duration 20"
+
+        cmd = [
+            "bash", "-lc",
+            (
+              "ffmpeg -hide_banner -loglevel error -nostdin "
+              "-fflags +nobuffer "
+              f"-f {same_ingest.UDP_IN_FMT} -ar {same_ingest.UDP_IN_RATE} -ac 1 -i '{input_url}' "
+              f"{codec_args} -f {container} -"
+            )
+        ]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+
+        # Drain stderr in the background so any ffmpeg error is visible in logs
+        from threading import Thread as _T
+        def _drain():
+            try:
+                from flask import current_app
+                for chunk in iter(lambda: proc.stderr.read(1024), b""):
+                    if not chunk:
+                        break
+                    try:
+                        msg = chunk.decode("utf-8", "ignore").strip()
+                    except Exception:
+                        msg = ""
+                    if msg:
+                        current_app.logger.warning("same_stream ffmpeg: %s", msg)
+            except Exception:
+                pass
+        _T(target=_drain, daemon=True).start()
+
+        def _gen():
+            try:
+                while True:
+                    chunk = proc.stdout.read(4096)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                try: proc.terminate()
+                except Exception: pass
+
+        headers = {
+            "Content-Type": content_type,
+            "Cache-Control": "no-store",
+            "X-Accel-Buffering": "no",
+        }
+        return Response(stream_with_context(_gen()), headers=headers, direct_passthrough=True)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@bp_api.get("/same/diag")
+def same_diag():
+    """
+    Probe a monitor UDP port briefly to confirm packets/levels.
+    Use: /api/weather/same/diag?ch=0&ms=800   (or ?port=5651)
+    Returns: {ok, port, packets, bytes, approx_rms_s16, fmt}
+    """
+    try:
+        ch = request.args.get("ch")
+        port = request.args.get("port")
+        fmt = (request.args.get("fmt") or same_ingest.UDP_IN_FMT).strip().lower()
+        if ch is not None:
+            i = max(0, min(6, int(ch)))
+            mon = same_ingest.same_channels()[i]["monitor_port"]
+        elif port is not None:
+            mon = int(port)
+        else:
+            mon = same_ingest.same_channels()[0]["monitor_port"]
+        dur_ms = max(100, min(5000, int(request.args.get("ms", "800"))))
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        except Exception:
+            pass
+        sock.bind(("127.0.0.1", mon))
+        sock.setblocking(False)
+
+        end = time.time() + (dur_ms / 1000.0)
+        pkts = 0
+        total = 0
+        rms_acc = 0.0
+        rms_n = 0
+        while time.time() < end:
+            r, _, _ = select.select([sock], [], [], 0.05)
+            if not r:
+                continue
+            try:
+                data, _addr = sock.recvfrom(65536)
+            except BlockingIOError:
+                continue
+            if not data:
+                continue
+            pkts += 1
+            total += len(data)
+            # Compute approximate RMS in "s16 units" for compatibility.
+            # - if fmt=f32: scale by 32768 before squaring
+            # - if fmt=s16: use raw int16 values directly
+            if fmt.startswith("f32"):
+                n = len(data) // 4
+                if n:
+                    arr = array.array('f')
+                    arr.frombytes(memoryview(data)[:n*4])
+                    step = max(1, len(arr)//2000)
+                    acc = 0.0; cnt = 0
+                    for v in arr[::step]:
+                        sample = float(v) * 32768.0
+                        acc += sample * sample
+                        cnt += 1
+                    if cnt:
+                        rms_acc += acc / cnt
+                        rms_n += 1
+            else:
+                n = len(data) // 2
+                if n:
+                    arr = array.array('h')
+                    arr.frombytes(memoryview(data)[:n*2])
+                    step = max(1, len(arr)//2000)
+                    acc = 0.0; cnt = 0
+                    for v in arr[::step]:
+                        sample = float(v)
+                        acc += sample * sample
+                        cnt += 1
+                    if cnt:
+                        rms_acc += acc / cnt
+                        rms_n += 1
+        try:
+            sock.close()
+        except Exception:
+            pass
+        approx_rms = float(math.sqrt(rms_acc / rms_n)) if rms_n else 0.0
+        return jsonify({
+            "ok": True,
+            "port": mon,
+            "duration_ms": dur_ms,
+            "packets": pkts,
+            "bytes": total,
+            "fmt": fmt,
+            "approx_rms_s16": round(approx_rms, 1)
+        })
+
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@bp_api.post("/alerts/hide")
+def alerts_hide():
+    js = request.get_json(silent=True) or {}
+    try:
+        alert_id = int(js.get("id"))
+        hide = bool(js.get("hide", True))
+    except Exception:
+        return jsonify({"ok": False, "error": "invalid payload"}), 400
+    ok = same_ingest.hide_alert(alert_id, hide=hide)
+    return jsonify({"ok": ok})
+
+@bp_api.get("/alerts/head")
+def alerts_head():
+    return jsonify({"ok": True, "latest": same_ingest.latest_nonhidden_utc()})
+
+@bp_api.post("/same/stop")
+def same_stop():
+    try:
+        same_ingest.stop_same_monitor()
+        return jsonify({"ok": True, "status": same_ingest.same_status()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
 # ----------------------------- Page ---------------------------------
 @bp_page.get("/")
 def index():
     # Render template if present; otherwise return a tiny fallback shell.
     try:
-        return render_template("weather.html")
+        try:
+            wl_active = (scheduler.get_job('winlink_poll') is not None)
+        except Exception:
+            wl_active = False
+        return render_template("weather.html", active="weather",
+                               winlink_job_active=wl_active)
     except TemplateNotFound:
         html = """
 <!doctype html>
@@ -263,9 +522,15 @@ def request_updates():
     if mode == "preview":
         return jsonify({"ok": True, "messages": msgs, "count": len(msgs)})
 
-    # mode=pat → send via Winlink
-    if not pat_config_exists():
-        return jsonify({"ok": False, "error": "PAT not configured"}), 503
+    # mode=pat → only when poller is running, and PAT is configured
+    if mode == "pat":
+        try:
+            if scheduler.get_job('winlink_poll') is None:
+                return jsonify({"ok": False, "error": "WinLink polling not running"}), 503
+        except Exception:
+            return jsonify({"ok": False, "error": "WinLink scheduler unavailable"}), 503
+        if not pat_config_exists():
+            return jsonify({"ok": False, "error": "PAT not configured"}), 503
 
     ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 

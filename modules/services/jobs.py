@@ -10,6 +10,9 @@ import subprocess
 import glob
 import hashlib
 import mimetypes
+import shutil
+import platform
+import socket
 from apscheduler.schedulers.base import STATE_RUNNING
 from apscheduler.jobstores.base import JobLookupError
 from modules.utils.http import http_post_json
@@ -700,6 +703,10 @@ def configure_winlink_jobs():
     if scheduler.state != STATE_RUNNING:
         scheduler.start()
 
+    # keep the WAN watchdog alive even if PAT is off
+    try: configure_internet_watch_job()
+    except Exception: pass
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Retention & Purge (ADS-B)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -751,6 +758,159 @@ def configure_retention_jobs():
     if scheduler.state != STATE_RUNNING:
         scheduler.start()
 
+# ───────────────────── Internet connectivity watch ─────────────────────
+def _icmp_ping(host: str, timeout_s: float = 1.0) -> bool:
+    """
+    ICMP ping using the system 'ping' (prefers Linux flags; falls back on Windows).
+    Returns True on any successful echo reply.
+    """
+    # Ensure 'ping' exists (containers may lack it entirely)
+    try:
+        if not shutil.which("ping"):
+            return False
+    except Exception:
+        return False
+    is_windows = platform.system().lower().startswith("win")
+    if is_windows:
+        # -n 1 (one echo), -w <ms> (timeout in ms)
+        cmd = ["ping", "-n", "1", "-w", str(int(timeout_s * 1000)), host]
+    else:
+        # -c 1 (one echo), -W <s> (timeout in seconds)
+        cmd = ["ping", "-c", "1", "-W", str(max(1, int(timeout_s))), host]
+    try:
+        p = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        return p.returncode == 0
+    except Exception:
+        return False
+
+def _tcp_probe(host: str, port: int, timeout_s: float = 1.5) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout_s):
+            return True
+    except Exception:
+        return False
+
+def _probe_internet_once(timeout_s: float = 1.5) -> bool:
+    """
+    Fast WAN probe.
+      • ICMP ping BOTH 1.1.1.1 and 8.8.8.8; online if EITHER responds.
+      • If 'ping' is unavailable, fall back to TCP 53 to those hosts.
+    """
+    # Prefer ICMP (never raise)
+    try:
+        a = _icmp_ping("1.1.1.1", timeout_s)
+        b = _icmp_ping("8.8.8.8", timeout_s)
+    except Exception:
+        a = False
+        b = False
+    if a or b:
+        return True
+    # Fallback: TCP DNS port
+    a = _tcp_probe("1.1.1.1", 53, timeout_s)
+    b = _tcp_probe("8.8.8.8", 53, timeout_s)
+    return a or b
+
+def internet_watch_tick():
+    """
+    Runs frequently. On ONLINE→OFFLINE: stop WinLink jobs and remember what to resume.
+    On OFFLINE→ONLINE: resume what was running before.
+    Persists state in preferences.
+    """
+    now_iso = iso8601_ceil_utc()
+    try:
+        online_now = _probe_internet_once()
+    except Exception as e:
+        # Defensive: never let the scheduler job crash due to probe bugs.
+        try:
+            LOG.warning("internet_watch_tick: probe error: %s", e)
+        except Exception:
+            pass
+        online_now = False
+    prev_flag = (get_preference('internet_online') or '').strip().lower()
+    prev_online = (prev_flag == 'yes')
+
+    set_preference('internet_last_check_iso', now_iso)
+
+    # First run after app start:
+    # Assume OFFLINE and that we want to restore WinLink polling when we detect ONLINE.
+    # This prevents flapping at boot and guarantees a resume on first good probe.
+    if prev_flag not in ('yes','no'):
+        set_preference('internet_online', 'no')
+        set_preference('internet_since_iso', now_iso)
+        # Seed a default resume target so first ONLINE starts polling.
+        # (Auto-send will not be resumed unless later set while online.)
+        set_preference('winlink_resume_mask', 'poll')
+        return
+
+    # ONLINE → OFFLINE
+    if (not online_now) and prev_online:
+        set_preference('internet_online', 'no')
+        set_preference('internet_since_iso', now_iso)
+
+        had_poll = bool(scheduler.get_job('winlink_poll') or scheduler.get_job('winlink_parse'))
+        had_auto = bool(scheduler.get_job('winlink_auto_send'))
+
+        for jid in ('winlink_auto_send', 'winlink_parse', 'winlink_poll'):
+            try:
+                scheduler.remove_job(jid)
+            except JobLookupError:
+                pass
+
+        resume_mask = ''
+        if had_auto:
+            resume_mask = 'auto+poll'      # auto implies poll
+        elif had_poll:
+            resume_mask = 'poll'
+        set_preference('winlink_resume_mask', resume_mask)
+        try: LOG.warning("Internet down — suspended WinLink jobs (resume=%s)", resume_mask or 'none')
+        except Exception: pass
+        return
+
+    # OFFLINE → ONLINE
+    if online_now and (not prev_online):
+        set_preference('internet_online', 'yes')
+        set_preference('internet_since_iso', now_iso)
+
+        resume_mask = (get_preference('winlink_resume_mask') or '').strip().lower()
+        try: LOG.info("Internet restored — resume=%s", resume_mask or 'none')
+        except Exception: pass
+
+        if 'auto' in resume_mask:
+            configure_winlink_jobs()
+            configure_winlink_auto_jobs()
+        elif resume_mask == 'poll':
+            configure_winlink_jobs()
+
+        if resume_mask:
+            set_preference('winlink_resume_mask', '')
+        return
+
+def configure_internet_watch_job():
+    """
+    Install/refresh the frequent WAN watchdog.
+    Default every 15s (pref: internet_watch_interval_s). Safe to call often.
+    """
+    try:
+        scheduler.remove_job('internet_watch')
+    except Exception:
+        pass
+    try:
+        interval = int(float(get_preference('internet_watch_interval_s') or 15))
+    except Exception:
+        interval = 15
+    scheduler.add_job(
+        id='internet_watch',
+        func=internet_watch_tick,
+        trigger='interval',
+        seconds=max(5, interval),
+        coalesce=True,
+        max_instances=1,
+        replace_existing=True,
+        misfire_grace_time=max(5, interval),
+    )
+    if scheduler.state != STATE_RUNNING:
+        scheduler.start()
+
 def configure_winlink_auto_jobs():
     """Schedule the auto-send job (every 1m)."""
     # Do not attempt auto-send unless PAT config is usable
@@ -774,6 +934,10 @@ def configure_winlink_auto_jobs():
     )
     if scheduler.state != STATE_RUNNING:
         scheduler.start()
+
+    # keep the WAN watchdog alive
+    try: configure_internet_watch_job()
+    except Exception: pass
 
 def auto_winlink_send_job():
     """Scan unsent outbound flights and dispatch them via PAT automatically."""

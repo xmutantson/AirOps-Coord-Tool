@@ -246,7 +246,7 @@ def _ensure_schema_once():
 def aircraft_list_view():
     q = (request.args.get("q") or "").strip()
     rows = list_aircraft(q or None)
-    return render_template("aircraft_list.html", q=q, rows=rows)
+    return render_template("aircraft_list.html", active='supervisor', q=q, rows=rows)
 
 @bp.get("/new")
 def aircraft_new_form():

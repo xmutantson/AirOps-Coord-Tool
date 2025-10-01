@@ -575,4 +575,44 @@ setInterval(refreshUnreadBadge, 30000);
 {% include 'partials/_correction_modal.html' %}
 <script src="{{ url_for('static', filename='js/radio_correction.js') }}"></script>
 
+<!-- WinLink controls: disable when no internet and show a toast if clicked -->
+<script>
+(function(){
+  const scope = document.querySelector('.winlink-controls');
+  if (!scope) return;
+
+  const buttons = Array.from(scope.querySelectorAll('button'));
+  const DISABLED_MSG = 'No internet detected — WinLink jobs disabled';
+
+  function setEnabled(on){
+    buttons.forEach(btn => {
+      btn.disabled = !on;
+      btn.title = on ? '' : DISABLED_MSG;
+      btn.classList.toggle('btn-disabled', !on);
+    });
+  }
+
+  // initialize from global if already known
+  if (typeof window.__INET_ONLINE === 'boolean') {
+    setEnabled(window.__INET_ONLINE);
+  }
+
+  // react to base.html heartbeat transitions
+  window.addEventListener('inet-status', ev => {
+    setEnabled(!!ev.detail?.online);
+  });
+
+  // intercept any clicks on disabled buttons to show a message
+  scope.addEventListener('click', function(ev){
+    const btn = ev.target.closest('button');
+    if (!btn) return;
+    if (btn.disabled){
+      ev.preventDefault(); ev.stopPropagation();
+      if (window.showToast) window.showToast(DISABLED_MSG, 'warning', 2500);
+      else alert(DISABLED_MSG);
+    }
+  }, true);
+})();
+</script>
+
 {% endblock %}

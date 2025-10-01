@@ -17,6 +17,11 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <meta name="csrf-token" content="{{ csrf_token() }}">
 
+  <style>
+    /* Weather navbar attention state (kept here; everything else moved to CSS) */
+    .main-nav a[data-tab="weather"].alert { background:#b00020; color:#fff; }
+  </style>
+
     <!-- Auto‑reload on CSRF expiry: any fetch that returns 401 → full page reload -->
     <script>
     (function(){
@@ -128,8 +133,10 @@
   {% block content %}{% endblock %}
 </main>
 
-<footer>
-  © {{ current_year }} Kameron Markham (KG7VSN)
+<footer id="app-footer" class="app-footer">
+  <span id="inet-left" class="inet-msg">⚠ No internet detected⚠ </span>
+  <span class="copy">© {{ current_year }} Kameron Markham (KG7VSN)</span>
+  <span id="inet-right" class="inet-msg">⚠ No internet detected⚠ </span>
 </footer>
 
 <!-- ── Time probe: always fire (server enforces once-per-BOOT_ID) ── -->
@@ -215,6 +222,46 @@
   }
   beat();                              // run once at page-load
   setInterval(beat, CHECK_EVERY);      // …then every interval
+})();
+</script>
+
+<!-- ── Internet status poller: reflects server→internet status in footer & Radio tab ── -->
+<script>
+(function(){
+  const POLL_MS = 15000;
+  const footer    = document.getElementById('app-footer');
+  const leftMsg   = document.getElementById('inet-left');
+  const rightMsg  = document.getElementById('inet-right');
+  const radioLink = document.querySelector('.main-nav [data-tab="radio"]');
+  let lastOnline  = null;
+
+  function repaint(on){
+    if (lastOnline === on) return;
+    lastOnline = on;
+    // expose state + broadcast transition so pages can react
+    window.__INET_ONLINE = on;
+    window.dispatchEvent(new CustomEvent('inet-status', { detail:{ online:on } }));
+
+    if (!on){
+      footer?.classList.add('inet-down');
+      radioLink?.classList.add('no-inet');
+    } else {
+      footer?.classList.remove('inet-down');
+      radioLink?.classList.remove('no-inet');
+    }
+  }
+
+  async function check(){
+    try{
+      const r = await fetch("{{ url_for('winlink.internet_status') }}", { cache:"no-store" });
+      const j = await r.json();
+      repaint(!!j.online);
+    }catch(_e){
+      repaint(false);
+    }
+  }
+  check();
+  setInterval(check, POLL_MS);
 })();
 </script>
 
@@ -427,6 +474,52 @@ document.addEventListener('DOMContentLoaded', () => {
 
   loadTabPrefs();
 });
+</script>
+
+<!-- Global SAME alert watcher: turn Weather tab red and ensure visible when unread -->
+<script>
+(function(){
+  const STORAGE_SEEN = 'same_last_seen';
+  let lastSeen = localStorage.getItem(STORAGE_SEEN) || '';
+  const weatherLink = document.querySelector('.main-nav [data-tab="weather"]');
+  const weatherToggleBox = document.querySelector('[data-toggle-tab="weather"]');
+  const POLL_MS = 20000;
+
+  async function check(){
+    try{
+      const r = await fetch("/api/weather/alerts/head", {cache:"no-store"});
+      const j = await r.json().catch(()=>({ok:false}));
+      if (!j.ok) return;
+      const latest = j.latest || '';
+      // If Weather page JS marked seen, respect that live value
+      if (typeof window.__sameLatest === 'string' && window.__sameLatest > latest){
+        // keep navbar consistent with page state
+        j.latest = window.__sameLatest;
+      }
+      const unread = latest && (!lastSeen || latest > lastSeen);
+      if (unread){
+        if (weatherLink){
+          weatherLink.classList.add('alert');
+          weatherLink.style.display = '';           // force visible regardless of prefs
+        }
+        if (weatherToggleBox) weatherToggleBox.checked = true;  // reflect in hamburger
+      }
+    }catch(_){}
+  }
+
+  // Allow pages to mark seen (called by Weather page when panel opens / mark-read)
+  window.__sameMarkSeen = function(ts){
+    lastSeen = ts || new Date().toISOString();
+    localStorage.setItem(STORAGE_SEEN, lastSeen);
+    if (weatherLink) weatherLink.classList.remove('alert');
+  };
+
+  // If already on Weather, clear alert state (page will manage)
+  if (document.body.classList.contains('weather') && weatherLink){
+    weatherLink.classList.remove('alert');
+  }
+  setInterval(check, POLL_MS);
+})();
 </script>
 
 {% block scripts %}{% endblock %}

@@ -457,6 +457,7 @@ def preferences():
 
     return render_template(
         'preferences.html',
+        active='preferences',
         default_origin=default_origin,
         mission_number=mission_number,
         current_code=current_code,

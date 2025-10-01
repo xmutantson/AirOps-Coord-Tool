@@ -16,6 +16,10 @@
   --font-sans: 'Segoe UI', Roboto, Arial, sans-serif;
 
   --highlight-yellow: #FFF9C4;   /* pale yellow feedback       */
+
+  /* Internet-down theme (strong red that isn’t pure) */
+  --inet-red-strong: #dc5e5e;     /* red */
+  --inet-red-pale:   #ffebee;     /* very light red (near white) */
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -62,6 +66,64 @@ footer {
   bottom: 0; left: 0; right: 0;
   background: var(--bg);
   z-index: 1000;
+}
+
+/* ===============================================================
+   Footer + Internet status (locked pulses)
+   - left/right labels sit midway between edge & copyright
+   - background and text pulse together (same speed/ease)
+   - when text is darkest (full opacity), background is lightest
+   =============================================================== */
+/* Apply layout whether footer has an id or not */
+#app-footer.app-footer,
+footer.app-footer{
+  display:grid;
+  grid-template-columns:1fr auto 1fr;
+  align-items:center;
+  gap:.75rem;
+  padding:6px 10px;
+}
+/* accept either ids or classes for the side labels */
+#app-footer #inet-left,  footer.app-footer #inet-left,  footer.app-footer .inet-left  { grid-column:1; justify-self:center; }
+#app-footer .copy,       footer.app-footer .copy                                      { grid-column:2; justify-self:center; }
+#app-footer #inet-right, footer.app-footer #inet-right, footer.app-footer .inet-right { grid-column:3; justify-self:center; }
+
+/* Reserve space for side labels so © stays perfectly centered */
+#app-footer .inet-msg,
+footer.app-footer .inet-msg{
+  font-weight:600;
+  visibility:hidden;              /* hide but keep layout slot */
+  opacity:0;
+}
+/* Reveal + pulse whenever offline is active by any of our flags */
+#app-footer.inet-down .inet-msg,
+footer.app-footer.inet-down .inet-msg,
+body.offline footer.app-footer .inet-msg{
+  visibility:visible;
+  animation: inetPulse 2s ease-in-out infinite;
+}
+@keyframes inetPulse{
+  0%,100% { opacity: .35; }
+  50%     { opacity: 1; }
+}
+
+/* Internet down: strong red that pulses toward white in sync with text */
+#app-footer.inet-down,
+footer.app-footer.inet-down,
+body.offline footer.app-footer{
+  color:#000;                                /* readable on pale frames */
+  background-color: var(--inet-red-strong);  /* initial state */
+  animation: inetBgPulse 2s ease-in-out infinite;
+}
+@keyframes inetBgPulse{
+  0%,100% { background-color: var(--inet-red-strong); }
+  50%     { background-color: var(--inet-red-pale);   }
+}
+
+/* Radio tab badge when no internet */
+.main-nav a[data-tab="radio"].no-inet{
+  background:#b00020;
+  color:#fff;
 }
 
 main.container {
