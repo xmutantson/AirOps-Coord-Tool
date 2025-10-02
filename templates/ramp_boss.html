@@ -824,6 +824,9 @@
       document.querySelector(
         `input[name="direction"][value="${draft.direction}"]`
       ).checked = true;
+      /* Queue edit UX: always show both Origin & Destination so missing Origin can be filled */
+      const odAuto = document.getElementById('rb-od-override');
+      if (odAuto) odAuto.checked = true;
       applyDirUI();
     });
     {% endif %}
@@ -848,15 +851,25 @@
     }
     function validateRampBoss () {
       document.querySelectorAll('#rb-form .form-error').forEach(el => el.remove());
-      // Only validate required fields that are enabled and visible
-      const invalid = Array.from(document.querySelectorAll('#rb-form [required]'))
-                            .filter(f => {
-                              if (f.disabled) return false;
-                              // skip elements hidden via display:none (offsetParent null)
-                              const hidden = (f.offsetParent === null);
-                              if (hidden) return false;
-                              return !String(f.value || '').trim();
-                            });
+      // Validate all required & enabled fields (even if hidden). If Origin/Dest are hidden and
+      // empty, auto-reveal them by checking “Show Origin & Destination” so the user can fix them.
+      const req = Array.from(document.querySelectorAll('#rb-form [required]'))
+                       .filter(f => !f.disabled);
+      let invalid = req.filter(f => !String(f.value || '').trim());
+      if (invalid.length) {
+        const odBox = document.getElementById('rb-od-override');
+        const needsReveal = invalid.some(f =>
+          (f.id === 'origin' || f.id === 'destination') && f.offsetParent === null
+        );
+        if (odBox && needsReveal && !odBox.checked) {
+          odBox.checked = true;
+          try { applyDirUI(); } catch(_) {}
+          // recompute after revealing fields
+          const req2 = Array.from(document.querySelectorAll('#rb-form [required]'))
+                            .filter(f => !f.disabled);
+          invalid = req2.filter(f => !String(f.value || '').trim());
+        }
+      }
       if (invalid.length) {
         invalid.forEach(f => f.classList.add('error'));
         const submitBtn = document.querySelector('#rb-form button[type="submit"]');
@@ -1029,9 +1042,9 @@
         if (fcInput)  fcInput.value = '';
         if (fcStamp)  fcStamp.value = '';
       }
-      /* requiredness still follows direction even if both are visible */
-      originField.required = (dir === 'inbound');
-      destField.required   = (dir === 'outbound');
+      /* Always require BOTH Origin and Destination in all modes (RB + Queue edit) */
+      originField.required = true;
+      destField.required   = true;
 
       /* queue button only for outbound */
       const outbound = (dir === 'outbound');
