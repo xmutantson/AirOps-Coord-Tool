@@ -106,6 +106,13 @@
       return r(el) || r(el?.form) || r(el?.closest?.('form')) || r(el?.closest?.('[data-qid],[data-id]')) || '';
     }
     // ---------- helpers (same math used in Ramp-Boss) ----------
+    function mmddyyLocal () {
+      const d  = new Date();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      const yy = String(d.getFullYear()).slice(-2);
+      return mm + dd + yy;
+    }
     function nowHHMM () {
       const d = new Date();
       return d.getHours().toString().padStart(2,'0') +
@@ -213,11 +220,12 @@
           link.style.display = '';
         }
 
-        // Submit enrichment (time fields); keep your existing behavior
+        // Submit enrichment (time + local-date stamp for flight code)
         f.addEventListener('submit', () => {
           const dep = nowHHMM();
           const eta = (tt.length === 4) ? addHHMM(dep, tt) : '';
-          [['takeoff_time', dep], ['eta', eta]].forEach(([n, v]) => {
+          const stamp = mmddyyLocal() + dep; // e.g., "0513251428"
+          [['takeoff_time', dep], ['eta', eta], ['code_stamp', stamp]].forEach(([n, v]) => {
             if (!v) return;
             const inp = document.createElement('input');
             inp.type = 'hidden'; inp.name = n; inp.value = v;
