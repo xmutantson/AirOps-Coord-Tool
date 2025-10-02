@@ -1037,6 +1037,24 @@
       const outbound = (dir === 'outbound');
       /* drafts are *always* outbound, but keep logic symmetrical */
       queueBtn.style.display = outbound ? '' : 'none';
+      /* Show primary action on INBOUND (Log Arrival); keep hidden on OUTBOUND */
+      (function(){
+        const primary = document.getElementById('rb-ack-send') || document.getElementById('sendBtn');
+        if (!primary) return;
+        if (outbound) {
+          primary.classList.add('is-hidden');
+          primary.setAttribute('hidden', '');
+          primary.setAttribute('aria-hidden', 'true');
+          primary.disabled = true;
+          primary.style.display = 'none';
+        } else {
+          primary.classList.remove('is-hidden');
+          primary.removeAttribute('hidden');
+          primary.removeAttribute('aria-hidden');
+          primary.disabled = false;
+          primary.style.display = '';
+        }
+      })();
       /* Only change label if primary is currently a submit (send mode) */
       (function(){
         const primary = document.getElementById('rb-ack-send') || document.getElementById('sendBtn');

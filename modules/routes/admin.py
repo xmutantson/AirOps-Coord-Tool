@@ -8,7 +8,7 @@ from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, e
 from app import DB_FILE, ONE_YEAR, scheduler
 from modules.services.winlink.core import _configure_pat_from_prefs_silent
 # --- Wargame helpers (import or safe fallbacks) ---
-from modules.services.jobs import configure_wargame_jobs
+from modules.services.jobs import configure_wargame_jobs, configure_internet_watch_job
 try:
     from modules.services.wargame import (reset_wargame_state, set_wargame_epoch, seed_wargame_baseline_inventory, bump_wargame_role_epoch, get_wargame_epoch, initialize_airfield_callsigns)
 except Exception:
@@ -63,6 +63,18 @@ def admin():
             session.pop('admin_unlocked', None)
             flash("🔒 Admin mode locked.", "info")
             return _ret('preferences.preferences')
+
+        # ── Internet detection override ─────────────────────────────
+        if 'internet_force_online' in request.form:
+            val = (request.form.get('internet_force_online','no') or 'no').strip().lower()
+            set_preference('internet_force_online', 'yes' if val == 'yes' else 'no')
+            # Nudge the watchdog to apply the new policy promptly (safe if job not yet running)
+            try:
+                configure_internet_watch_job()
+            except Exception:
+                pass
+            flash("Internet detection override updated.", "info")
+            return _ret('admin.admin')
 
         # ── Toggle Wargame Mode ────────────────────────────
         if 'toggle_wargame' in request.form:
@@ -236,6 +248,7 @@ def admin():
     embedded_name         = get_preference('embedded_name') or ''
     embedded_mode         = get_preference('embedded_mode') or 'iframe'
     enable_1090_distances = get_preference('enable_1090_distances') == 'yes'
+    internet_force_online = (get_preference('internet_force_online') or 'no')
     # pull WinLink prefs for template
     winlink_callsign_1     = get_preference('winlink_callsign_1')  or ''
     winlink_password_1     = get_preference('winlink_password_1')  or ''
@@ -254,6 +267,7 @@ def admin():
       embedded_name=embedded_name,
       embedded_mode=embedded_mode,
       enable_1090_distances=enable_1090_distances,
+      internet_force_online=internet_force_online,
       winlink_callsign_1=winlink_callsign_1,
       winlink_password_1=winlink_password_1,
       winlink_callsign_2=winlink_callsign_2,

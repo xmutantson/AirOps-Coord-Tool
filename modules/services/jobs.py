@@ -817,15 +817,24 @@ def internet_watch_tick():
     Persists state in preferences.
     """
     now_iso = iso8601_ceil_utc()
-    try:
-        online_now = _probe_internet_once()
-    except Exception as e:
-        # Defensive: never let the scheduler job crash due to probe bugs.
+
+    # Admin override: when enabled, treat WAN as online regardless of probe outcome.
+    # Preference values are 'yes'/'no' (default 'no').
+    force_online_pref = (get_preference('internet_force_online') or '').strip().lower()
+    force_online = (force_online_pref == 'yes')
+
+    if not force_online:
         try:
-            LOG.warning("internet_watch_tick: probe error: %s", e)
-        except Exception:
-            pass
-        online_now = False
+            online_now = _probe_internet_once()
+        except Exception as e:
+            # Defensive: never let the scheduler job crash due to probe bugs.
+            try:
+                LOG.warning("internet_watch_tick: probe error: %s", e)
+            except Exception:
+                pass
+            online_now = False
+    else:
+        online_now = True
     prev_flag = (get_preference('internet_online') or '').strip().lower()
     prev_online = (prev_flag == 'yes')
 
@@ -835,12 +844,31 @@ def internet_watch_tick():
     # Assume OFFLINE and that we want to restore WinLink polling when we detect ONLINE.
     # This prevents flapping at boot and guarantees a resume on first good probe.
     if prev_flag not in ('yes','no'):
-        set_preference('internet_online', 'no')
-        set_preference('internet_since_iso', now_iso)
-        # Seed a default resume target so first ONLINE starts polling.
-        # (Auto-send will not be resumed unless later set while online.)
-        set_preference('winlink_resume_mask', 'poll')
-        return
+        if force_online:
+            # Honor override immediately on first run: mark online and resume.
+            set_preference('internet_online', 'yes')
+            set_preference('internet_since_iso', now_iso)
+            resume_mask = (get_preference('winlink_resume_mask') or 'poll').strip().lower() or 'poll'
+            try: LOG.info("Internet forced-online (first run) — resume=%s", resume_mask)
+            except Exception: pass
+            if 'auto' in resume_mask:
+                configure_winlink_jobs()
+                configure_winlink_auto_jobs()
+            elif resume_mask == 'poll':
+                configure_winlink_jobs()
+            set_preference('winlink_resume_mask', '')
+            return
+    # When the override is on and we're already online, keep the flag latched.
+    if force_online and prev_online:
+        if prev_flag != 'yes':
+            set_preference('internet_online', 'yes')
+        else:
+            set_preference('internet_online', 'no')
+            set_preference('internet_since_iso', now_iso)
+            # Seed a default resume target so first ONLINE starts polling.
+            # (Auto-send will not be resumed unless later set while online.)
+            set_preference('winlink_resume_mask', 'poll')
+            return
 
     # ONLINE → OFFLINE
     if (not online_now) and prev_online:

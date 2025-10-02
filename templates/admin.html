@@ -70,6 +70,16 @@
       <option value="no"  {% if show_debug_logs=='no'  %}selected{% endif %}>No</option>
       <option value="yes" {% if show_debug_logs=='yes' %}selected{% endif %}>Yes</option>
     </select>
+
+    <label style="margin-top:12px">Force Internet Online:</label>
+    <select name="internet_force_online" onchange="this.form.submit()">
+      <option value="no"  {% if internet_force_online=='no'  %}selected{% endif %}>No</option>
+      <option value="yes" {% if internet_force_online=='yes' %}selected{% endif %}>Yes</option>
+    </select>
+    <small class="hint">
+      When “Yes”, the system assumes WAN is available and keeps Winlink jobs running,
+      even if probes fail.
+    </small>
   </form>
 
   <!-- ── Wargame Mode ───────────────────────────────────────────── -->
