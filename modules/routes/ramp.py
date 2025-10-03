@@ -1435,7 +1435,9 @@ def edit_queued_flight(qid):
                     "SELECT MAX(timestamp) FROM flight_cargo WHERE queued_id=?",
                     (qid,)
                 ).fetchone()[0]
-                committed_now = bool(inv_latest and (not snap_latest or inv_latest > snap_latest))
+                # If there is no snapshot yet, use the draft's creation time as the cut line.
+                cutline = snap_latest or draft.get('created_at')
+                committed_now = bool(inv_latest and cutline and inv_latest > cutline)
 
                 # 1️⃣ collect a **combined** view (old snapshot + new edits)
                 #    (We will only apply it if committed_now is True.)
@@ -1461,11 +1463,12 @@ def edit_queued_flight(qid):
                            quantity, total_weight, direction, timestamp
                       FROM inventory_entries
                      WHERE session_id = ?
-                       AND ( ? IS NULL OR timestamp > ? )   -- ► only deltas since snapshot
+                       AND pending = 0
+                       AND ( ? IS NULL OR timestamp > ? )   -- ► only deltas since snapshot/draft cut line
                   )
                   GROUP BY category_id, sanitized_name, weight_per_unit
                   HAVING net_qty > 0
-                """, (row_dir, row_dir, qid, mid, snap_latest, snap_latest)).fetchall()
+                """, (row_dir, row_dir, qid, mid, cutline, cutline)).fetchall()
 
             # 2️⃣ Replace snapshot only if a *new* commit happened now
             if mid and committed_now:
