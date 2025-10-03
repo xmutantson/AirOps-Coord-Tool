@@ -161,6 +161,15 @@ document.addEventListener('submit', (e) => {
 </button>
 <span id="feedback-body" class="copy-feedback"></span>
 
+{% if to_hint %}
+<div class="radio-content-box" style="margin-top:.75rem;">
+  <strong>Recipient hint:</strong> {{ to_hint }}
+  <div class="muted" style="font-size:0.9em;">
+    The server picks the counterparty automatically (destination unless the destination is us, then origin).
+  </div>
+</div>
+{% endif %}
+
 {# — Send via WinLink — #}
 {% if winlink_configured %}
   {% if winlink_job_active %}

@@ -13,6 +13,18 @@ from flask import Response, abort, flash, jsonify, redirect, render_template, re
 bp = Blueprint(__name__.rsplit('.', 1)[-1], __name__)
 app = current_app  # legacy shim if route body references 'app'
 
+# ────────────────────────────────────────────────────────────────────────────
+# Choose which airport we should be mapped/sending to for a given row.
+# If the destination equals our default_origin (i.e., this flight is inbound
+# to us), flip to the ORIGIN; otherwise use the DESTINATION as usual.
+def _resolve_counterparty_airport_for_row(airfield_takeoff: str, airfield_landing: str):
+    self_canon = canonical_airport_code(get_preference('default_origin') or '')
+    o = canonical_airport_code(airfield_takeoff or '')
+    d = canonical_airport_code(airfield_landing or '')
+    if self_canon and d and d == self_canon:
+        return (o or ''), 'origin'
+    return (d or ''), 'destination'
+
 @bp.app_template_filter('hide_tbd')
 def hide_tbd_filter(value):
     """
@@ -81,11 +93,14 @@ def dashboard():
         mapping[canon] = addr
         seen_canon[canon] = addr
 
-    # normalize each flight’s destination via your lookup helper
+    # Normalize mapping against the “counterparty” (dest unless dest==us → origin)
     for f in flights:
-        raw_dest = f['airfield_landing']
-        canon = canonical_airport_code(raw_dest)
-        f['dest_mapped'] = canon in mapping
+        party_canon, role = _resolve_counterparty_airport_for_row(
+            f.get('airfield_takeoff',''), f.get('airfield_landing',''))
+        f['dest_mapped'] = bool(party_canon and party_canon in mapping)
+        # optional introspection fields (not used by templates, but handy to debug)
+        f['mapped_party_canon'] = party_canon or ''
+        f['mapped_party_role']  = role
 
     # --- Shift check-in modal gating (Step 9) --------------------------
     # Show only on the first page load *after* successful login and
@@ -220,7 +235,7 @@ def dashboard_table_partial():
             id DESC
         """
 
-    # --- Mapping for dest_mapped, just like dashboard ---
+    # --- Mapping for (counterparty) dest_mapped, with “we are destination” flip ---
     raw = get_preference('airport_call_mappings') or ''
     mapping = {}
     seen_canon = {}
@@ -248,10 +263,13 @@ def dashboard_table_partial():
         for r in raw_cursor:
             d = dict(r)
 
-            # --- Add dest_mapped via canonical mapping here, with debug ---
-            raw_dest = d.get('airfield_landing','')
-            canon = canonical_airport_code(raw_dest)
-            d['dest_mapped'] = canon in mapping
+            # --- Compute dest_mapped using counterparty logic (flip when dest==us) ---
+            party_canon, role = _resolve_counterparty_airport_for_row(
+                d.get('airfield_takeoff',''), d.get('airfield_landing',''))
+            d['dest_mapped'] = bool(party_canon and party_canon in mapping)
+            # optional: expose for quick inspection/devtools
+            d['mapped_party_canon'] = party_canon or ''
+            d['mapped_party_role']  = role
 
             # — airport formatting & views —
             d['origin_view'] = fmt_airport(d.get('airfield_takeoff',''), airport_pref)

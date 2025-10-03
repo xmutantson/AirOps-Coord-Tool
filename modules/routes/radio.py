@@ -149,6 +149,20 @@ def _send_with_optional_cc(to_addr: str, subject: str, body: str, include_cc: bo
                     pass
         return primary_ok
 
+# --- Counterparty resolver ---------------------------------------------------
+def _resolve_counterparty_airport(airfield_takeoff: str, airfield_landing: str):
+    """
+    Return (canon_code, role) for the airport we should notify / map against.
+    If the destination is our own station (default_origin), flip to ORIGIN.
+    Otherwise use DESTINATION. Role is 'origin' or 'destination'.
+    """
+    self_canon = canonical_airport_code(get_preference('default_origin') or '')
+    o = canonical_airport_code(airfield_takeoff or '')
+    d = canonical_airport_code(airfield_landing or '')
+    if self_canon and d and d == self_canon:
+        return (o or None, 'origin')
+    return (d or None, 'destination')
+
 # --- AOCT flight-query sighting resolver -------------------------------------
 def _latest_sighting_for_tail_db_first(tail: str) -> dict | None:
     """
@@ -995,7 +1009,7 @@ def radio():
             cw = f'{v} lbs'
         f['cargo_view'] = cw or 'TBD'
 
-    # --- Mapping for dest_mapped, just like dashboard ---
+    # --- Mapping for (counterparty) mapped, with "we-are-destination" flip ---
     raw = get_preference('airport_call_mappings') or ''
     mapping = {}
     seen_canon = {}
@@ -1008,9 +1022,12 @@ def radio():
         mapping[canon] = addr
         seen_canon[canon] = addr
     for f in flights:
-        raw_dest = f.get('airfield_landing','')
-        canon = canonical_airport_code(raw_dest)
-        f['dest_mapped'] = canon in mapping
+        party_canon, role = _resolve_counterparty_airport(
+            f.get('airfield_takeoff',''), f.get('airfield_landing',''))
+        f['dest_mapped'] = bool(party_canon and party_canon in mapping)
+        # optional: expose for templates/macros if you want to message which side is missing
+        f['mapped_party_canon'] = party_canon or ''
+        f['mapped_party_role']  = role
 
     # detect whether WinLink jobs are active
     _sch = current_app.extensions.get('scheduler')
@@ -1051,7 +1068,7 @@ def radio_table_partial():
 
     flights = dict_rows(sql)
 
-    # --- Mapping for dest_mapped, just like dashboard ---
+    # --- Mapping for (counterparty) mapped, with "we-are-destination" flip ---
     raw = get_preference('airport_call_mappings') or ''
     mapping = {}
     seen_canon = {}
@@ -1064,11 +1081,13 @@ def radio_table_partial():
         mapping[canon] = addr
         seen_canon[canon] = addr
 
-    # Add dest_mapped for each flight row
+    # Add (counterparty) mapped flag for each flight row
     for f in flights:
-        raw_dest = f.get('airfield_landing','')
-        canon = canonical_airport_code(raw_dest)
-        f['dest_mapped'] = canon in mapping
+        party_canon, role = _resolve_counterparty_airport(
+            f.get('airfield_takeoff',''), f.get('airfield_landing',''))
+        f['dest_mapped'] = bool(party_canon and party_canon in mapping)
+        f['mapped_party_canon'] = party_canon or ''
+        f['mapped_party_role']  = role
 
     # same prefs + view‐field logic as in radio()
     pref     = dict_rows("SELECT value FROM preferences WHERE name='code_format'")
@@ -1122,6 +1141,11 @@ def radio_detail(fid):
     _sch = current_app.extensions.get('scheduler')
     winlink_job_active = bool(_sch.get_job('winlink_poll')) if _sch else False
 
+    # Prefill a smart "To" hint: flip to ORIGIN if the destination is us.
+    party_canon, _role = _resolve_counterparty_airport(
+        flight.get('airfield_takeoff',''), flight.get('airfield_landing',''))
+    to_hint = _lookup_callsign_for_airport(party_canon or flight.get('airfield_landing',''))
+
     return render_template(
         'send_flight.html',
         flight=flight,
@@ -1130,6 +1154,7 @@ def radio_detail(fid):
         active='radio',
         winlink_configured=winlink_configured,
         winlink_job_active=winlink_job_active,
+        to_hint=to_hint,
     )
 
 @bp.route('/mark_sent/<int:fid>', methods=['POST'])
@@ -1249,8 +1274,10 @@ def mark_sent(fid=None, flight_id=None):
 
     # --- Log to communications as an OUTBOUND "radio" message -------------
     try:
-        # Best-effort destination party from airport→Winlink mapping
-        to_party = _lookup_callsign_for_airport(before.get('airfield_landing', ''))
+        # Best-effort counterparty (flip to ORIGIN if the destination is us)
+        party_canon, _role = _resolve_counterparty_airport(
+            before.get('airfield_takeoff',''), before.get('airfield_landing',''))
+        to_party = _lookup_callsign_for_airport(party_canon or before.get('airfield_landing',''))
         insert_comm(
             timestamp_utc=now_ts,
             method="radio",            # manual radio (not Winlink)
