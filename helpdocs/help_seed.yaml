@@ -41,28 +41,109 @@
     - Toggle **Wargame mode off** immediately when training is over.
     - Before **Reset database**, take a host-level DB snapshot/backup if anything must be preserved.
 
+- route_prefix: "/training"
+  title: "Training - Central Index"
+  body_md: |
+    # Training - Central Index
+
+    **Purpose:** One place to review training files and the full in-app help.
+
+    ## Layout
+    - **Training Files (top):** Short, curated list (PowerPoints, PDFs, etc.) to review while you work.
+    - **Help Library (below):** All help topics, collapsed by default — expand to read the entire manual inline.
+
+    ## How to use
+    1. Open the file list for quick-start slide decks or handouts.
+    2. Expand specific help topics when you need details on a page or workflow.
+    3. Keep this tab open during exercises for fast reference.
+
+    ## Notes
+    - Files are kept intentionally short and practical.
+    - New help topics will appear here automatically as they’re added.
+
+- route_prefix: "/embedded"
+  title: "Embedded ADS-B Map"
+  body_md: |
+    # Embedded ADS-B Map
+
+    **Purpose:** Situational awareness using the embedded ADS-B map (Tar1090 under the hood).
+
+    ## What you can do
+    - Open the map’s sidebar to search, filter, and highlight aircraft of interest.
+    - Use filters to narrow by tail, altitude, distance, or recency.
+
+    ## Ops guidance
+    - **Check here before sending a Locate request.**  
+      If you can receive the aircraft locally, there’s no need to generate Winlink traffic.
+    - Typical reception is **~100 NM line-of-sight** at the altitudes we operate. Terrain/obstructions reduce range.
+    - **Don’t spam Locate** for convenience — it creates unnecessary network load.
+
+    ## Troubleshooting (cacheless refresh)
+    If the loading bar spins more than a few seconds, do a **cacheless refresh**:
+    - **Chrome / Edge (Windows/Linux):** `Ctrl + F5` or `Ctrl + Shift + R`
+    - **Chrome (macOS):** `Cmd + Shift + R`
+    - **Firefox (Win/Linux):** `Ctrl + F5` or `Ctrl + Shift + R`
+    - **Firefox (macOS):** `Cmd + Shift + R`
+    - **Safari (macOS):** `Option + Cmd + R` (Reload Without Content Blockers / from origin)
+      - For a deeper reset: **Safari > Settings > Advanced >** enable **Develop menu**, then **Develop > Empty Caches**
+    - **iOS (Safari/Chrome):** Close the tab and re-open; if still stale, **Settings > Safari > Clear History and Website Data** (affects all sites)
+
+    If it still won’t load, verify the embedded URL in **Preferences/Admin** and that the ADS-B host is reachable.
+
+- route_prefix: "/aircraft"
+  title: "Aircraft List"
+  body_md: |
+    # Aircraft List
+
+    **Purpose:** Maintain the roster of aircraft available to the operation.
+
+    ## Where entries come from
+    - Pilots check into the staff system, sign the waiver, and submit aircraft details.
+    - Those submissions populate this list automatically.
+
+    ## What you can do
+    - **Search** by tail number or pilot name (top search box).
+    - **Edit** an aircraft’s details when something changes.
+    - **Print** the list or **print per-aircraft** capability reports.
+
+    ## Typical uses
+    - Confirm which aircraft are cleared and their capabilities.
+    - Hand a printed capability sheet to supervisors or requesters.
+
+    ## Notes
+    - This page is **not** the Dashboard/Live Flight Board; it’s purely the fleet roster.
+
 - route_prefix: "/comms"
   title: "Communications Log"
   body_md: |
     # Communications Log
 
-    Free-form log for **all** operational communications - radio, Winlink, phone, in-person - so ICS-309 reflects reality.
+    **Purpose:** Permanent record of all operational communications (radio, Winlink, phone, text, email, in-person).
 
-    ## Purpose
-    - Central place to capture comms beyond automated Winlink traffic.
-    - AOCT auto-inserts system events for Winlink messages; operators add everything else.
+    ## What’s automatic vs manual
+    - **Automatic:** The system logs comms it generates (e.g., outgoing Winlink messages, key radio actions).
+    - **Manual:** **You must add** anything that occurs **outside** the app:
+      - Winlink Express traffic sent/received off-system
+      - Phone calls / SMS / third-party emails
+      - Face-to-face operational handoffs
+      - Requests from partners (e.g., food banks, EOCs)
 
-    ## Add an entry
+    ## What to log (examples)
+    - ✅ Ops-related info: flight delays/cancellations, tasking changes, resource requests, safety notes.
+    - ❌ Non-ops personal chatter (e.g., “dinner at 6”) — do not log.
+
+    ## ICS-309
+    - This log feeds the **ICS-309 Communications Log** export (timestamps in **UTC**).
+    - Clear, factual subjects help the export read cleanly.
+
+    ## Policy
+    - This log is **append-only** during an incident. Entries are **not deletable** (short of a full DB reset).
+    - Your history is only as good as your data entry — be precise and concise.
+
+    ## Quick procedure
     1. Open **Comms Log**.
-    2. Fill: *time (UTC)*, *channel/medium*, *to/from*, *subject/summary*, and *notes*.
-    3. Save. The row appears immediately.
-
-    **Timezone:** Entries are recorded/displayed in **UTC**; the form auto populates the current time/date.
-
-    ## Usage notes
-    - Anyone can add/delete entries (open system; no audit trail).
-    - Entries feed the **ICS-309** export with system-generated items.
-    - Keep entries concise and factual; include flight code/tail when relevant.
+    2. Enter **time (UTC)**, **medium/channel**, **to/from**, **subject/summary**, **notes**.
+    3. **Save**. Verify the new row appears.
 
 - route_prefix: "/"
   title: "Dashboard - Live Flight Board"
@@ -612,3 +693,33 @@
 
     - Judge staleness by "Generated at".
     - If you need to discard an out-of-date/partial merge, use **Clear snapshot** and request a fresh one.
+
+- route_prefix: "/weather"
+  title: "Weather - Situational Products"
+  body_md: |
+    # Weather - Situational Products
+
+    **Purpose:** Share official weather products for **situational awareness** across the team.
+
+    ## What’s here
+    - **Five products** sourced via the Winlink **catalog** (NOAA/NWS & partner feeds).
+    - Request via **PAT** (auto) or copy/paste a **manual** catalog request.
+    - Radio controls are present but **hidden by default** on this page.
+
+    ## Not an aviation briefing
+    - This tab does **not** include METAR/TAF/winds/ceiling/visibility.
+    - Pilots should use their own aviation sources and procedures.
+
+    ## How to use
+    1. Request the desired products (PAT catalog or manual).
+    2. When replies arrive, **upload/attach** the images/PDFs here for team view.
+    3. Verify the **timestamp** on each product (all times are **UTC**).
+
+    ## Guidance & limits
+    - Products will **not update by themselves** — re-request to get fresh imagery.
+    - Sources are official (NOAA / state partners), but **always check timestamps** and context.
+    - Use for ops decisions like **shelter/hold/evacuate notifications**, not for pilot go/no-go.
+
+    ## Tips
+    - Call out significant watches/warnings during briefings.
+    - Keep recent products visible during fast-moving weather.
