@@ -1,8 +1,9 @@
+# modules/routes/help.py
 import os, json, time, re, mimetypes
 from datetime import datetime, timezone
 from urllib.parse import unquote
 from flask import Blueprint, request, jsonify, session
-from flask import send_from_directory, abort
+from flask import send_from_directory, abort, Response, stream_with_context
 from markupsafe import escape
 
 import sqlite3 as _sqlite
@@ -333,13 +334,77 @@ def _find_single_video(topic_dir: str) -> str | None:
 
 @bp.get("/video/<slug>")
 def help_video(slug):
-    # Serve the single allowed video for this help topic (if present)
+    """
+    Serve the single video for this help topic with HTTP byte-range support
+    so browsers can stream/seek without downloading the entire file.
+    """
     slug = _slugify_topic(slug)
     topic_dir = os.path.join(_videos_root(), slug)
     fname = _find_single_video(topic_dir)
     if not fname:
         abort(404)
+
+    fp = os.path.join(topic_dir, fname)
+    if not os.path.isfile(fp):
+        abort(404)
+
+    total = os.path.getsize(fp)
     mime = mimetypes.guess_type(fname)[0] or "application/octet-stream"
-    resp = send_from_directory(topic_dir, fname, mimetype=mime, as_attachment=False, conditional=True)
+
+    # Werkzeug parses Range into request.range; it exposes range_for_length().
+    rng = request.range  # type: ignore[attr-defined]
+    if rng and getattr(rng, "units", None) == "bytes":
+        # Normalize/validate against file length (returns (start, stop) or None)
+        span = rng.range_for_length(total)
+        if span is None:
+            # Not satisfiable
+            return Response(
+                status=416,
+                headers={
+                    "Content-Range": f"bytes */{total}",
+                    "Accept-Ranges": "bytes",
+                },
+            )
+
+        start, stop = span  # stop is *exclusive*
+        end = stop - 1
+        length = stop - start
+
+        def generate(path, offset, nbytes, chunk=1024 * 64):
+            with open(path, "rb") as f:
+                f.seek(offset)
+                remaining = nbytes
+                while remaining > 0:
+                    data = f.read(min(chunk, remaining))
+                    if not data:
+                        break
+                    remaining -= len(data)
+                    yield data
+
+        headers = {
+            "Content-Type": mime,
+            "Content-Range": f"bytes {start}-{end}/{total}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(length),
+            "Cache-Control": "public, max-age=3600",
+            "X-Video-Filename": fname,
+        }
+
+        # If Flask routes HEAD here, return headers only
+        if request.method == "HEAD":
+            return Response(status=206, headers=headers)
+
+        return Response(
+            stream_with_context(generate(fp, start, length)),
+            status=206,
+            headers=headers,
+            direct_passthrough=True,
+        )
+
+    # No Range → whole-file path (Flask adds ETag/Last-Modified)
+    resp = send_from_directory(
+        topic_dir, fname, mimetype=mime, as_attachment=False, conditional=True
+    )
+    resp.headers["Accept-Ranges"] = "bytes"
     resp.headers["X-Video-Filename"] = fname
     return resp

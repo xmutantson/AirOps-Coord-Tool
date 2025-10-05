@@ -676,6 +676,7 @@ tiles_bp       = _get_bp("modules.services.tiles")   # /tiles/{z}/{x}/{y}.png
 # Weather (page + API)
 weather_page_bp = _get_bp("modules.routes.weather", "bp_page")
 weather_api_bp = _get_bp("modules.routes.weather", "bp_api")
+aggregate_api_bp = _get_bp("modules.api_aggregate", "aggregate_bp")
 app.register_blueprint(inventory_bp, name="inventory")
 _reg(wginventory_bp,  name="wginventory")
 _reg(radio_bp,       name="radio")
@@ -702,6 +703,12 @@ _reg(aircraft_bp,    name="aircraft")   # /aircraft routes
 _reg(training_bp,    name="training")   # /training routes
 _reg(weather_page_bp, name="weather_page")  # /weather
 _reg(weather_api_bp,  name="weather_api")   # /api/weather/*
+if aggregate_api_bp:
+    # Register at /aggregate (auth-exempt via require_login() check for blueprint 'aggregate')
+    app.register_blueprint(aggregate_api_bp, name="aggregate", url_prefix="/aggregate")
+    logger.info("Registered blueprint name=aggregate url_prefix=/aggregate")
+else:
+    logger.warning("Skipping blueprint 'aggregate' (missing or failed import)")
 
 # Shutdown hook from services
 _jobs = _safe_import("modules.services.jobs")

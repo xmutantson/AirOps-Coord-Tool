@@ -603,6 +603,12 @@ def require_login():
     """
     ep = request.endpoint or ""                 # e.g. 'auth.login'
     _ = request.blueprint or ""                # e.g. 'auth'
+
+    # --- public read-only Aggregate API: always exempt from auth -----------
+    # Served strictly from read-only SQLite connections; safe to expose without auth.
+    if request.blueprint == "aggregate":
+        return
+
     # --- localhost-only open endpoints (by PATH) -----------------------
     if request.remote_addr in ("127.0.0.1", "::1"):
         if request.path in ("/_ping", "/__routes__", "/dashboard/plain"):
