@@ -38,6 +38,16 @@
        UNREAD EMAILS: 0
      </span>
    </a>
+
+   {# Poller countdown (visible only when poller job is active) #}
+   <span id="wl-poll-eta"
+         class="muted"
+         style="margin-left:.5rem; display: {{ 'inline-block' if winlink_job_active else 'none' }};">
+     Next poll in
+     <strong><span id="wl-poll-remaining">
+       {{ winlink_poll_seconds if winlink_job_active and winlink_poll_seconds is not none else '' }}
+     </span></strong>s
+   </span>
 </div>
 
 <div id="radio-table">
@@ -569,6 +579,50 @@ async function refreshUnreadBadge(){
 }
 refreshUnreadBadge();
 setInterval(refreshUnreadBadge, 30000);
+</script>
+
+<!-- WinLink poller countdown (kept in sync with server every 10s) -->
+<script>
+(function(){
+  const wrap = document.getElementById('wl-poll-eta');
+  const num  = document.getElementById('wl-poll-remaining');
+  let secs   = (num && /^\d+$/.test(num.textContent.trim())) ? parseInt(num.textContent.trim(), 10) : null;
+
+  async function sync(){
+    try{
+      const r = await fetch('{{ url_for("radio.winlink_poller_status") }}', { cache: 'no-store' });
+      if (!r.ok) return;
+      const j = await r.json();
+      if (j.running){
+        if (wrap) wrap.style.display = 'inline-block';
+        if (typeof j.seconds === 'number'){
+          secs = j.seconds;
+          if (num) num.textContent = String(secs);
+        }
+      } else {
+        if (wrap) wrap.style.display = 'none';
+        secs = null;
+      }
+    } catch (_){}
+  }
+
+  function tick(){
+    if (!wrap || wrap.style.display === 'none') return;
+    if (secs == null){ sync(); return; }
+    if (secs > 0){
+      secs -= 1;
+      if (num) num.textContent = String(secs);
+    } else {
+      // Poll likely just fired — resync to get the next window
+      sync();
+    }
+  }
+
+  // Kick off
+  sync();
+  setInterval(tick, 1000);
+  setInterval(sync, 10000);
+})();
 </script>
 
 {# Manual-correction modal + client script #}

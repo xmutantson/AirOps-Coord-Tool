@@ -1,8 +1,9 @@
 
 from markupsafe import escape
 import sqlite3, re, json, logging
-from datetime import datetime
+from datetime import datetime, timezone
 from flask import Blueprint, current_app, flash, jsonify, redirect, render_template, request, url_for
+from app import scheduler
 
 from modules.services.winlink.core import (
     parse_winlink, generate_subject, generate_body,
@@ -148,6 +149,53 @@ def _send_with_optional_cc(to_addr: str, subject: str, body: str, include_cc: bo
                 except Exception:
                     pass
         return primary_ok
+
+# --- WinLink poller countdown helpers / endpoints ----------------------------
+def _winlink_poller_status():
+    """
+    Return (running: bool, seconds_remaining: int|None, next_run_iso: str|None)
+    based on APScheduler job 'winlink_poll'.
+    """
+    try:
+        job = scheduler.get_job('winlink_poll')
+    except Exception:
+        job = None
+    running = bool(job)
+    seconds = None
+    next_iso = None
+    if job and getattr(job, "next_run_time", None):
+        nxt = job.next_run_time
+        # APS may return aware or naive; normalize to aware UTC
+        if nxt.tzinfo is None:
+            nxt = nxt.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        delta = (nxt - now).total_seconds()
+        seconds = max(0, int(delta + 0.999))  # ceil
+        next_iso = nxt.isoformat()
+    return running, seconds, next_iso
+
+@bp.app_context_processor
+def _inject_winlink_status():
+    """
+    Make these available to templates (used by radio.html):
+      winlink_job_active, winlink_auto_active, winlink_poll_seconds, winlink_poll_next_iso
+    """
+    try:
+        running, seconds, next_iso = _winlink_poller_status()
+        auto = bool(scheduler.get_job('winlink_auto_send'))
+    except Exception:
+        running, seconds, next_iso, auto = False, None, None, False
+    return dict(
+        winlink_job_active=running,
+        winlink_auto_active=auto,
+        winlink_poll_seconds=seconds,
+        winlink_poll_next_iso=next_iso
+    )
+
+@bp.get('/winlink/poller_status')
+def winlink_poller_status():
+    running, seconds, next_iso = _winlink_poller_status()
+    return jsonify({"running": running, "seconds": seconds, "next_run": next_iso})
 
 # --- Counterparty resolver ---------------------------------------------------
 def _resolve_counterparty_airport(airfield_takeoff: str, airfield_landing: str):
