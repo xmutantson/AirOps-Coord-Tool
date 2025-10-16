@@ -136,6 +136,13 @@
     - This log feeds the **ICS-309 Communications Log** export (timestamps in **UTC**).
     - Clear, factual subjects help the export read cleanly.
 
+    ## Viewing details
+    - To open a communication, **click the Subject text** in the table.
+      This opens a centered, draggable modal window with the full entry (body and any structured details
+      such as Red Flight fields). Use the red **X** button to close.
+    - You can still use the ICS-309 print/export for end-of-shift products, but for spot checks,
+      open items directly from the table via the Subject link.
+
     ## Policy
     - This log is **append-only** during an incident. Entries are **not deletable** (short of a full DB reset).
     - Your history is only as good as your data entry — be precise and concise.
@@ -723,3 +730,49 @@
     ## Tips
     - Call out significant watches/warnings during briefings.
     - Keep recent products visible during fast-moving weather.
+
+- route_prefix: "/comms/red_flight"
+  title: "Log Red Flight"
+  body_md: |
+    # Log Red Flight
+
+    **Purpose:** Rapidly capture **recon / damage** observations from Red Flights and store them in the
+    Communications Log with structured details that render cleanly in the **ICS-309**.
+
+    ## Access
+    - From **Supervisor**, use the **Log Red Flight** button in the toolbar, or go directly to `/comms/red_flight`.
+
+    ## Fields
+    - **Date/Time (UTC):** Defaults to now; adjust if needed.
+    - **Origin Airport:** Your airport code (3–4 letters; saved uppercase).
+    - **Area / Location name:** Human-readable place (e.g., “Ballard Locks”).
+    - **GPS (optional):** Enter **both** latitude and longitude in decimal degrees.  
+      If you enter only one, coordinates are **not** saved.
+    - **Infrastructure & damage observed:** Add one or more rows. For each row:
+      - **Infrastructure:** Short label (e.g., “Upper Gate”).
+      - **Damage / observation:** Brief, factual description (e.g., “damage to gate, water is free flowing”).
+      - Use **+ Add item** to add rows and **×** to remove a row.
+    - **Notes (optional):** Free text context that didn’t fit the row(s).
+
+    ## Save behavior
+    - **Save Red Flight** creates a Communications Log entry with method **“Red Flight.”**
+    - Subject is auto-formatted as **`Red Flight — {Area or Origin}`**.
+    - You can filter the Comms Log by **Method = Red Flight** to see these entries.
+
+    ## Viewing a Red Flight entry
+    - From **Communications Log**, **click the Subject** to open the full entry.  
+      The modal shows a **Red Flight Details** section (Origin, Area, GPS, Infrastructure list, Notes).
+      The window is centered and draggable; close with the red **X** button.
+
+    ## ICS-309 output
+    - The **Infrastructure:** portion in the ICS-309 line is **automatically flattened** to include
+      **all** infrastructure rows you entered (e.g., `Upper Gate — damage…; Lower Gate — damage…`).
+      If the body also contains an “Infrastructure:” fragment, the export replaces just that fragment
+      with the complete list to avoid duplication.
+
+    ## Tips
+    - Keep **Infrastructure** short and **Damage/observation** precise.
+    - Leave GPS blank if unknown — don’t guess coordinates.
+    - Example rows:
+      - `Upper Gate — damage to gate, water is free flowing`
+      - `Lower Gate — damage to gate, water is free flowing`
