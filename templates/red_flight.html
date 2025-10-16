@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Log Red Flight{% endblock %}
+{% block content %}
+<h2 style="margin-top:.5rem;">Log Red Flight</h2>
+
+<form method="post" action="{{ url_for('comms.red_flight_submit') }}"
+      style="display:grid; grid-template-columns: repeat(6, minmax(140px,1fr)); gap:.5rem; align-items:end; margin:.25rem 0 1rem; border:1px solid #ddd; padding:.75rem; border-radius:.4rem;">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <div style="grid-column: span 2;">
+    <label for="rf-ts">Date/Time (UTC)</label><br>
+    <input id="rf-ts" name="timestamp_utc" type="datetime-local" step="60" value="{{ now_utc_value }}">
+  </div>
+
+  <div>
+    <label for="rf-origin">Origin Airport</label><br>
+    <input id="rf-origin" name="origin_airport" type="text" placeholder="KBFI / S60 / …" style="text-transform:uppercase;">
+  </div>
+
+  <div style="grid-column: span 2;">
+    <label for="rf-area">Area / Location name</label><br>
+    <input id="rf-area" name="area_label" type="text" placeholder="Ballard Locks, Spokane River, …">
+  </div>
+
+  <!-- Keep both in ONE grid cell so they can't wrap to a new row -->
+  <div>
+    <label style="display:block;">GPS (optional)</label>
+    <div style="display:flex; gap:.4rem; align-items:center; flex-wrap:nowrap; white-space:nowrap;">
+      <input id="rf-lat" name="lat" type="text" placeholder="Lat 47.6656"
+             style="min-width:120px; width:100%;">
+      <input id="rf-lon" name="lon" type="text" placeholder="Lon -122.3977"
+             style="min-width:140px; width:100%;">
+    </div>
+  </div>
+
+  <!-- Infrastructure list -->
+  <div style="grid-column: span 6;">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin:.25rem 0 .4rem;">
+      <div style="font-weight:600;">Infrastructure &amp; damage observed</div>
+      <button type="button" id="rf-add-row" class="button small"
+              style="padding:.25rem .5rem; border:1px solid #888; background:#fafafa; border-radius:.35rem; cursor:pointer;">+ Add item</button>
+    </div>
+    <div id="rf-rows" style="display:grid; grid-template-columns: 2fr 3fr auto; gap:.4rem;">
+      <div style="font-size:.9rem; color:#666;">Infrastructure</div>
+      <div style="font-size:.9rem; color:#666;">Damage / observation</div>
+      <div></div>
+
+      <input name="infra_name[]"   type="text" placeholder="Upper gate">
+      <input name="infra_damage[]" type="text" placeholder="damage to gates allowing free flow of water">
+      <button type="button" class="rf-del button small" style="border:1px solid #ccc; background:#fff;">×</button>
+    </div>
+  </div>
+
+  <div style="grid-column: span 6;">
+    <label for="rf-notes">Notes (optional)</label><br>
+    <textarea id="rf-notes" name="notes" rows="3" placeholder="Unobservable damage not commented upon, area size unknown, etc."
+              style="width:100%;"></textarea>
+  </div>
+
+  <div style="grid-column: span 6; display:flex; gap:.5rem; justify-content:flex-end;">
+    <a class="button" href="{{ url_for('comms.comms_index', window='all', method='Red Flight') }}"
+       style="padding:.4rem .7rem; border:1px solid #ccc; background:#fafafa; border-radius:.35rem; text-decoration:none;">View Red Flights</a>
+    <a class="button" href="{{ url_for('supervisor.supervisor') }}"
+       style="padding:.4rem .7rem; border:1px solid #ccc; background:#fafafa; border-radius:.35rem; text-decoration:none;">Cancel</a>
+    <button type="submit" class="button" style="padding:.4rem .7rem; border:1px solid #c55; background:#d14949; color:#fff; border-radius:.35rem; cursor:pointer;">Save Red Flight</button>
+  </div>
+</form>
+
+<script>
+  (function(){
+    const rows = document.getElementById('rf-rows');
+    const add  = document.getElementById('rf-add-row');
+
+    function addRow(nameVal='', dmgVal=''){
+      const name = document.createElement('input');
+      name.type = 'text'; name.name = 'infra_name[]'; name.placeholder = 'Infrastructure'; name.value = nameVal;
+
+      const dmg = document.createElement('input');
+      dmg.type = 'text'; dmg.name = 'infra_damage[]'; dmg.placeholder = 'Damage / observation'; dmg.value = dmgVal;
+
+      const del = document.createElement('button');
+      del.type = 'button'; del.className = 'rf-del button small';
+      del.textContent = '×';
+      del.style.cssText = 'border:1px solid #ccc; background:#fff;';
+
+      rows.appendChild(name);
+      rows.appendChild(dmg);
+      rows.appendChild(del);
+    }
+
+    add?.addEventListener('click', ()=> addRow());
+
+    // Delegate delete
+    rows?.addEventListener('click', (e)=>{
+      const btn = e.target.closest('.rf-del'); if(!btn) return;
+      e.preventDefault();
+      // remove the 3 siblings that make a row
+      const idx = Array.from(rows.children).indexOf(btn);
+      // each row is 3 nodes: name, damage, button
+      const start = idx - 2;
+      if (start >= 0) {
+        rows.removeChild(rows.children[start]);
+        rows.removeChild(rows.children[start]);
+        rows.removeChild(rows.children[start]);
+      }
+    });
+  })();
+</script>
+{% endblock %}

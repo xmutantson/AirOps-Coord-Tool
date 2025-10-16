@@ -1,0 +1,43 @@
+<div style="padding:1rem; max-width:720px;">
+  <div style="font-weight:700; margin-bottom:.5rem;">Communication #{{ r.id }}</div>
+  <div style="display:grid; grid-template-columns: 160px 1fr; gap:.35rem 1rem;">
+    <div class="muted">Timestamp (UTC)</div><div>{{ r.timestamp_utc }}</div>
+    <div class="muted">Method</div><div>{{ r.method }}</div>
+    <div class="muted">Direction</div><div>{{ r.direction or '—' }}</div>
+    <div class="muted">From</div><div>{{ r.from_party or '—' }}</div>
+    <div class="muted">To</div><div>{{ r.to_party or '—' }}</div>
+    <div class="muted">Subject</div><div>{{ r.subject or '—' }}</div>
+    <div class="muted">Body</div>
+    <div><pre style="white-space:pre-wrap; margin:0;">{{ r.body or '—' }}</pre></div>
+    <div class="muted">Operator</div><div>{{ r.operator or '—' }}</div>
+    <div class="muted">Notes</div>
+    <div><pre style="white-space:pre-wrap; margin:0;">{{ r.notes or '—' }}</pre></div>
+  </div>
+
+  {% if rf %}
+    <hr style="margin:1rem 0;">
+    <div style="font-weight:600; margin-bottom:.25rem;">Red Flight Details</div>
+    <div style="display:grid; grid-template-columns: 160px 1fr; gap:.35rem 1rem;">
+      <div class="muted">Origin</div><div>{{ rf.origin or '—' }}</div>
+      <div class="muted">Area</div><div>{{ rf.area or '—' }}</div>
+      <div class="muted">GPS</div>
+      <div>
+        {% if rf.lat is not none and rf.lon is not none %}
+          {{ rf.lat }}, {{ rf.lon }}
+        {% else %}—{% endif %}
+      </div>
+      <div class="muted" style="align-self:start;">Infrastructure</div>
+      <div>
+        {% if rf.infra %}
+          <ul style="margin:.25rem 0 .25rem 1rem;">
+            {% for it in rf.infra %}
+              <li><strong>{{ it.name or '—' }}</strong>{% if it.damage %}: {{ it.damage }}{% endif %}</li>
+            {% endfor %}
+          </ul>
+        {% else %}—{% endif %}
+      </div>
+      <div class="muted">RF Notes</div>
+      <div><pre style="white-space:pre-wrap; margin:0;">{{ rf.notes or '—' }}</pre></div>
+    </div>
+  {% endif %}
+</div>

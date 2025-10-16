@@ -414,6 +414,26 @@ def _ics309_context_from_filters(f):
         subj = (r.get("subject") or "").strip()
         body = (r.get("body") or "").strip()
         msg  = (f"{subj}: {body}" if subj and body else subj or body)
+        # Red Flight: normalize/expand a single "Infrastructure: ..." slot
+        try:
+            meta = json.loads(r.get("metadata_json") or "{}") or {}
+        except Exception:
+            meta = {}
+        if (meta.get("kind") == "red_flight") and meta.get("infrastructure"):
+            parts = []
+            for it in (meta.get("infrastructure") or []):
+                nm = (it.get("name") or "").strip()
+                dm = (it.get("damage") or "").strip()
+                if nm or dm:
+                    parts.append(f"{nm} — {dm}".strip(" —"))
+            if parts:
+                infra_list = "; ".join(parts)
+                import re as _re
+                # If message already contains an Infrastructure: fragment, replace just that fragment up to the next " | " (if any).
+                if _re.search(r'Infrastructure\s*:', msg, _re.IGNORECASE):
+                    msg = _re.sub(r'(Infrastructure\s*:)[^|]*', r'\1 ' + infra_list, msg, flags=_re.IGNORECASE)
+                else:
+                    msg = (msg + (" | " if msg else "") + "Infrastructure: " + infra_list).strip()
         table.append({
             "seq": seq,
             "time_utc": hhmm,

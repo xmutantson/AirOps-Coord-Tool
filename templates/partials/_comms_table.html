@@ -23,7 +23,23 @@
             <td style="padding:.5rem; border-bottom:1px solid #f0f0f0;">{{ r.direction }}</td>
             <td style="padding:.5rem; border-bottom:1px solid #f0f0f0;">{{ r.from_party }}</td>
             <td style="padding:.5rem; border-bottom:1px solid #f0f0f0;">{{ r.to_party }}</td>
-            <td style="padding:.5rem; border-bottom:1px solid #f0f0f0;">{{ r.subject_short }}</td>
+            <td style="padding:.5rem; border-bottom:1px solid #f0f0f0;">
+              {% if r.subject_short %}
+                <a href="{{ url_for('comms.comms_detail', comm_id=r.id) }}"
+                   class="comm-open"
+                   data-comm-id="{{ r.id }}"
+                   style="text-decoration:underline; color:inherit;">
+                  {{ r.subject_short }}
+                </a>
+              {% else %}
+                <a href="{{ url_for('comms.comms_detail', comm_id=r.id) }}"
+                   class="comm-open"
+                   data-comm-id="{{ r.id }}"
+                   style="text-decoration:underline; color:inherit;">
+                  (view)
+                </a>
+              {% endif %}
+            </td>
             <td style="padding:.5rem; border-bottom:1px solid #f0f0f0;">{{ r.operator }}</td>
           </tr>
         {% endfor %}

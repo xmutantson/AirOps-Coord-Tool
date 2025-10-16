@@ -103,4 +103,87 @@
 </form>
 
 {% include "partials/_comms_table.html" %}
+<!-- Comms detail modal -->
+<dialog id="commDialog" class="wg-modal" aria-modal="true"
+  style="position:fixed; margin:0; left:50%; top:50%; transform:translate(-50%, -50%);
+         max-width:820px; width:calc(100% - 2rem); border:none; border-radius:.6rem;
+         box-shadow:0 18px 50px rgba(0,0,0,.35); padding:0;">
+  <form method="dialog" class="email-modal" style="margin:0;">
+    <div id="commDlgDrag"
+         class="wg-modal-header"
+         style="display:flex; align-items:center; justify-content:space-between; padding:.6rem .9rem; border-bottom:1px solid #eee; cursor:move; user-select:none;">
+      <div style="font-weight:600;">Communication</div>
+      <button type="button" id="commDlgClose" class="wg-modal-close xp-close"
+              aria-label="Close"
+              style="border:1px solid #700; background:#cc0000; color:#fff;
+                     border-radius:.35rem; padding:.2rem .6rem; font-weight:700;">
+        X
+      </button>
+    </div>
+    <div id="commDlgBody" class="wg-modal-body" style="max-height:75vh; overflow:auto;"></div>
+  </form>
+</dialog>
+
+<script>
+document.addEventListener('DOMContentLoaded', function(){
+  const dlg = document.getElementById('commDialog');
+  const body = document.getElementById('commDlgBody');
+  const closeBtn = document.getElementById('commDlgClose');
+  const dragBar = document.getElementById('commDlgDrag');
+
+  function openDlg(html){
+    body.innerHTML = html || '<div style="padding:1rem;">(empty)</div>';
+    // Always (re)center when opening
+    dlg.style.left = '50%';
+    dlg.style.top = '50%';
+    dlg.style.transform = 'translate(-50%, -50%)';
+    if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open','open');
+  }
+  function closeDlg(){
+    if (dlg.close) dlg.close(); else dlg.removeAttribute('open');
+    body.innerHTML = '';
+  }
+  closeBtn?.addEventListener('click', closeDlg);
+  dlg?.addEventListener('cancel', (e)=>{ e.preventDefault(); closeDlg(); });
+
+  // Delegate clicks on the subject links
+  document.addEventListener('click', async (ev)=>{
+    const a = ev.target.closest('a.comm-open');
+    if (!a) return;
+    ev.preventDefault();
+    try{
+      const r = await fetch(a.getAttribute('href'), { headers: {'X-Requested-With':'XMLHttpRequest'} });
+      const html = await r.text();
+      openDlg(html);
+    }catch(_){
+      openDlg('<div style="padding:1rem; color:#a11;">Failed to load.</div>');
+    }
+  });
+
+  // ─── Draggable dialog (via header) ─────────────────────────────
+  (function enableDrag() {
+    if (!dragBar) return;
+    let dragging = false, startX = 0, startY = 0, startLeft = 0, startTop = 0;
+    dragBar.addEventListener('mousedown', (ev) => {
+      // Convert from centered transform to absolute px before dragging
+      const box = dlg.getBoundingClientRect();
+      dlg.style.left = box.left + 'px';
+      dlg.style.top  = box.top  + 'px';
+      dlg.style.transform = ''; // remove centering transform while dragging
+      dragging = true;
+      startLeft = box.left; startTop = box.top;
+      startX = ev.clientX; startY = ev.clientY;
+      ev.preventDefault();
+    });
+    window.addEventListener('mousemove', (ev) => {
+      if (!dragging) return;
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      dlg.style.left = (startLeft + dx) + 'px';
+      dlg.style.top  = (startTop  + dy) + 'px';
+    });
+    window.addEventListener('mouseup', () => { dragging = false; });
+  })();
+});
+</script>
 {% endblock %}
