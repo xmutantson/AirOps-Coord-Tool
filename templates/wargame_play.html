@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}War Game — Walkabout{% endblock %}
+{% block content %}
+
+<div id="game-root"></div>
+
+<script>
+  // Expose player name to the game client
+  window.PLAYER_NAME = {{ player_name|tojson }};
+</script>
+
+<!-- Vendor Phaser (place the minified file at static/vendor/phaser/phaser.min.js) -->
+<script src="{{ url_for('static', filename='vendor/phaser/phaser.min.js') }}"></script>
+<script src="{{ url_for('static', filename='wargame/game.js') }}"></script>
+{% endblock %}

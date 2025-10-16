@@ -946,6 +946,29 @@ body.cw-active .ramp-form-container > :not(#cargo-tools-panel) { display: none !
 /* Supervisor: make difficulty/settings area narrower on 16:9 monitors */
 .super-settings { max-width: 540px; margin: 0 auto; }
 
+/* ===============================================================
+   Page: Wargame Play — full-bleed stage between sticky header/footer
+   (scoped to body.wargame_play to avoid touching other pages)
+   =============================================================== */
+body.wargame_play main.container,
+body.wargame-play main.container {
+  position: fixed;
+  /* match the header/footer spacers used elsewhere (see main.container paddings) */
+  top: 3.5rem;    /* header */
+  bottom: 2.5rem; /* footer */
+  left: 0;
+  right: 0;
+  padding: 0 !important;
+  margin: 0 !important;
+  max-width: none !important;
+  background: #0f1115; /* match game bg so edges look seamless */
+}
+body.wargame_play #game-root,
+body.wargame-play #game-root {
+  position: absolute;
+  inset: 0;           /* fill the fixed main pane */
+}
+
 /* Wargame Radio inbox: unread/read cues */
 /* Support both legacy .wg-inbox and current .wg-radio-table */
 table.wg-inbox thead th,

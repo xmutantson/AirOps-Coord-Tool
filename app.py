@@ -670,6 +670,7 @@ comms_bp       = _get_bp("modules.routes.comms")
 aircraft_bp    = _get_bp("modules.utils.aircraft")   # ← merged utils+routes
 locates_bp     = _get_bp("modules.routes.locates")   # /api/locates/*
 training_bp    = _get_bp("modules.routes.training")  # /training (PDF hub + help directory)
+wgclient_bp    = _get_bp("modules.routes.wgclient")  # /wargame/play host page
 
 # Register blueprints with unique names to avoid collisions
 tiles_bp       = _get_bp("modules.services.tiles")   # /tiles/{z}/{x}/{y}.png
@@ -681,6 +682,7 @@ app.register_blueprint(inventory_bp, name="inventory")
 _reg(wginventory_bp,  name="wginventory")
 _reg(radio_bp,       name="radio")
 _reg(wgradio_bp,     name="wgradio")
+_reg(wgclient_bp,    name="wgclient")
 _reg(help_bp,        name="help")
 _reg(winlink_bp,     name="winlink")
 _reg(errors_bp,      name="errors")
