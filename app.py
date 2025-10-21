@@ -10,7 +10,7 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 import socket, select  # for GPSD client
 from functools import lru_cache
-from flask import Blueprint, Flask, jsonify, redirect, render_template, session, url_for, current_app, request
+from flask import Blueprint, Flask, jsonify, redirect, render_template, session, url_for, current_app, request, g
 
 import flask
 from markupsafe import Markup as _Markup
@@ -566,11 +566,32 @@ from modules.utils.common import (
     maybe_start_distances as _maybe_start_distances,
 )
 
+# Fast-lane helper for high-frequency Wargame API endpoints (JSON only)
+def _is_wg_fastlane_path(path: str) -> bool:
+    try:
+        p = (path or "").lower()
+    except Exception:
+        p = ""
+    # Only the chatty JSON endpoints — do NOT include /wargame pages like /wargame/play
+    return (
+        p.startswith("/api/wargame/")
+        or p.startswith("/wargame/pos")
+        or p.startswith("/wargame/state")
+        or p.startswith("/wargame/players")
+        or p.startswith("/wargame/claim")
+        or p.startswith("/wargame/cart/")
+    )
+
 @app.before_request
 def _global_before_request():
     # run one-time initializers BEFORE we might return on auth
     _ensure_wargame_scheduler_once()
     _maybe_start_distances()
+
+    # Fast-lane: skip heavy auth/DB work for Wargame JSON endpoints
+    if _is_wg_fastlane_path(request.path):
+        g.AUTH_CHECKED = True
+        return
 
     # auth gate (may return a redirect)
     rv = _require_login()
@@ -578,6 +599,7 @@ def _global_before_request():
         return rv
 
     _cleanup_before_view()
+    g.AUTH_CHECKED = True
 
 def _safe_import(modpath: str):
     try:
@@ -651,6 +673,7 @@ for _mod in (
 radio_bp       = _get_bp("modules.routes.radio")
 wgradio_bp     = _get_bp("modules.routes.wargame.radio")
 help_bp        = _get_bp("modules.routes.help")
+wgapi_bp       = _get_bp("modules.routes.wargame_api")
 winlink_bp     = _get_bp("modules.routes.winlink")
 errors_bp      = _get_bp("modules.routes.errors")
 api_bp         = _get_bp("modules.routes.api")
@@ -672,6 +695,16 @@ locates_bp     = _get_bp("modules.routes.locates")   # /api/locates/*
 training_bp    = _get_bp("modules.routes.training")  # /training (PDF hub + help directory)
 wgclient_bp    = _get_bp("modules.routes.wgclient")  # /wargame/play host page
 
+# --- Rate-limit exemptions for high-frequency game networking -----------------
+try:
+    if wgapi_bp:
+        # Remove all default Flask-Limiter constraints from the wargame API
+        limiter.exempt(wgapi_bp)
+        logger.info("Limiter: exempted blueprint 'wgapi' (/wgapi/*) from rate limits")
+except Exception as e:
+    logger.warning("Limiter: could not exempt 'wgapi' blueprint: %s", e)
+# -----------------------------------------------------------------------------
+
 # Register blueprints with unique names to avoid collisions
 tiles_bp       = _get_bp("modules.services.tiles")   # /tiles/{z}/{x}/{y}.png
 # Weather (page + API)
@@ -687,6 +720,7 @@ _reg(help_bp,        name="help")
 _reg(winlink_bp,     name="winlink")
 _reg(errors_bp,      name="errors")
 _reg(api_bp,         name="api")
+_reg(wgapi_bp,       name="wgapi")
 _reg(core_bp,        name="core")
 _reg(ramp_bp,        name="ramp")
 _reg(wgramp_bp,      name="wgramp")
@@ -1059,6 +1093,9 @@ def _root():
 # Core request hooks (thin delegators → keep app.py small)
 @app.before_request
 def _core_before_request():
+    # Skip duplicate work on WG fast-lane or when auth already ran
+    if _is_wg_fastlane_path(request.path) or getattr(g, "AUTH_CHECKED", False):
+        return
     # 1) auth gate; may return a redirect/response
     r = require_login()
     if r:
@@ -1069,9 +1106,16 @@ def _core_before_request():
     _ensure_wargame_scheduler_once()
     _start_radio_tx_once()
     maybe_start_distances()
+    g.AUTH_CHECKED = True
 
 @app.after_request
 def _core_after_request(resp):
+    # Tag fast-lane responses to aid diagnostics and any upstream caches
+    try:
+        if _is_wg_fastlane_path(request.path):
+            resp.headers["X-WG-Fastlane"] = "1"
+    except Exception:
+        pass
     # replay preference cookies on GETs
     return refresh_user_cookies(resp)
 

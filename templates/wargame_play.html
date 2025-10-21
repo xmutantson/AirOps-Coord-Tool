@@ -1,15 +1,141 @@
 {% extends "base.html" %}
-{% block title %}War Game — Walkabout{% endblock %}
+{% block title %}Wargame{% endblock %}
+
 {% block content %}
+
+<!-- Name Gate (blocks input until saved) -->
+<div id="wg-name-gate" style="position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.70);z-index:60;">
+  <div style="background:#0f1115;border:1px solid #333;min-width:320px;max-width:92vw;color:#eaeaea;border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,.45);padding:16px;">
+    <h3 style="margin:0 0 10px 0;">Enter your display name</h3>
+    <div style="display:flex;gap:.5rem;align-items:center;">
+      <input id="wg-name-input" type="text" maxlength="24" placeholder="e.g., Kameron"
+             style="flex:1;min-width:220px;background:#141820;border:1px solid #2a2f3a;color:#eaeaea;border-radius:6px;padding:8px 10px;" />
+      <button id="wg-name-commit" class="btn btn-primary">Save</button>
+    </div>
+    <p style="margin:.75rem 0 0 0;opacity:.8;font-size:12px;">You must choose a name before entering the ramp.</p>
+  </div>
+</div>
 
 <div id="game-root"></div>
 
+<!-- Debug panel -->
+<div id="wg-debug"
+     style="position:absolute;left:0;right:0;bottom:0;
+            background:rgba(255,255,255,0.95);padding:8px 10px;
+            max-height:32vh;overflow:auto;font-size:14px;z-index:20;">
+  <details open>
+    <summary style="cursor:pointer;font-weight:700">Debug Tools</summary>
+
+    <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.5rem 0;">
+      <label>X <input id="dbg-x" type="number" step="1" value="800" style="width:8ch;margin-left:.25rem;"></label>
+      <label>Y <input id="dbg-y" type="number" step="1" value="450" style="width:8ch;margin-left:.25rem;"></label>
+      <button id="dbg-teleport" class="btn btn-secondary" type="button">Teleport Player</button>
+      <button id="dbg-center"   class="btn btn-secondary" type="button">Center Player</button>
+      <label style="margin-left:auto;display:inline-flex;gap:.35rem;align-items:center;">
+        <input id="dbg-grid" type="checkbox"> Show Grid
+      </label>
+    </div>
+
+    <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.35rem 0;">
+      <strong>Layout</strong>
+      <button id="dbg-default-layout" class="btn btn-secondary" type="button">Respawn Default Layout</button>
+      <button id="dbg-clear-props"    class="btn danger"       type="button">Clear Props</button>
+    </div>
+
+    <hr style="margin:.35rem 0;">
+
+    <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.35rem 0;">
+      <strong>Boxes</strong>
+      <select id="dbg-box-size">
+        <option value="small">small</option>
+        <option value="medium" selected>medium</option>
+        <option value="large">large</option>
+        <option value="xl">xl</option>
+      </select>
+      <button id="dbg-box-spawn" class="btn btn-secondary" type="button">Spawn Box</button>
+      <label>Count <input id="dbg-pile-count" type="number" min="1" value="9" style="width:18ch;margin-left:.25rem;"></label>
+      <label>Cols <input id="dbg-pile-cols"  type="number" min="1" value="3" style="width:18ch;margin-left:.25rem;"></label>
+      <button id="dbg-pile-spawn" class="btn btn-secondary" type="button">Spawn Pile</button>
+    </div>
+
+    <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.35rem 0;">
+      <strong>Cart</strong>
+      <select id="dbg-cart-face">
+        <option value="left" selected>left</option>
+        <option value="up">up</option>
+        <option value="down">down</option>
+      </select>
+      <button id="dbg-cart-spawn" class="btn btn-secondary" type="button">Spawn Cart</button>
+    </div>
+
+    <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.35rem 0;">
+      <strong>Truck</strong>
+      <select id="dbg-truck-face">
+        <option value="up">up</option>
+        <option value="down">down</option>
+        <option value="left">left</option>
+        <option value="right" selected>right</option>
+      </select>
+      <button id="dbg-truck-spawn" class="btn btn-secondary" type="button">Spawn Truck</button>
+    </div>
+
+    <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.5rem 0;">
+      <strong>Plane</strong>
+      <select id="dbg-plane-face">
+        <option value="up">up</option>
+        <option value="down">down</option>
+        <option value="left">left</option>
+        <option value="right" selected>right</option>
+      </select>
+      <button id="dbg-plane-spawn" class="btn btn-secondary" type="button">Spawn Plane</button>
+    </div>
+
+    <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.5rem 0;">
+      <strong>Player</strong>
+      <button id="dbg-carry-toggle" class="btn btn-secondary" type="button">Toggle Carry</button>
+    </div>
+
+    <hr style="margin:.35rem 0;">
+
+    <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.35rem 0;">
+      <strong>Stockpile</strong>
+      <select id="dbg-sp-size">
+        <option value="small">small</option>
+        <option value="medium" selected>medium</option>
+        <option value="large">large</option>
+        <option value="xl">xl</option>
+      </select>
+      <label>Count <input id="dbg-sp-count" type="number" min="1" value="1" style="width:18ch;margin-left:.25rem;"></label>
+      <button id="dbg-sp-add" class="btn btn-secondary" type="button">Add to Stockpile</button>
+      <button id="dbg-sp-clear" class="btn danger" type="button">Clear Stockpile</button>
+      <button id="dbg-sp-init" class="btn btn-secondary" type="button">Rebuild Zone</button>
+    </div>
+  </details>
+</div>
+
+<!-- Minimal modal for interactions -->
+<div id="wg-modal" style="display:none;position:fixed;inset:0;align-items:center;justify-content:center;background:rgba(0,0,0,0.45);z-index:50;">
+  <div style="background:#0f1115;border:1px solid #333;min-width:320px;max-width:92vw;color:#eaeaea;border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,.45);">
+    <div id="wg-modal-msg" style="padding:12px 14px;border-bottom:1px solid #2a2a2a;font-weight:600;"></div>
+    <div id="wg-modal-body" style="padding:12px 14px;"></div>
+    <div style="display:flex;gap:.5rem;justify-content:flex-end;padding:12px 14px;border-top:1px solid #2a2a2a;">
+      <button id="wg-modal-cancel" class="btn">Cancel</button>
+      <button id="wg-modal-ok" class="btn btn-primary">OK</button>
+    </div>
+  </div>
+</div>
+
 <script>
-  // Expose player name to the game client
-  window.PLAYER_NAME = {{ player_name|tojson }};
+  // Provide a default (used before join; replaced after name gate)
+  window.PLAYER_NAME = "";
 </script>
 
-<!-- Vendor Phaser (place the minified file at static/vendor/phaser/phaser.min.js) -->
+<!-- Vendor Phaser -->
 <script src="{{ url_for('static', filename='vendor/phaser/phaser.min.js') }}"></script>
+<!-- Assets (optional, falls back to generated placeholders) -->
+<script src="{{ url_for('static', filename='wargame/assetkit.js') }}"></script>
+<!-- Net shim -->
+<script src="{{ url_for('static', filename='wargame/net.js') }}"></script>
+<!-- Game -->
 <script src="{{ url_for('static', filename='wargame/game.js') }}"></script>
 {% endblock %}
