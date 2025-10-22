@@ -107,17 +107,29 @@
     </table>`;
   }
 
+  // Sort helper: active (outstanding>0) first, then by priority desc, then airport asc
+  function cmpAirports(a, b){
+    const az = (a.outstanding_lb || 0) <= 0;
+    const bz = (b.outstanding_lb || 0) <= 0;
+    if (az !== bz) return az ? 1 : -1; // zeros to the bottom
+    const ap = (a.max_pri || 0), bp = (b.max_pri || 0);
+    if (ap !== bp) return bp - ap;
+    return String(a.airport || '').localeCompare(String(b.airport || ''));
+  }
+
   async function bootstrap(){
     style();
     const root = document.getElementById('agg-requests-airports');
     if (!root) return;
     const data = await j('/aggregate/ramp/v2');
-    data.forEach(a => root.appendChild(airportCard(a)));
+    const ordered = data.slice().sort(cmpAirports);
+    ordered.forEach(a => root.appendChild(airportCard(a)));
 
     // ---- Auto-refresh: update chips + any OPEN airport details ----
     async function refreshAll({force=false} = {}){
       try{
-        const fresh = await j('/aggregate/ramp/v2');           // [{airport, outstanding_lb, has_life_saving}, ...]
+        const fresh = await j('/aggregate/ramp/v2');           // [{airport, outstanding_lb, has_life_saving, max_pri}, ...]
+        const ordered = fresh.slice().sort(cmpAirports);
         const byAp = new Map(fresh.map(x => [x.airport, x]));
         // Update existing cards (and add new ones if they appear)
         for (const card of Array.from(root.querySelectorAll('.airport'))){
@@ -140,10 +152,15 @@
           }
         }
         // Add any new airports that showed up
-        for (const a of fresh){
+        for (const a of ordered){
           if (!root.querySelector(`.airport[data-airport="${a.airport}"]`)){
             root.appendChild(airportCard(a));
           }
+        }
+        // Reorder DOM to match 'ordered' sequence (append moves existing nodes)
+        for (const a of ordered){
+          const card = root.querySelector(`.airport[data-airport="${a.airport}"]`);
+          if (card) root.appendChild(card);
         }
       }catch(_e){ /* silent; next tick will catch up */ }
     }

@@ -1,5 +1,7 @@
 
-import sqlite3, csv, io, zipfile, json, os, re, base64
+import sqlite3, csv, io, zipfile, json, os, re, base64, glob
+import urllib.request, urllib.error
+import urllib.parse
 from pathlib import Path
 
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
@@ -13,6 +15,10 @@ app = current_app  # legacy shim if route body references 'app'
 
 # HTML → PDF (pure-Python)
 from weasyprint import HTML, CSS
+
+# Toggle slow HTTP fallback for WinLink attachments.
+# Default OFF (disk-first only). Set AOCT_EXPORT_WINLINK_HTTP_FALLBACK=1 to enable.
+HTTP_FALLBACK = (os.getenv("AOCT_EXPORT_WINLINK_HTTP_FALLBACK", "0").strip().lower() in ("1","true","yes","y","on"))
 
 @bp.get('/exports/ramp/manifest/<int:queue_id>.pdf')
 def exports_ramp_manifest_passthrough(queue_id: int):
@@ -82,6 +88,261 @@ def _zip_add_manifests(zf: zipfile.ZipFile) -> int:
         # Never break export-all if DB is odd
         pass
     return count
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WinLink message export helpers (per-message folders with body + attachments)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _seq_prefix(n: int, width: int = 6) -> str:
+    """
+    Zero-padded sequence prefix for filenames/folders so they sort chronologically.
+    """
+    try: return f"{int(n):0{width}d}"
+    except Exception: return f"{n}"
+
+def _safe_fs_name(s: str, maxlen: int = 120) -> str:
+    """
+    Make a filename/folder name that's broadly filesystem-safe while keeping it readable.
+    Keeps letters, numbers, spaces, basic punctuation; removes control + disallowed chars.
+    Also trims and collapses whitespace and replaces slashes with ' - '.
+    """
+    s = (s or "").strip()
+    # Replace path separators explicitly first
+    s = s.replace("/", " - ").replace("\\", " - ")
+    # Collapse whitespace
+    s = re.sub(r"\s+", " ", s)
+    # Strip leading/trailing dots/spaces
+    s = s.strip(" .")
+    # Remove control chars and characters commonly invalid on Windows/macOS
+    s = re.sub(r'[\x00-\x1f<>:"\|\?\*]+', "", s)
+    # Trim again
+    s = s.strip(" .")
+    # Ensure not empty and clamp length
+    if not s:
+        return ""
+    if len(s) > maxlen:
+        s = s[:maxlen].rstrip()
+    return s
+
+def _candidate_attach_dirs_for(msg_id: int) -> list[str]:
+    """
+    Likely attachment directories for a given WinLink message id.
+    Adjust here if your deployment stores attachments differently.
+    """
+    root = _data_root()
+    msg_dir = f"msg_{int(msg_id)}"
+    cand = [
+        # observed host layout: data/winlink/attachments/msg_<id>/**
+        os.path.join(root, "winlink", "attachments", msg_dir),
+        # other common variants
+        os.path.join(root, "winlink", "attachments", str(msg_id)),
+        os.path.join(root, "winlink", "msgs", str(msg_id), "attachments"),
+        os.path.join(root, "winlink", str(msg_id)),
+        os.path.join(root, "winlink", msg_dir),
+        # ► WinLink Inbox (what the /winlink/attachment endpoint typically serves)
+        os.path.join(root, "winlink", "inbox", str(msg_id), "attachments"),
+        os.path.join(root, "winlink", "inbox", str(msg_id)),
+        os.path.join(root, "winlink", "inbox_attachments", str(msg_id)),
+    ]
+    seen, out = set(), []
+    for p in cand:
+        if p not in seen:
+            seen.add(p); out.append(p)
+    return out
+
+def _glob_find_attachments(msg_id: int) -> list[tuple[str, str]]:
+    """
+    Fallback sweep under data/winlink/** looking for:
+      …/<msg_id>/attachments/*  OR  files directly in a dir named exactly <msg_id> or msg_<msg_id>.
+    Used only when the direct candidates are empty.
+    """
+    base = os.path.join(_data_root(), "winlink")
+    if not os.path.isdir(base): return []
+    hits, seen = [], set()
+    # inbox-first (most common)
+    for full in glob.glob(os.path.join(base, "inbox", "**", str(msg_id), "attachments", "*"), recursive=True):
+        if os.path.isfile(full) and not os.path.basename(full).startswith("."):
+            if full not in seen: seen.add(full); hits.append((full, os.path.basename(full)))
+    for full in glob.glob(os.path.join(base, "inbox", "**", str(msg_id), "*"), recursive=True):
+        if os.path.isfile(full) and not os.path.basename(full).startswith("."):
+            if os.path.basename(os.path.dirname(full)) == str(msg_id) and full not in seen:
+                seen.add(full); hits.append((full, os.path.basename(full)))
+    # attachments/msg_<id>/** (observed host layout)
+    for full in glob.glob(os.path.join(base, "attachments", f"msg_{int(msg_id)}", "**", "*"), recursive=True):
+        if os.path.isfile(full) and not os.path.basename(full).startswith("."):
+            if full not in seen: seen.add(full); hits.append((full, os.path.basename(full)))
+    # general catch-all under winlink/** for .../<id>/attachments/*
+    for full in glob.glob(os.path.join(base, "**", str(msg_id), "attachments", "*"), recursive=True):
+        if os.path.isfile(full) and not os.path.basename(full).startswith("."):
+            if full not in seen: seen.add(full); hits.append((full, os.path.basename(full)))
+    # any directory exactly named <id> or msg_<id>
+    for pat in (os.path.join(base, "**", str(msg_id), "*"),
+                os.path.join(base, "**", f"msg_{int(msg_id)}", "*")):
+        for full in glob.glob(pat, recursive=True):
+            if os.path.isfile(full) and not os.path.basename(full).startswith("."):
+                parent = os.path.basename(os.path.dirname(full))
+                if parent in (str(msg_id), f"msg_{int(msg_id)}") and full not in seen:
+                    seen.add(full); hits.append((full, os.path.basename(full)))
+    return hits
+
+def _list_existing_attachments(msg_id: int) -> list[tuple[str, str]]:
+    """
+    Return [(abs_path, basename), ...] for all files considered attachments
+    for this message id. Skips dirs and dotfiles.
+    """
+    out, seen = [], set()
+    for base in _candidate_attach_dirs_for(msg_id):
+        if not os.path.isdir(base):
+            continue
+        try:
+            for full in glob.glob(os.path.join(base, "*")):
+                if not os.path.isfile(full):
+                    continue
+                bn = os.path.basename(full)
+                if not bn or bn.startswith("."):
+                    continue
+                if full not in seen:
+                    seen.add(full); out.append((full, bn))
+        except Exception:
+            # Never break the export if one path is unreadable
+            pass
+    if not out:
+        # Scoped recursive fallback (inbox-first)
+        try: out = _glob_find_attachments(msg_id)
+        except Exception: pass
+    return out
+
+def _fetch_attachment_index_json(msg_id: int) -> list[str]:
+    """
+    Try to hit /winlink/attachment/<id>/ and parse a lightweight JSON index of files.
+    Returns a list of filenames; swallows failures.
+    """
+    try:
+        from flask import request
+        base = (request.url_root or "").rstrip("/")
+        url  = f"{base}/winlink/attachment/{msg_id}/"
+        req  = urllib.request.Request(url, headers={"X-Requested-With":"XMLHttpRequest"})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+        files = data.get("files") or []
+        out: list[str] = []
+        for f in files:
+            if isinstance(f, dict):
+                name = (f.get("name") or "").strip()
+            else:
+                name = str(f or "").strip()
+            name = os.path.basename(name)
+            if name:
+                out.append(name)
+        return out
+    except Exception:
+        return []
+
+def _try_add_http_attachment(zf: zipfile.ZipFile, msg_id: int, filename: str, arc_prefix: str) -> bool:
+    """
+    Last-resort: GET /winlink/attachment/<id>/<filename> and add it directly to the zip.
+    Returns True if added.
+    """
+    try:
+        from flask import request
+        base = (request.url_root or "").rstrip("/")
+        fn   = os.path.basename(filename.strip())
+        url  = f"{base}/winlink/attachment/{msg_id}/{urllib.parse.quote(fn)}"
+        req  = urllib.request.Request(url, headers={"X-Requested-With":"XMLHttpRequest"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            blob = resp.read()
+        arc = f"{arc_prefix}/attachments/{fn}".replace("\\","/")
+        zf.writestr(arc, blob)
+        return True
+    except Exception:
+        return False
+
+def _zip_add_winlink_message_folders(zf: zipfile.ZipFile) -> dict:
+    """
+    Build: WinLink/<SEQ>_<SubjectSafe>/{ <SEQ>_<SubjectSafe>.txt, attachments/* }
+    for each inbound WinLink message found in winlink_messages.
+    Returns a small summary dict for optional future use.
+    """
+    summary = {"messages": 0, "folders_made": 0, "bodies_written": 0, "attachments_added": 0}
+    try:
+        rows = dict_rows("""
+            SELECT id,
+                   IFNULL(timestamp,'') AS ts,
+                   IFNULL(sender,'')    AS sender,
+                   IFNULL(subject,'')   AS subject,
+                   IFNULL(body,'')      AS body
+              FROM winlink_messages
+             WHERE LOWER(IFNULL(direction,'')) = 'in'
+             ORDER BY id ASC
+        """)
+    except Exception:
+        rows = []
+
+    used_names = set()
+    for r in (rows or []):
+        summary["messages"] += 1
+        msg_id   = int(r.get("id") or 0)
+        subj_raw = r.get("subject") or ""
+        body_txt = r.get("body") or ""
+
+        seq = _seq_prefix(msg_id)
+        subj_safe = _safe_fs_name(subj_raw, maxlen=80) or "untitled"
+        folder = f"{seq}_{subj_safe}"
+        # Avoid collisions when multiple messages share a (sanitized) subject
+        if folder in used_names:
+            folder = f"{folder}__{msg_id}"
+        used_names.add(folder)
+        base_dir = f"WinLink/{folder}".replace("\\", "/")
+
+        # Body file named by the subject, as requested
+        body_name = _safe_fs_name(subj_raw, maxlen=120) or "untitled"
+        body_arc = f"{base_dir}/{seq}_{body_name}.txt".replace("\\", "/")
+        try:
+            zf.writestr(body_arc, body_txt)
+            summary["bodies_written"] += 1
+        except Exception:
+            pass
+
+        # Attachments — filesystem-first; optional HTTP fallback (env AOCT_EXPORT_WINLINK_HTTP_FALLBACK)
+        files = _list_existing_attachments(msg_id)
+        added_names = set()
+        for abs_path, bn in files:
+            arc = f"{base_dir}/attachments/{bn}".replace("\\", "/")
+            try:
+                zf.write(abs_path, arc)
+                summary["attachments_added"] += 1
+                added_names.add(bn)
+            except Exception:
+                pass
+
+        # If none found (or incomplete), consult index JSON, then try FS again by name, else HTTP
+        try_names = []
+        if not files and HTTP_FALLBACK:
+            try_names = _fetch_attachment_index_json(msg_id) or []
+        for name in try_names:
+            if not name or name in added_names:
+                continue
+            # Try mapping the name onto our candidate dirs
+            found = False
+            for cand in _candidate_attach_dirs_for(msg_id):
+                full = os.path.join(cand, name)
+                if os.path.isfile(full):
+                    try:
+                        arc = f"{base_dir}/attachments/{name}".replace("\\","/")
+                        zf.write(full, arc)
+                        summary["attachments_added"] += 1
+                        added_names.add(name)
+                        found = True
+                        break
+                    except Exception:
+                        pass
+            if not found and HTTP_FALLBACK:
+                if _try_add_http_attachment(zf, msg_id, name, base_dir):
+                    summary["attachments_added"] += 1
+                    added_names.add(name)
+        if files or body_txt:
+            summary["folders_made"] += 1
+    return summary
 
 @bp.get('/exports/manifests.zip')
 def export_manifests_only_zip():
@@ -212,12 +473,35 @@ def export_all_csv():
         except Exception:
             pass
 
+        # ── WinLink per-message folders (inbound): subject-named dirs + body + attachments
+        try:
+            _ = _zip_add_winlink_message_folders(zf)
+        except Exception:
+            # Never break export-all on WinLink hiccups
+            pass
+
     mem_zip.seek(0)
+    # Build filename: {default origin}_yyyymmdd-hhmmss_{mission number}_export_all.zip
+    ts = datetime.utcnow().strftime('%Y%m%d-%H%M%S')
+    try:
+        origin = (get_preference('default_origin') or '').strip().upper()
+    except Exception:
+        origin = ''
+    try:
+        mission = (get_preference('mission_number') or '').strip().upper()
+    except Exception:
+        mission = ''
+    def _tok(val: str, fallback: str) -> str:
+        # Keep only safe token chars to avoid filesystem issues
+        s = re.sub(r'[^A-Za-z0-9_-]+', '', (val or '').upper())
+        return s if s else fallback
+    fname = f"{_tok(origin, 'UNKNOWN')}_{ts}_{_tok(mission, 'NOMSN')}_export_all.zip"
+
     return send_file(
         mem_zip,
         mimetype='application/zip',
         as_attachment=True,
-        download_name='export_all.zip'
+        download_name=fname
     )
 
 @bp.route('/import_csv', methods=['POST'])

@@ -314,7 +314,7 @@ function addRow(container, def){
   row.style.gap = '.5rem';
   row.innerHTML = `
     <input class="wl-name" placeholder="item (e.g., water)" style="flex:1 1 40%;">
-    <input class="wl-weight" type="number" step="0.1" min="0" placeholder="0" style="flex:0 0 25%;">
+    <input class="wl-weight" type="number" step="0.1" min="0.1" placeholder="0" style="flex:0 0 25%;" inputmode="decimal">
     <select class="wl-unit" style="flex:0 0 20%;">
       <option value="lb">lb</option>
       <option value="kg">kg</option>
@@ -348,18 +348,6 @@ function xhrHeaders(extra={}){
   return h;
 }
 
-// Attach CSRF / requested-with headers to POSTs (mirrors pattern used elsewhere)
-function xhrHeaders(extra={}){
-  const token = document.querySelector('input[name="csrf_token"]')?.value || '';
-  const h = {'X-Requested-With':'XMLHttpRequest'};
-  if (token){
-    h['X-CSRFToken'] = token;
-    h['X-CSRF-Token'] = token;
-  }
-  for (const k in extra) h[k] = extra[k];
-  return h;
-}
-
 function gatherItems(container){
   const rows = Array.from(container.querySelectorAll('.wl-intake-row'));
   const items = [];
@@ -373,6 +361,40 @@ function gatherItems(container){
   }
   return items;
 }
+
+// Hard-stop validation: every non-blank row must have a name AND a positive weight.
+function validateIntakeRows(container){
+  const rows = Array.from(container.querySelectorAll('.wl-intake-row'));
+  let firstBad = null;
+  for (const r of rows){
+    const nameEl = r.querySelector('.wl-name');
+    const valEl  = r.querySelector('.wl-weight');
+    const unitEl = r.querySelector('.wl-unit');
+    const name   = (nameEl?.value || '').trim();
+    const raw    = (valEl?.value ?? '');
+    const hasAny = !!name || (raw !== '');
+    if (!hasAny) continue; // allow fully-blank rows
+    // Clear previous messages
+    nameEl?.setCustomValidity?.('');
+    valEl?.setCustomValidity?.('');
+    const val = Number(raw);
+    const lbs = toPounds(val, (unitEl?.value || 'lb').toLowerCase());
+    if (!name){
+      nameEl?.setCustomValidity?.('Enter an item name.');
+      firstBad = firstBad || nameEl;
+    }
+    if (!Number.isFinite(lbs) || lbs <= 0){
+      valEl?.setCustomValidity?.('Enter a positive weight.');
+      firstBad = firstBad || valEl;
+    }
+  }
+  if (firstBad?.reportValidity){
+    firstBad.reportValidity();
+    firstBad.focus?.();
+    return false;
+  }
+  return true;
+}
 async function submitIntake(scopeEl, opts){
   const apEl = scopeEl.querySelector('input.force-upper');
   const rowsEl = scopeEl.querySelector('#' + (scopeEl.id === 'wlGlobalIntakeDialog' ? 'wl-g-rows' : 'wl-intake-rows'));
@@ -380,6 +402,8 @@ async function submitIntake(scopeEl, opts){
   const prEl = scopeEl.querySelector('select[data-role="priority"]');
   const airportRaw = apEl?.value || '';
   const airport = canonAirport(airportRaw);
+  // Strict row validation first (cannot be bypassed by ICAO confirm)
+  if (!validateIntakeRows(rowsEl)) return;
   const items = gatherItems(rowsEl);
   if (!airport){ alert('Airport is required.'); apEl?.focus(); return; }
   if (!items.length){ alert('Add at least one item with a positive weight.'); return; }

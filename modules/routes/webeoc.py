@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from flask import Blueprint, jsonify, request
 from modules.services.webeoc.ingest_rr import parse_saved_data
+from modules.utils.common import _rr_webeoc_guess_inline_xml, _rr_webeoc_is_wa_message
+from modules.utils.common import dict_rows as _dict_rows  # already imported as dict_rows
 from modules.utils.common import dict_rows
 
 bp = Blueprint("webeoc", __name__, url_prefix="/webeoc")
@@ -79,10 +81,13 @@ def import_from_email():
         return jsonify({"ok": False, "error": "missing email_id"}), 400
 
     # Read body from stored winlink_messages
-    rows = dict_rows("SELECT body FROM winlink_messages WHERE id=?", (email_id,))
-    body = (rows[0].get("body") or "").strip() if rows else ""
+    rows = dict_rows("SELECT subject, body FROM winlink_messages WHERE id=?", (email_id,))
+    subject = (rows[0].get("subject") or "").strip() if rows else ""
+    body    = (rows[0].get("body") or "").strip() if rows else ""
     if not body:
         return jsonify({"ok": False, "error": "email not found"}), 404
 
-    parsed = parse_saved_data(body)
+    # Prefer inline XML if present; else fall back to body (JSON or text)
+    inline_xml = _rr_webeoc_guess_inline_xml(body)
+    parsed = parse_saved_data(inline_xml or body)
     return jsonify({"ok": True, "payload": _to_ui_payload(parsed)})

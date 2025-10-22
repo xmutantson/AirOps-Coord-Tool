@@ -91,13 +91,23 @@ def _strip_weight_and_mult_tokens(s: str) -> str:
       "Beef 900 lb x4"         -> "Beef"
       "Water: 50 kg @ 2 each"  -> "Water"
       "Generators 2 metric tons" -> "Generators"
+      "6 tons gauss ammo"      -> "gauss ammo"
     """
     if not s: return ""
     text = str(s)
     m = _WEIGHT_RE.search(text)
-    if m: text = text[:m.start()]
+    if m:
+        if m.start() == 0:
+            # Weight-first: drop the weight token and optional “of/for” and keep the rest
+            text = text[m.end():]
+            text = re.sub(r'^\s*(?:of|for)\b[:\-\s]*', '', text, flags=re.I)
+        else:
+            # Weight after the name: keep the left side (the name)
+            text = text[:m.start()]
     text = _MULT_RE.sub("", text)
     text = _EACH_RE.sub("", text)
+    # Optional: strip simple leading counts like "4 pallets ..." but not "N95 masks"
+    text = re.sub(r'^\s*\d{1,4}\s+(?=[A-Za-z])', '', text)
     return re.sub(r"\s+", " ", text).strip()
 
 def _compute_total_lb_from_size_qty(size: str, qty: str) -> float | None:
@@ -131,7 +141,13 @@ def parse_saved_data(text: str) -> Dict[str, Any]:
     Validation (strict):
       - need, priority, destination, qty_lb (parsable to pounds) are REQUIRED.
     """
-    raw = json.loads(text)
+    # Accept either JSON "Save data" or arbitrary plaintext.
+    # If it's not JSON, we'll handle it via the plaintext fallback below.
+    raw = None
+    try:
+        raw = json.loads(text)
+    except Exception:
+        raw = None
     items: List[Dict[str, Any]] = []
     errors: List[str] = []
     # If this looks like the real WebEOC Save-data (Input1..Input28), map it.
@@ -249,16 +265,96 @@ def parse_saved_data(text: str) -> Dict[str, Any]:
         emit(raw)
         return {"items": items, "raw": raw, "errors": errors}
     else:
-        # plain text fallback (very permissive)
-        s = str(text)
-        emit({
-            "airport": (re.search(r'\b([A-Z]{3,4})\b', s) or [None, ""])[1],
-            "priority": (re.search(r'life|preserv|incident', s, re.I) or ["", "Incident"])[1],
-            "need": (re.search(r'need:\s*(.*)$', s, re.I|re.M) or ["",""])[1],
-            "qty_lb": _to_float((re.search(r'(\d+(?:\.\d+)?)\s*lb', s, re.I) or ["","0"])[1]),
-            "source": None
+        # Plain-text fallback (structured headings and free lines)
+        return _parse_plaintext_rr(text)
+
+def _parse_plaintext_rr(text: str) -> Dict[str, Any]:
+    """
+    Extracts:
+      - Priority: from "Priority: ..."
+      - Airport/Delivery: from "Delivery Location Name:" (or "Delivery Location:")
+      - Items: lines inside the "Detailed Description:" section, plus a single-line
+               "Request Specific Resources: Description/Kind: ... Size/Type: ... Quantity: ..."
+    Weight handling:
+      • If a line contains a weight token (lb/kg/ton/…): convert to lb and use it.
+      • Otherwise emit the item with qty_lb=None so the UI can surface validation.
+    """
+    s = str(text or "")
+    items: List[Dict[str, Any]] = []
+    errors: List[str] = []
+
+    # Priority (exact label preferred)
+    m_pri = re.search(r'^\s*Priority\s*:\s*(.+)$', s, re.I|re.M)
+    pri_text = (m_pri.group(1).strip() if m_pri else "Incident Stabilization")
+
+    # Delivery location / airport label (allow non-ICAO, we’ll upper it)
+    m_del = re.search(r'^\s*Delivery\s+Location(?:\s+Name)?\s*:\s*(.+)$', s, re.I|re.M)
+    deliver_label = (m_del.group(1).strip() if m_del else "")
+    ap_canon = canonical_airport_code(deliver_label) or deliver_label.strip()
+    airport_label = (ap_canon or "").upper()
+
+    # Pull Detailed Description block (until next section/separator)
+    m_desc = re.search(
+        r'Detailed\s+Description\s*:\s*(.*?)\n(?:\s*-{3,}\s*$|^\s*Request\s+Specific\s+Resources\s*:|^\s*Delivery\s+Location\b|^\s*$)',
+        s, re.I | re.M | re.S
+    )
+    desc_block = (m_desc.group(1) if m_desc else "")
+    for raw in (desc_block.splitlines() if desc_block else []):
+        line = (raw or "").strip()
+        if not line:
+            continue
+        # Convert any weight on the line; also support simple multipliers (x4, "4 each")
+        per_or_total = _weight_from_text(line)  # lb if present
+        mult = _mult_from_text(line)
+        total_lb = None
+        if per_or_total is not None:
+            total_lb = float(per_or_total) * float(mult) if (mult and mult > 1) else float(per_or_total)
+        # Name: strip out weight & multiplier tokens
+        need_label = _strip_weight_and_mult_tokens(line)
+        if not need_label:
+            continue
+        items.append({
+            "airport": airport_label,
+            "priority_code": prio_from_text(pri_text),
+            "need": need_label,
+            "qty_lb": (round(float(total_lb), 3) if total_lb else None),
+            "source_ref": None,
         })
-        return {"items": items, "raw": {"text": s}, "errors": errors}
+
+    # Also look at the single-line "Request Specific Resources" row if present
+    m_rsr = re.search(
+        r'^\s*Request\s+Specific\s+Resources\s*:\s*(.*?)\s*(?:^\s*-{3,}\s*$|^\s*Delivery\s+Location\b|$)',
+        s, re.I | re.M | re.S
+    )
+    if m_rsr:
+        row = m_rsr.group(1)
+        # e.g. "Description/Kind: Diahsi  Size/Type: Assault   Quantity: 1"
+        m_kind = re.search(r'Description/Kind\s*:\s*(.+?)(?:\s{2,}|$)', row, re.I | re.S)
+        m_qty  = re.search(r'Quantity\s*:\s*(.+?)(?:\s{2,}|$)', row, re.I | re.S)
+        name = (m_kind.group(1).strip() if m_kind else "")
+        qty_field = (m_qty.group(1).strip() if m_qty else "")
+        if name:
+            wt = _weight_from_text(qty_field)  # treat quantity as weight only if it contains units
+            items.append({
+                "airport": airport_label,
+                "priority_code": prio_from_text(pri_text),
+                "need": name,
+                "qty_lb": (round(float(wt), 3) if wt else None),
+                "source_ref": None,
+            })
+
+    if not items:
+        errors.append("No items found in Detailed Description or Request Specific Resources.")
+
+    # Normalize: if we have an airport label, propagate to all; else leave blank
+    for it in items:
+        it["airport"] = airport_label or it.get("airport") or ""
+
+    return {
+        "items": items,
+        "raw": {"text": s},
+        "errors": errors,
+    }
 
 def ingest_items(items: List[Dict[str, Any]],
                  raw: Dict[str, Any],

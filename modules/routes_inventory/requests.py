@@ -10,6 +10,7 @@ from app import DB_FILE
 import sqlite3
 from datetime import datetime
 from typing import Optional
+from modules.utils.comms import insert_comm
 
 def _display_from_sanitized(s: str) -> str:
     """UI label from a sanitized key: 'rice-bags' -> 'RICE BAGS'."""
@@ -73,6 +74,39 @@ def requests_intake():
         node["raw"] = raw_name  # last wins
         node["weight"] += w
 
+    # Create a Communications log entry (provenance for this intake)
+    ap_canon = canonical_airport_code(airport) or airport.strip().upper()
+    pri_code = prio_from_text(priority_text)
+    pretty_lines = "\n".join(f"- {v['raw']}: {v['weight']:.1f} lb" for v in agg.values())
+    body_txt = (
+        f"Resource Request intake\n"
+        f"Airport: {ap_canon}\n"
+        f"Priority: {priority_text or 'Incident Stabilization'}\n"
+        f"{('Source Winlink ID: ' + str(source_email_id)) if source_email_id else ''}\n\n"
+        f"Items:\n{pretty_lines}"
+    ).strip()
+    comm_id = insert_comm(
+        timestamp_utc=None,                 # normalized inside insert_comm()
+        method="Resource Request (Intake)", # keep method family consistent with WebEOC path
+        direction="in",
+        from_party=None,
+        to_party=None,
+        subject=f"RR — {ap_canon}",
+        body=body_txt,
+        operator=None,
+        notes=None,
+        # Keep metadata small & canonical; 'source' is a blessed key in comms.py
+        metadata={
+            "kind": "resource_request",
+            "source": "intake_ui" if not source_email_id else "winlink_ui",
+            "priority_code": pri_code,
+            "airport_canon": ap_canon,
+            "winlink_id": str(source_email_id) if source_email_id else None,
+        }
+    )
+
+    # Insert rows
+
     added = 0
     for node in agg.values():
         cargo_svc.upsert_request(airport, node["raw"], node["weight"], source_email_id)
@@ -80,8 +114,6 @@ def requests_intake():
 
     # ── v2 mirror so the aggregated panel shows progress immediately ───────
     try:
-        ap_canon = canonical_airport_code(airport) or airport.strip().upper()
-        pri_code = prio_from_text(priority_text)
         for node in agg.values():
             name = (node.get("raw") or "").strip()
             qty_lb = float(node.get("weight") or 0.0)
@@ -92,8 +124,8 @@ def requests_intake():
                 priority_code  = pri_code,
                 need           = name,
                 qty_lb         = qty_lb,
-                source_comm_id = None,  # manual intake
-                source_ref     = str(source_email_id) if source_email_id else None,
+                source_comm_id = comm_id,  # link directly to the comms row we just created
+                source_ref     = str(source_email_id) if source_email_id else "manual_intake",
                 raw_json       = {"source": "manual_intake"}
             )
     except Exception:
@@ -110,7 +142,7 @@ def requests_intake():
             )
     except Exception:
         pass
-    return jsonify(ok=True, added=added), status
+    return jsonify({"ok": True, "added": added, "comm_id": comm_id}), status
 
 
 @inventory_bp.get("/requests/summary")
