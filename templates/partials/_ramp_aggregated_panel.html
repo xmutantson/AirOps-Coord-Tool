@@ -1,0 +1,164 @@
+<section class="agg-requests-panel">
+  <h3 class="muted" style="margin:0 0 8px;">Aggregated Requests</h3>
+  <div id="agg-requests-airports"></div>
+</section>
+
+<script>
+/* Self-contained panel (safe to include in drawer or as a page section) */
+(function () {
+  // prevent double-bootstrapping if this partial appears twice
+  const BOOT_KEY = '__AGG_PANEL_BOOTSTRAPPED__';
+  if (window[BOOT_KEY]) return;
+  window[BOOT_KEY] = true;
+
+  async function j(url) {
+    const r = await fetch(url, {headers: {"X-Requested-With":"XMLHttpRequest"}});
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  }
+
+  function priBadge(code, label){
+    const cls = code === 3 ? "badge ls" : (code === 2 ? "badge pp" : "badge is");
+    const icon = code === 3 ? "&#9888;" : (code === 2 ? "&#9874;" : "&#9432;");
+    return `<span class="${cls}" title="${label}">${icon} ${label}</span>`;
+  }
+
+  function style() {
+    const css = `
+      :root{
+        --agg-surface:#fff;
+        --agg-border:#dcdcdc;
+        --agg-subtle:#6b7280;
+        --agg-chip-bg:#f3f4f6;
+        --agg-chip-fg:#111827;
+      }
+      .agg-requests-panel .airport { background:var(--agg-surface); border:1px solid var(--agg-border); border-radius:10px; margin:10px 0; box-shadow:0 1px 2px rgba(0,0,0,.04); }
+      .agg-requests-panel .airport header {
+        position: static; top:auto; left:auto; right:auto; z-index:auto; /* override global header{position:fixed} */
+        background:var(--agg-surface);
+        padding:10px 12px;
+        display:flex; align-items:center; justify-content:space-between; cursor:pointer;
+      }
+      .agg-requests-panel .airport header .name { font-weight:600; letter-spacing:.3px; }
+      .agg-requests-panel .airport header .chip { font-size:12px; padding:2px 10px; border-radius:999px; background:var(--agg-chip-bg); color:var(--agg-chip-fg); border:1px solid var(--agg-border); }
+      .agg-requests-panel .airport .body { display:none; padding:0 12px 10px 12px; }
+      .agg-requests-panel .airport.open .body { display:block; }
+      .agg-requests-panel table.req { width:100%; border-collapse:collapse; background:var(--agg-surface); }
+      .agg-requests-panel table.req th, .agg-requests-panel table.req td { padding:8px 10px; border-bottom:1px solid #eee; }
+      .agg-requests-panel table.req thead th { background:transparent; color:inherit; border-bottom:1px solid #e5e7eb; }
+      .agg-requests-panel .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; }
+      .agg-requests-panel .badge.ls { background:#b30000; color:#fff; }
+      .agg-requests-panel .badge.pp { background:#c07a00; color:#fff; }
+      .agg-requests-panel .badge.is { background:#6c757d; color:#fff; }
+      .agg-requests-panel .outstanding { font-weight:600; }
+      .agg-requests-panel .src { font-size:12px; color:var(--agg-subtle); }
+      .agg-requests-panel .airport header .hl { color:#b30000; font-weight:600; }
+    `;
+    const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
+  }
+
+  function airportCard(a){
+    const div = document.createElement('div');
+    div.className = 'airport';
+    div.dataset.airport = a.airport;
+    div.innerHTML = `
+      <header>
+        <span class="name">${a.airport}</span>
+        <span class="chip ${a.has_life_saving ? 'hl':''}">
+          Outstanding: ${a.outstanding_lb?.toFixed(1) ?? '0.0'} lb
+        </span>
+      </header>
+      <div class="body"><div class="inner">Loading…</div></div>
+    `;
+    div.querySelector('header').addEventListener('click', async () => {
+      div.classList.toggle('open');
+      const body = div.querySelector('.body .inner');
+      // Always load details when opening; they’re cheap and stay fresh.
+      if (div.classList.contains('open')) {
+        const rows = await j(`/aggregate/ramp/v2/${encodeURIComponent(a.airport)}`);
+        body.innerHTML = renderRows(a.airport, rows);
+      }
+    });
+    return div;
+  }
+
+  function renderRows(airport, rows){
+    const tr = rows.map(r => {
+      const p = priBadge(r.priority_code, r.priority_label);
+      // Show exactly as requested: "remaining (original)". Keep shipped as a hint.
+      const qty = `${(r.outstanding_lb||0).toFixed(1)} lb` +
+                  ` <span class="muted">(${(r.requested_lb||0).toFixed(1)} lb)</span>` +
+                  (r.shipped_lb>0 ? ` — shipped ${(r.shipped_lb||0).toFixed(1)} lb` : '');
+      const srcs = (r.sources||[]).map(s => {
+        const comm = s.comm_id ? ` — <a href="/comms?id=${s.comm_id}" target="_blank" rel="noopener">Comms ${s.comm_id}</a>` : '';
+        return `<div class="src">#${s.id}${comm}${s.ref ? ' — '+s.ref : ''}</div>`;
+      }).join('');
+      return `<tr>
+        <td>${p}</td>
+        <td>${r.need}</td>
+        <td>${qty}</td>
+        <td>${airport}</td>
+      </tr>
+      <tr><td colspan="4">${srcs}</td></tr>`;
+    }).join('');
+    return `<table class="req">
+      <thead><tr><th>Priority</th><th>Need</th><th>Qty remaining (original)</th><th>Deliver to</th></tr></thead>
+      <tbody>${tr || '<tr><td colspan="4">No open items.</td></tr>'}</tbody>
+    </table>`;
+  }
+
+  async function bootstrap(){
+    style();
+    const root = document.getElementById('agg-requests-airports');
+    if (!root) return;
+    const data = await j('/aggregate/ramp/v2');
+    data.forEach(a => root.appendChild(airportCard(a)));
+
+    // ---- Auto-refresh: update chips + any OPEN airport details ----
+    async function refreshAll({force=false} = {}){
+      try{
+        const fresh = await j('/aggregate/ramp/v2');           // [{airport, outstanding_lb, has_life_saving}, ...]
+        const byAp = new Map(fresh.map(x => [x.airport, x]));
+        // Update existing cards (and add new ones if they appear)
+        for (const card of Array.from(root.querySelectorAll('.airport'))){
+          const ap = card.dataset.airport;
+          const meta = byAp.get(ap);
+          if (meta){
+            const chip = card.querySelector('.chip');
+            if (chip){
+              chip.textContent = `Outstanding: ${(meta.outstanding_lb||0).toFixed(1)} lb`;
+              chip.classList.toggle('hl', !!meta.has_life_saving);
+            }
+            // If the card is open (or force==true), refresh its table
+            if (force || card.classList.contains('open')){
+              const rows = await j(`/aggregate/ramp/v2/${encodeURIComponent(ap)}`);
+              card.querySelector('.body .inner').innerHTML = renderRows(ap, rows);
+            }
+          } else {
+            // airport disappeared (everything satisfied) → remove the card
+            card.remove();
+          }
+        }
+        // Add any new airports that showed up
+        for (const a of fresh){
+          if (!root.querySelector(`.airport[data-airport="${a.airport}"]`)){
+            root.appendChild(airportCard(a));
+          }
+        }
+      }catch(_e){ /* silent; next tick will catch up */ }
+    }
+
+    // Run periodically + when tab regains focus
+    setInterval(() => refreshAll(), 15000);
+    window.addEventListener('focus', () => refreshAll());
+
+    // Expose a global hook so other code can trigger an immediate refresh:
+    window.__aggRefreshNow = () => refreshAll({force:true});
+  }
+
+  bootstrap().catch(err => {
+    const root = document.getElementById('agg-requests-airports');
+    if (root) root.textContent = 'Failed to load: ' + err;
+  });
+})();
+</script>

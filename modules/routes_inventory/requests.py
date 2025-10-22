@@ -1,10 +1,11 @@
 # modules/routes_inventory/requests.py
 from __future__ import annotations
 
-from flask import request, jsonify, render_template
+from flask import request, jsonify, render_template, current_app
 from app import inventory_bp
 from modules.services import cargo as cargo_svc
 from modules.utils.common import sanitize_name as cr_sanitize_item, ensure_column
+from modules.utils.common import canonical_airport_code, prio_from_text, cr2_upsert_request_group
 from app import DB_FILE
 import sqlite3
 from datetime import datetime
@@ -39,6 +40,8 @@ def requests_intake():
     data = request.get_json(silent=True) or {}
     airport = (data.get("airport") or "").strip()
     items = data.get("items") or []
+    # optional priority from UI ("Incident Stabilization" / "Property Preservation" / "Lifesaving")
+    priority_text = (data.get("priority") or "").strip()
     source_email_id = data.get("source_email_id")
 
     if not airport or not isinstance(items, list):
@@ -74,6 +77,27 @@ def requests_intake():
     for node in agg.values():
         cargo_svc.upsert_request(airport, node["raw"], node["weight"], source_email_id)
         added += 1
+
+    # ── v2 mirror so the aggregated panel shows progress immediately ───────
+    try:
+        ap_canon = canonical_airport_code(airport) or airport.strip().upper()
+        pri_code = prio_from_text(priority_text)
+        for node in agg.values():
+            name = (node.get("raw") or "").strip()
+            qty_lb = float(node.get("weight") or 0.0)
+            if not (name and qty_lb > 0):
+                continue
+            cr2_upsert_request_group(
+                airport        = ap_canon,
+                priority_code  = pri_code,
+                need           = name,
+                qty_lb         = qty_lb,
+                source_comm_id = None,  # manual intake
+                source_ref     = str(source_email_id) if source_email_id else None,
+                raw_json       = {"source": "manual_intake"}
+            )
+    except Exception:
+        current_app.logger.warning("CRv2 mirror failed", exc_info=True)
 
     status = 201 if added > 0 else 200
     # Backfill created_at for any rows that don't have it yet.

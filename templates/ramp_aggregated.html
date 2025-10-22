@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Ramp — Aggregated Requests{% endblock %}
+{% block content %}
+<div class="container">
+  <h2>Ramp — Aggregated Requests</h2>
+  <p class="muted">Sorted by priority, then airport. Columns: <strong>Priority</strong>, <strong>Need</strong>, <strong>Quantity (shipped / requested)</strong>, <strong>Deliver to</strong>.</p>
+
+  {# Reuse the same panel in the page AND in the drawer #}
+  {% include 'partials/_ramp_aggregated_panel.html' %}
+</div>
+
+{% endblock %}

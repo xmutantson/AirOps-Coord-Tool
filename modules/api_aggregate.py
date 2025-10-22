@@ -12,7 +12,15 @@ from typing import Any, Dict, List, Tuple
 from flask import Blueprint, jsonify, make_response, request
 
 # Only import SAFE utilities (no writers) and the DB path helper.
-from modules.utils.common import get_db_file
+from modules.utils.common import get_db_file, canonical_airport_code
+from modules.utils.common import (
+    cr2_get_ramp_summary,
+    cr2_get_airport_detail,
+    PRIORITY_LABELS,  # kept for parity with your diff (unused here but harmless)
+    dict_rows,
+)
+from modules.services.webeoc.ingest_rr import parse_saved_data, ingest_items
+from modules.utils.comms import insert_comm
 
 aggregate_bp = Blueprint("aggregate", __name__)
 
@@ -443,3 +451,163 @@ def get_aggregate():
     # Light caching to enable conditional GETs to work nicely
     resp.headers["Cache-Control"] = "public, max-age=5, must-revalidate"
     return resp
+
+# ----------------------- Cargo Requests v2 (read-only) ----------------------
+@aggregate_bp.route("/ramp/v2", methods=["GET"])
+def ramp_v2_summary():
+    """JSON: [{airport, max_pri, has_life_saving, outstanding_lb}]"""
+    return jsonify(cr2_get_ramp_summary())
+
+@aggregate_bp.route("/ramp/v2/<string:airport>", methods=["GET"])
+def ramp_v2_airport_detail(airport: str):
+    """
+    JSON: [{'priority_code','priority_label','need','requested_lb','shipped_lb','outstanding_lb','sources':[...]}]
+    """
+    return jsonify(cr2_get_airport_detail(airport))
+
+# POST /inventory/requests/import/webeoc
+@aggregate_bp.post("/inventory/requests/import/webeoc")
+def inventory_requests_import_webeoc():
+    text = (request.form.get("payload") or "").strip()
+    # Whatever the user typed when asked for "ICAO-4" — we will normalize again on the server.
+    user_airport_entry = (request.form.get("icao4") or
+                          request.form.get("airport") or
+                          request.form.get("airport_override") or "").strip()
+    if not text:
+        return jsonify({"ok": False, "errors": ["missing payload"]}), 400
+    parsed = parse_saved_data(text)
+    errs   = parsed.get("errors") or []
+    items  = parsed.get("items") or []
+
+    # If no items but user provided an override, try to inject and reparse.
+    if not items and user_airport_entry:
+        try:
+            norm = (canonical_airport_code(user_airport_entry) or user_airport_entry.strip().upper())
+            raw0 = json.loads(text)
+            if isinstance(raw0, dict):
+                raw2 = dict(raw0); raw2.setdefault("Input20", norm)
+                reparsed = parse_saved_data(json.dumps(raw2, ensure_ascii=False))
+                if (reparsed.get("items") or []):
+                    parsed, items, errs = reparsed, (reparsed.get("items") or []), (reparsed.get("errors") or [])
+        except Exception:
+            pass
+
+    if not items:
+        # Still nothing usable → hard fail
+        return jsonify({"ok": False, "errors": (errs or ["no valid items"])}), 400
+
+    # Create a single Comms entry for the successful import
+    comm_id = insert_comm(
+        timestamp_utc=None,
+        method="Resource Request (WebEOC)",
+        direction="in",
+        from_party=None,
+        to_party=None,
+        subject="RR — WebEOC import",
+        body="Imported WebEOC saved-data payload.",
+        operator=None,
+        notes=None,
+        metadata={"kind":"resource_request"}
+    )
+    added = ingest_items(
+        items, parsed.get("raw") or {},
+        source_comm_id=comm_id,
+        airport_override=(user_airport_entry or None),
+        allow_raw_airport=True,    # ← non-blocking fallback
+    )
+    # include a tiny hint for the UI (optional)
+    hint_in  = user_airport_entry or ""
+    hint_icao= canonical_airport_code(hint_in) if hint_in else None
+    return jsonify({
+        "ok": True,
+        "comm_id": comm_id,
+        "inserted_count": int(added),
+        "warnings": errs,  # non-fatal parse issues (if any)
+        "airport_hint": {
+            "input": hint_in,
+            "icao4": hint_icao,
+            "normalized": bool(hint_icao),
+            "label_used": (hint_icao or hint_in or "").upper() if (hint_in or hint_icao) else None
+        }
+    })
+
+@aggregate_bp.get("/airports/normalize")
+def airports_normalize():
+    """
+    Live preview helper:
+      GET /aggregate/airports/normalize?q=ANYTHING
+    Returns: {"input": str, "icao4": str|None, "normalized": bool, "label": str}
+    """
+    q = (request.args.get("q") or "").strip()
+    if not q:
+        return jsonify({"input": "", "icao4": None, "normalized": False, "label": ""})
+    icao = canonical_airport_code(q)
+    label = (icao or q).strip().upper()
+    return jsonify({"input": q, "icao4": icao, "normalized": bool(icao), "label": label})
+
+# GET /inventory/requests/agg.json
+@aggregate_bp.get("/inventory/requests/agg.json")
+def inventory_requests_agg():
+    airports = dict_rows("""
+      SELECT airport_canon AS airport, MAX(priority_code) AS highest_priority
+        FROM cargo_requests_v2
+       GROUP BY airport_canon
+    """)
+    result = {"airports": []}
+    for a in airports:
+        ap = a["airport"]
+        groups = []
+        for g in cr2_get_airport_detail(ap):
+            group_id = f"{ap}|{int(g['priority_code'])}|{g['need']}"
+            need_label = (g["need"] or "").strip().title()
+            src_ids = [int(s["id"]) for s in (g.get("sources") or [])]
+            comm_ids = sorted({int(s["comm_id"]) for s in (g.get("sources") or []) if s.get("comm_id")})
+            groups.append({
+                "group_id": group_id,
+                "priority_code": int(g["priority_code"]),
+                "need_label": need_label,
+                "need_sanitized": g["need"],
+                "requested_lb": g["requested_lb"],
+                "unknown_qty_count": g.get("unknown_qty_count", 0),
+                "shipped_lb": g["shipped_lb"],
+                "outstanding_lb": g["outstanding_lb"],
+                "deliver_to": ap,
+                "source_request_ids": src_ids,
+                "source_comm_ids": comm_ids,
+            })
+        groups.sort(key=lambda r: (-int(r["priority_code"]), r["need_label"]))
+        result["airports"].append({
+            "airport": ap,
+            "highest_priority": int(a["highest_priority"] or 1),
+            "groups": groups
+        })
+    result["airports"].sort(key=lambda r: (-int(r["highest_priority"]), r["airport"]))
+    return jsonify(result)
+
+# GET /inventory/requests/group/<group_id>.json
+@aggregate_bp.get("/inventory/requests/group/<path:group_id>.json")
+def inventory_requests_group(group_id: str):
+    try:
+        ap, pri, need = group_id.split("|", 2)
+        pri = int(pri)
+    except Exception:
+        return jsonify({"ok": False, "error": "bad group_id"}), 400
+    rows = cr2_get_airport_detail(ap)
+    match = next((r for r in rows if int(r["priority_code"])==pri and r["need"]==need), None)
+    if not match:
+        return jsonify({"ok": True, "rows": [], "unknown_qty_count": 0})
+    sources = dict_rows("""
+      SELECT l.qty_lb AS qty_lb, s.id AS id, s.source_comm_id AS comm_id, s.source_ref AS ref
+        FROM cargo_request_links l
+        JOIN cargo_request_sources s ON s.id = l.source_id
+       WHERE l.airport_canon=? AND l.priority_code=? AND l.need_sanitized=?
+       ORDER BY s.id DESC
+    """, (ap, pri, need))
+    return jsonify({
+        "ok": True,
+        "unknown_qty_count": int(match.get("unknown_qty_count") or 0),
+        "rows": [
+            {"id": int(r["id"]), "comm_id": r["comm_id"], "ref": r["ref"], "qty_lb": r["qty_lb"]}
+            for r in sources
+        ]
+    })

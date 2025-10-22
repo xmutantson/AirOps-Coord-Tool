@@ -10,6 +10,8 @@ from modules.services.winlink.core import (
     parse_aoct_cargo_query, pat_config_status, send_winlink_message,
     build_aoct_flight_reply_body,   # ← for AOCT flight query preview
 )
+from modules.services.webeoc.ingest_rr import ingest_saved_data
+from modules.utils.comms import insert_comm
 from modules.utils.remote_inventory import (
     parse_remote_snapshot,
     upsert_remote_inventory,
@@ -19,6 +21,7 @@ from modules.utils.remote_inventory import (
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
 from modules.utils.common import adsb_bulk_upsert
 from modules.utils.common import _start_radio_tx_once, maybe_extract_flight_code, _is_winlink_reflector_bounce, _mirror_comm_winlink  # call run-once starter from this bp
+from modules.utils.common import canonical_airport_code
 from modules.utils.comms import insert_comm
 from modules.services.jobs import _parse_aoct_flight_reply
 
@@ -123,6 +126,51 @@ def _get_winlink_ccs():
     except Exception:
         pass
     return addrs
+
+@bp.post("/import_rr")
+def import_rr():
+    """
+    Accepts a pasted WebEOC 'Save data' JSON blob and ingests into v2 aggregates.
+    Returns {'added': N}.
+    """
+    text = (request.form.get("payload") or "").strip()
+    if not text:
+        return jsonify({"error": "missing payload"}), 400
+    try:
+        user_airport_entry = (request.form.get("icao4") or
+                              request.form.get("airport") or
+                              request.form.get("airport_override") or "").strip()
+        comm_id = insert_comm(
+            timestamp_utc=None,
+            method="Resource Request (WebEOC)",
+            direction="in",
+            from_party=None,
+            to_party=None,
+            subject="RR — WebEOC import",
+            body="Imported WebEOC saved-data payload.",
+            operator=None,
+            notes=None,
+            metadata={"kind":"resource_request"}
+        )
+        added = ingest_saved_data(
+            text,
+            source_comm_id=comm_id,
+            airport_override=(user_airport_entry or None),
+            allow_raw_airport=True
+        )
+        hint_icao = canonical_airport_code(user_airport_entry) if user_airport_entry else None
+        return jsonify({
+            "added": int(added),
+            "comm_id": comm_id,
+            "airport_hint": {
+                "input": user_airport_entry,
+                "icao4": hint_icao,
+                "normalized": bool(hint_icao),
+                "label_used": (hint_icao or user_airport_entry or "").upper() if (user_airport_entry or hint_icao) else None
+            }
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
 
 def _send_with_optional_cc(to_addr: str, subject: str, body: str, include_cc: bool=False) -> bool:
     """Try to send with cc list if requested; gracefully degrade if core API lacks cc."""

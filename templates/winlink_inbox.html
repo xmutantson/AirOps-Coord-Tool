@@ -57,10 +57,34 @@
 
       <!-- Cargo Intake Prefill (STRUCTURED) — sits ABOVE the email body; toggled by the header button -->
       <div id="wl-intake-panel" style="display:none; margin:.5rem 0 .75rem; border:1px solid #ddd; padding:.75rem; border-radius:.4rem;">
-        <h4 style="margin:.25rem 0 .5rem;">Cargo Intake Form</h4>
-        <div style="display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; margin-bottom:.5rem;">
-          <label for="wl-intake-airport" style="font-weight:600;">Airport</label>
-          <input id="wl-intake-airport" class="force-upper" placeholder="KAAA" style="min-width:12ch;">
+        <h4 style="margin:.25rem 0 .5rem;">Cargo Intake (WebEOC or Manual)</h4>
+        <!-- WebEOC import toolbar -->
+        <div style="display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; margin-bottom:.75rem;">
+          <strong>Import:</strong>
+          <button type="button" id="wl-intake-webeoc-from-email" class="button small" title="Parse this email (and attachments) as a WebEOC Resource Request">From this message</button>
+          <button type="button" id="wl-intake-webeoc-toggle" class="button small" title="Paste WebEOC text / JSON">Paste WebEOC…</button>
+        </div>
+        <!-- Paste panel (hidden until toggled) -->
+        <div id="wl-intake-webeoc-paste-wrap" style="display:none; margin-bottom:.75rem;">
+          <textarea id="wl-intake-webeoc-text" placeholder="Paste WebEOC Resource Request text or JSON here…" style="width:100%; min-height:7rem;"></textarea>
+          <div style="display:flex; justify-content:flex-end; margin-top:.4rem;">
+            <button type="button" id="wl-intake-webeoc-parse" class="button">Parse</button>
+          </div>
+        </div>
+        <!-- Manual / common fields -->
+        <div style="display:flex; gap:1rem; align-items:center; flex-wrap:wrap; margin-bottom:.5rem;">
+          <div style="display:flex; gap:.5rem; align-items:center;">
+            <label for="wl-intake-airport" style="font-weight:600;">Airport</label>
+            <input id="wl-intake-airport" class="force-upper" placeholder="KAAA" style="min-width:12ch;">
+          </div>
+          <div style="display:flex; gap:.5rem; align-items:center;">
+            <label for="wl-intake-priority" style="font-weight:600;">Priority</label>
+            <select id="wl-intake-priority" data-role="priority">
+              <option value="Incident Stabilization" selected>Incident Stabilization</option>
+              <option value="Property Preservation">Property Preservation</option>
+              <option value="Lifesaving">Lifesaving</option>
+            </select>
+          </div>
           <small id="wl-intake-airport-hint" style="color:#b25500; display:none;">airport not found; please enter manually</small>
         </div>
         <div>
@@ -90,8 +114,30 @@
     </div>
     <div class="wg-modal-body">
       <div style="display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; margin-bottom:.5rem;">
-        <label for="wl-g-airport" style="font-weight:600;">Airport</label>
-        <input id="wl-g-airport" class="force-upper" placeholder="KAAA" style="min-width:12ch;">
+        <div style="display:flex; gap:.5rem; align-items:center;">
+          <label for="wl-g-airport" style="font-weight:600;">Airport</label>
+          <input id="wl-g-airport" class="force-upper" placeholder="KAAA" style="min-width:12ch;">
+        </div>
+        <div style="display:flex; gap:.5rem; align-items:center;">
+          <label for="wl-g-priority" style="font-weight:600;">Priority</label>
+          <select id="wl-g-priority" data-role="priority">
+            <option value="Incident Stabilization" selected>Incident Stabilization</option>
+            <option value="Property Preservation">Property Preservation</option>
+            <option value="Lifesaving">Lifesaving</option>
+          </select>
+        </div>
+      </div>
+      <!-- WebEOC import toolbar (global) -->
+      <div style="display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; margin-bottom:.75rem;">
+        <strong>Import:</strong>
+        <button type="button" id="wl-g-webeoc-toggle" class="button small" title="Paste WebEOC text / JSON">Paste WebEOC…</button>
+      </div>
+      <!-- Paste panel (hidden until toggled) -->
+      <div id="wl-g-webeoc-paste-wrap" style="display:none; margin-bottom:.75rem;">
+        <textarea id="wl-g-webeoc-text" placeholder="Paste WebEOC Resource Request text or JSON here…" style="width:100%; min-height:7rem;"></textarea>
+        <div style="display:flex; justify-content:flex-end; margin-top:.4rem;">
+          <button type="button" id="wl-g-webeoc-parse" class="button">Parse</button>
+        </div>
       </div>
       <div>
         <div style="display:flex; justify-content:space-between; align-items:center; margin:.25rem 0 .5rem;">
@@ -241,6 +287,18 @@ function canonAirport(s){
   if (v.length===3) return 'K' + v;
   return v;
 }
+function isLikelyIcao4(s){
+  const v = String(s||'').trim().toUpperCase();
+  // Basic ICAO-4 heuristic: 4 alphanum, starts with a letter (K/ C ok, but we allow any A–Z first)
+  return /^[A-Z][A-Z0-9]{3}$/.test(v);
+}
+function showIcaoHint(scopeEl, ok){
+  const hint = scopeEl.querySelector('#' + (scopeEl.id === 'wlGlobalIntakeDialog' ? 'wl-g-airport-hint' : 'wl-intake-airport-hint'));
+  if (hint){
+    hint.textContent = ok ? '' : "That doesn't look like an ICAO-4 code (e.g., KELN). You can still submit, but Ramp will show the label as typed.";
+    hint.style.display = ok ? 'none' : '';
+  }
+}
 function toPounds(val, unit){
   const v = Number(val)||0;
   const u = String(unit||'lb').toLowerCase();
@@ -277,6 +335,31 @@ function addRow(container, def){
   return row;
 }
 function resetRows(container){ container.innerHTML = ''; }
+
+// Attach CSRF / requested-with headers to POSTs (mirrors pattern used elsewhere)
+function xhrHeaders(extra={}){
+  const token = document.querySelector('input[name="csrf_token"]')?.value || '';
+  const h = {'X-Requested-With':'XMLHttpRequest'};
+  if (token){
+    h['X-CSRFToken'] = token;
+    h['X-CSRF-Token'] = token;
+  }
+  for (const k in extra) h[k] = extra[k];
+  return h;
+}
+
+// Attach CSRF / requested-with headers to POSTs (mirrors pattern used elsewhere)
+function xhrHeaders(extra={}){
+  const token = document.querySelector('input[name="csrf_token"]')?.value || '';
+  const h = {'X-Requested-With':'XMLHttpRequest'};
+  if (token){
+    h['X-CSRFToken'] = token;
+    h['X-CSRF-Token'] = token;
+  }
+  for (const k in extra) h[k] = extra[k];
+  return h;
+}
+
 function gatherItems(container){
   const rows = Array.from(container.querySelectorAll('.wl-intake-row'));
   const items = [];
@@ -294,15 +377,24 @@ async function submitIntake(scopeEl, opts){
   const apEl = scopeEl.querySelector('input.force-upper');
   const rowsEl = scopeEl.querySelector('#' + (scopeEl.id === 'wlGlobalIntakeDialog' ? 'wl-g-rows' : 'wl-intake-rows'));
   const statusEl = scopeEl.querySelector('#' + (scopeEl.id === 'wlGlobalIntakeDialog' ? 'wl-g-status' : 'wl-intake-status'));
-  const airport = canonAirport(apEl?.value || '');
+  const prEl = scopeEl.querySelector('select[data-role="priority"]');
+  const airportRaw = apEl?.value || '';
+  const airport = canonAirport(airportRaw);
   const items = gatherItems(rowsEl);
   if (!airport){ alert('Airport is required.'); apEl?.focus(); return; }
   if (!items.length){ alert('Add at least one item with a positive weight.'); return; }
-  const payload = { airport, items };
+  // ICAO-4 confirmation if it doesn't look like one
+  const looksIcao = isLikelyIcao4(airport);
+  showIcaoHint(scopeEl, looksIcao);
+  if (!looksIcao){
+    const msg = `"${airportRaw}" doesn't look like an ICAO-4 code (e.g., KELN).\n\nSubmit anyway?`;
+    if (!confirm(msg)) { apEl?.focus(); return; }
+  }
+  const payload = { airport, items, priority: (prEl?.value || '') };
   if (opts?.source_email_id) payload.source_email_id = String(opts.source_email_id);
   const resp = await fetch('/inventory/requests/intake', {
     method:'POST',
-    headers:{'Content-Type':'application/json'},
+    headers: xhrHeaders({'Content-Type':'application/json'}),
     body: JSON.stringify(payload)
   });
   let j = {};
@@ -320,6 +412,15 @@ async function submitIntake(scopeEl, opts){
   // Clear rows for another entry, keep scope open
   resetRows(rowsEl);
   addRow(rowsEl);
+  // Clear any WebEOC paste and hide paste panel(s) in this scope
+  const inlinePasteWrap = scopeEl.querySelector('#wl-intake-webeoc-paste-wrap');
+  const inlinePasteArea = scopeEl.querySelector('#wl-intake-webeoc-text');
+  const globalPasteWrap = scopeEl.querySelector('#wl-g-webeoc-paste-wrap');
+  const globalPasteArea = scopeEl.querySelector('#wl-g-webeoc-text');
+  if (inlinePasteArea) inlinePasteArea.value = '';
+  if (globalPasteArea) globalPasteArea.value = '';
+  if (inlinePasteWrap) inlinePasteWrap.style.display = 'none';
+  if (globalPasteWrap) globalPasteWrap.style.display = 'none';
   apEl.focus();
 }
 
@@ -368,12 +469,21 @@ document.addEventListener('DOMContentLoaded', function () {
   const rowsWrap    = document.getElementById('wl-intake-rows');
   const addRowBtn   = document.getElementById('wl-intake-add-row');
   const submitBtn   = document.getElementById('wl-intake-submit');
+  const prSelect    = document.getElementById('wl-intake-priority');
+  const pasteWrap   = document.getElementById('wl-intake-webeoc-paste-wrap');
+  const pasteArea   = document.getElementById('wl-intake-webeoc-text');
+  // Validate ICAO-ish on blur (inline)
+  apInput?.addEventListener('blur', () => {
+    const ap = canonAirport(apInput.value||'');
+    showIcaoHint(dlg, isLikelyIcao4(ap));
+  });
 
   function resetInlineIntake() {
     panel.style.display = 'none';
     rowsWrap.innerHTML = '';
     apInput.value = '';
     apHint.style.display = 'none';
+    pasteWrap.style.display = 'none';
   }
 
   async function openMsgModal(msg) {
@@ -532,20 +642,106 @@ document.addEventListener('DOMContentLoaded', function () {
   addRowBtn?.addEventListener('click', ()=> addRow(rowsWrap));
   submitBtn?.addEventListener('click', ()=> submitIntake(panel, { source_email_id: (window.__wlCurrentMsg?.id || null) }));
 
+  // WebEOC import actions (inline)
+  const weFromEmailBtn = document.getElementById('wl-intake-webeoc-from-email');
+  const weToggleBtn    = document.getElementById('wl-intake-webeoc-toggle');
+  const weParseBtn     = document.getElementById('wl-intake-webeoc-parse');
+
+  weToggleBtn?.addEventListener('click', () => {
+    pasteWrap.style.display = (pasteWrap.style.display === 'none' || !pasteWrap.style.display) ? '' : 'none';
+    if (pasteWrap.style.display !== 'none') pasteArea.focus();
+  });
+
+  // Helpers for hydrating from parsed WebEOC payloads
+  function setPriorityOption(select, value){
+    if (!select) return;
+    const norm = s => String(s||'').trim().toLowerCase().replace(/[^a-z]/g,'');
+    const want = norm(value);
+    for (const opt of Array.from(select.options)){
+      const ov = norm(opt.value);
+      const ot = norm(opt.textContent);
+      if (want && (ov === want || ot === want)){ select.value = opt.value; return; }
+    }
+  }
+  // Fill the intake UI within a given scope (inline dialog or global dialog)
+  function hydrateIntakeInScope(scopeEl, parsed){
+    if (!scopeEl || !parsed) return;
+    const isGlobal = scopeEl.id === 'wlGlobalIntakeDialog';
+    const apEl  = scopeEl.querySelector('#' + (isGlobal ? 'wl-g-airport' : 'wl-intake-airport'));
+    const prEl  = scopeEl.querySelector('#' + (isGlobal ? 'wl-g-priority' : 'wl-intake-priority'));
+    const rowsEl= scopeEl.querySelector('#' + (isGlobal ? 'wl-g-rows' : 'wl-intake-rows'));
+    if (parsed.airport && apEl) apEl.value = canonAirport(parsed.airport);
+    if (parsed.priority && prEl) setPriorityOption(prEl, parsed.priority);
+    if (rowsEl){
+      resetRows(rowsEl);
+      const items = Array.isArray(parsed.items) ? parsed.items : [];
+      if (items.length){
+        for (const it of items){
+          addRow(rowsEl, { name: it.name || '', value: it.weight_lb || it.weight || 0, unit: 'lb' });
+        }
+      } else {
+        addRow(rowsEl);
+      }
+    }
+    // Ensure the inline panel is visible if we're in the message modal
+    if (!isGlobal && panel) panel.style.display = '';
+  }
+
+  weFromEmailBtn?.addEventListener('click', async () => {
+    const msg = window.__wlCurrentMsg || {};
+    if (!msg?.id) { alert('Open a message first.'); return; }
+    try{
+      const r = await fetch('/webeoc/import_from_email', {
+        method:'POST',
+        headers: xhrHeaders({'Content-Type':'application/json'}),
+        body: JSON.stringify({ email_id: String(msg.id) })
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || 'Import failed');
+      hydrateIntakeInScope(dlg, j.payload || j);
+    } catch(e){ alert(e?.message || 'Failed to import from WebEOC.'); }
+  });
+  weParseBtn?.addEventListener('click', async () => {
+    const txt = (pasteArea?.value || '').trim();
+    if (!txt) { alert('Paste WebEOC content first.'); return; }
+    try{
+      const r = await fetch('/webeoc/import_from_text', {
+        method:'POST',
+        headers: xhrHeaders({'Content-Type':'application/json'}),
+        body: JSON.stringify({ text: txt })
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || 'Parse failed');
+      hydrateIntakeInScope(dlg, j.payload || j);
+    } catch(e){ alert(e?.message || 'Failed to parse WebEOC text.'); }
+  });
+
   // ───── Global (header) Cargo Intake modal wiring ─────
   const globalIntakeBtn = document.getElementById('wlOpenGlobalIntake');
   const gDlg = document.getElementById('wlGlobalIntakeDialog');
   const gClose = document.getElementById('wlGlobalClose');
   const gAirport = document.getElementById('wl-g-airport');
   const gRows = document.getElementById('wl-g-rows');
+  const gPriority = document.getElementById('wl-g-priority');
   const gAddRow = document.getElementById('wl-g-add-row');
   const gSubmit = document.getElementById('wl-g-submit');
   const gStatus = document.getElementById('wl-g-status');
+  const gPasteWrap = document.getElementById('wl-g-webeoc-paste-wrap');
+  const gPasteArea = document.getElementById('wl-g-webeoc-text');
+  const gToggleBtn = document.getElementById('wl-g-webeoc-toggle');
+  const gParseBtn  = document.getElementById('wl-g-webeoc-parse');
+  // Validate ICAO-ish on blur (global)
+  gAirport?.addEventListener('blur', () => {
+    const ap = canonAirport(gAirport.value||'');
+    showIcaoHint(gDlg, isLikelyIcao4(ap));
+  });
 
   globalIntakeBtn?.addEventListener('click', () => {
     resetRows(gRows); addRow(gRows); // start with one empty row
     gAirport.value = '';
+    gPriority.value = 'Incident Stabilization';
     gStatus.style.display = 'none';
+    if (gPasteWrap) gPasteWrap.style.display = 'none';
     // Center like the message modal and open
     centerDialogEl(gDlg);
     dlgOpen(gDlg);
@@ -553,6 +749,27 @@ document.addEventListener('DOMContentLoaded', function () {
   gClose?.addEventListener('click', ()=> dlgClose(gDlg));
   gAddRow?.addEventListener('click', ()=> addRow(gRows));
   gSubmit?.addEventListener('click', ()=> submitIntake(gDlg));
+
+  // Global: Paste WebEOC… toggle + parse
+  gToggleBtn?.addEventListener('click', () => {
+    if (!gPasteWrap) return;
+    gPasteWrap.style.display = (gPasteWrap.style.display === 'none' || !gPasteWrap.style.display) ? '' : 'none';
+    if (gPasteWrap.style.display !== 'none' && gPasteArea) gPasteArea.focus();
+  });
+  gParseBtn?.addEventListener('click', async () => {
+    const txt = (gPasteArea?.value || '').trim();
+    if (!txt) { alert('Paste WebEOC content first.'); return; }
+    try{
+      const r = await fetch('/webeoc/import_from_text', {
+        method:'POST',
+        headers: xhrHeaders({'Content-Type':'application/json'}),
+        body: JSON.stringify({ text: txt })
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) throw new Error(j?.error || 'Parse failed');
+      hydrateIntakeInScope(gDlg, j.payload || j);
+    } catch(e){ alert(e?.message || 'Failed to parse WebEOC text.'); }
+  });
 
   // Make Global Intake dialog draggable using its header (parity with message modal)
   (function enableGlobalIntakeDrag(){

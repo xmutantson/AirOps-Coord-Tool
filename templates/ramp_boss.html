@@ -579,9 +579,25 @@
       <button id="rb-req-close" class="req-close" aria-label="Close">✕</button>
     </div>
     <div id="rb-req-body" class="req-body">
-      <div class="req-empty">Loading…</div>
+      {% include "partials/_ramp_aggregated_panel.html" %}
     </div>
   </aside>
+
+  <style>
+    /* Drawer layout: header on top, list below it (no overlap) */
+    #rb-req-drawer { display:flex; flex-direction:column; }
+    #rb-req-drawer .req-drawer-header{
+      position:sticky; top:0; z-index:5;
+      background:#fff; border-bottom:1px solid #e5e7eb;
+      padding:10px 12px;
+    }
+    #rb-req-body{
+      flex:1 1 auto; overflow:auto;
+      padding:12px;            /* creates space under the header */
+    }
+    /* tiny nudge so the first airport card sits nicely below the panel title */
+    #rb-req-body .agg-requests-panel{ margin-top:.25rem; }
+  </style>
 
   <!-- ───────── Advanced-Manifest Detect Modal ───────── -->
   <div id="adv-detect-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.35);">
@@ -596,210 +612,42 @@
     </div>
   </div>
 
-  <!-- ───────── Cargo Requests Drawer JS (polls, renders, delete hooks) ───────── -->
-  <script>
-  (function cargoRequestsDrawer(){
-    // safe esc
-    const esc = (s)=> String(s ?? '')
-      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-    // header helper (fallback if global xhrHeaders not ready)
-    const localXhrHeaders = (extra={}) => {
-      const token = document.querySelector('input[name="csrf_token"]')?.value || '';
-      const h = {'X-Requested-With':'XMLHttpRequest'};
-      if (token) { h['X-CSRFToken']=token; h['X-CSRF-Token']=token; }
-      return Object.assign(h, extra);
-    };
-    const getHeaders = window.xhrHeaders || localXhrHeaders;
-    const fmtLb = (n)=> `${Math.round(Number(n||0))} lb`;
-    const sum = (arr, pick) => arr.reduce((a,x)=> a + (Number(pick(x))||0), 0);
-    const _norm = s => String(s||'').toLowerCase()
-      .replace(/&/g,'and').replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim();
-
-    // Hub availability (Advanced inventory data) → total pounds by item name
-    function availabilityForNameLb(name){
-      const inv = (window.inventoryAdvancedData || {});
-      const avail = inv.avail || {};
-      const target = _norm(name);
-      let availLb = 0, presence = false, unknownWeight = false;
-      try{
-        for (const cid of Object.keys(avail)){
-          const byItem = avail[cid] || {};
-          for (const raw of Object.keys(byItem)){
-            if (_norm(raw) !== target) continue;
-            const sizes = byItem[raw] || {};
-            for (const sizeKey of Object.keys(sizes)){
-              const qty = Number(sizes[sizeKey] || 0);
-              if (qty <= 0) continue;
-              presence = true;
-              const wpu = Number(sizeKey);
-              if (Number.isFinite(wpu)) availLb += (wpu * qty);
-              else unknownWeight = true;
-            }
-          }
-        }
-      }catch(_){}
-      return { availLb, presence, unknownWeight };
-    }
-
-
-    const fab = document.getElementById('rb-req-fab');
-    const badge = document.getElementById('rb-req-badge');
-    const drawer = document.getElementById('rb-req-drawer');
-    const overlay = document.getElementById('rb-req-overlay');
-    const body = document.getElementById('rb-req-body');
-    const close = document.getElementById('rb-req-close');
-    let drawerOpen = false;
-    function openDrawer(){ drawer.classList.add('open'); drawer.setAttribute('aria-hidden','false'); overlay.hidden=false; drawerOpen=true; fetchSummary(); }
-    function closeDrawer(){ drawer.classList.remove('open'); drawer.setAttribute('aria-hidden','true'); overlay.hidden=true; drawerOpen=false; }
-    // FAB now shows *count of distinct requested items* across all airports
-    function updateBadgeCount(n){ if (badge) badge.textContent = String(Math.max(0, n|0)); }
-
-    fab?.addEventListener('click', openDrawer);
-    close?.addEventListener('click', closeDrawer);
-    // overlay click no longer closes the drawer (non-modal behavior)
-    document.addEventListener('keydown', (e)=>{ if(e.key==='Escape' && drawerOpen) closeDrawer(); });
-
-    function render(summary){
-      const outstandingNames = new Set();
-      // remember which airports were open so polling won't auto-collapse them
-      const previouslyOpen = new Set(
-        Array.from(body.querySelectorAll('details.req-group[open]'))
-             .map(el => el.getAttribute('data-ap') || '')
-      );
-      body.innerHTML = '';
-      const groups = summary?.airports || summary?.groups || [];
-      if (!Array.isArray(groups) || groups.length === 0){
-        body.innerHTML = '<div class="req-empty">No outstanding requests.</div>';
-        updateBadgeCount(0);
-        return;
-      }
-
-      let grandLb = 0;
-      let grandCount = 0;
-      for (const g of groups){
-        const ap = g.airport || g.code || g.id || 'UNKNOWN';
-        const items = Array.isArray(g.items) ? g.items : [];
-        const groupLb = sum(items, it => it.outstanding_lb ?? it.requested_lb ?? 0);
-        const groupCount = items.length;
-        grandLb += groupLb;
-        grandCount += groupCount;
-
-        const det = document.createElement('details');
-        det.className = 'req-group';
-        det.setAttribute('data-ap', ap);
-        det.innerHTML = `
-          <summary class="req-group-h">
-            <div class="req-group-left">
-              <div class="req-group-title">${esc(ap)}</div>
-              <div class="req-group-stats">
-                <span class="req-count">${groupCount} items</span>
-                <span class="req-weight">· ${esc(fmtLb(groupLb))}</span>
-              </div>
-            </div>
-            <div class="req-group-right">
-              <button class="button small" data-action="delete-request-airport" data-airport="${esc(ap)}">Clear Airport</button>
-            </div>
-          </summary>
-          <div class="req-items"></div>
-        `;
-
-        // restore open/closed state
-        if (previouslyOpen.has(ap)) det.open = true;
-
-        const list = det.querySelector('.req-items');
-        if (!items.length){
-          list.innerHTML = '<div class="req-empty">No items</div>';
-        } else {
-          for (const it of items){
-            const nm = it.name ?? it.item ?? it.sanitized_name ?? 'Item';
-            const out = Number(it.outstanding_lb ?? it.requested_lb ?? 0);
-            const req = Number(it.requested_lb ?? out);
-            const row = document.createElement('div');
-            row.className = 'req-row';
-            row.innerHTML = `
-              <div class="req-row-main">
-                <div class="req-row-name">${esc(nm)}</div>
-                <div class="req-row-meta">${esc(fmtLb(out))}${(req && req !== out) ? ` (of ${esc(fmtLb(req))})` : ''}</div>
-              </div>
-              <div class="req-row-actions">
-                <button class="button small" data-action="delete-request-item" data-airport="${esc(ap)}" data-name="${esc(nm)}">Clear Item</button>
-              </div>
-            `;
-            if (out > 0) outstandingNames.add(_norm(nm));
-            // Stock match borders: solid = fully satisfiable now, dashed = partial
-            const { availLb, presence, unknownWeight } = availabilityForNameLb(nm);
-            if (presence){
-              if (unknownWeight || availLb < out) row.classList.add('match-partial');
-              else if (availLb >= out)            row.classList.add('match-ok');
-            }
-            list.appendChild(row);
-          }
-        }
-        body.appendChild(det);
-      }
-      updateBadgeCount(grandCount);
-      // Expose names to Advanced panel and refresh chip borders
-      window.__REQ_NAMES = outstandingNames;
-      if (typeof window.applyMatchingBorders === 'function') window.applyMatchingBorders();
-    }
-
-    async function fetchSummary(){
-      try{
-        const r = await fetch('/inventory/requests/summary', { headers: getHeaders() });
-        if (!r.ok) throw new Error('HTTP '+r.status);
-        const j = await r.json();
-        render(j);
-      }catch(_){
-        if (drawerOpen) body.innerHTML = '<div class="req-empty">Failed to load requests.</div>';
-      }
-    }
-
-    body?.addEventListener('click', async (ev)=>{
-      const btn = ev.target.closest('button[data-action]');
-      if (!btn) return;
-      const act = btn.dataset.action;
-      try{
-        if (act === 'delete-request-airport'){
-          const ap = btn.dataset.airport;
-          await fetch('/inventory/requests/airport', {
-            method:'DELETE',
-            headers: getHeaders({'Content-Type':'application/json'}),
-            body: JSON.stringify({ airport: ap })
-          });
-        } else if (act === 'delete-request-item'){
-          const ap = btn.dataset.airport, nm = btn.dataset.name;
-          await fetch('/inventory/requests/line', {
-            method:'DELETE',
-            headers: getHeaders({'Content-Type':'application/json'}),
-            body: JSON.stringify({ airport: ap, name: nm })
-          });
-        }
-        fetchSummary();
-      }catch(err){
-        console.warn('Request delete failed', err);
-      }
-    });
-
-    // initial + poll
-    fetchSummary();
-    setInterval(fetchSummary, 30000);
-
-    // Advanced panel helper: green border on chips that fulfill a request
-    window.applyMatchingBorders = function(){
-      const chips = document.querySelectorAll('#adv-lines .adv-chip');
-      const set = (window.__REQ_NAMES instanceof Set) ? window.__REQ_NAMES : new Set();
-      chips.forEach(ch => {
-        const nm = _norm(ch.dataset.sanitized || '');
-        if (set.has(nm)) ch.classList.add('fulfill-req');
-        else ch.classList.remove('fulfill-req');
-      });
-    };
-  })();
-  </script>
-
   <!-- ───────────────── Ramp‑Boss main JS (validation, lookup, CW‑tools) ───────────────── -->
   <script>
+    /* ───────── Minimal open/close + live badge using v2 aggregates ───────── */
+    (function reqDrawerWiring(){
+      const fab     = document.getElementById('rb-req-fab');
+      const badge   = document.getElementById('rb-req-badge');
+      const drawer  = document.getElementById('rb-req-drawer');
+      const overlay = document.getElementById('rb-req-overlay');
+      const close   = document.getElementById('rb-req-close');
+      let open = false;
+      function openDrawer(){
+        drawer.classList.add('open');
+        drawer.setAttribute('aria-hidden','false');
+        overlay.hidden=false;
+        open=true;
+        // Ensure the panel content is fresh when opened
+        if (window.__aggRefreshNow) window.__aggRefreshNow();
+      }
+      function closeDrawer(){ drawer.classList.remove('open'); drawer.setAttribute('aria-hidden','true'); overlay.hidden=true; open=false; }
+      fab?.addEventListener('click', openDrawer);
+      close?.addEventListener('click', closeDrawer);
+      document.addEventListener('keydown', (e)=>{ if(e.key==='Escape' && open) closeDrawer(); });
+      async function updateBadge(){
+        try{
+          // v2 aggregate view with groups; good for an "items" count badge
+          const r = await fetch('/aggregate/inventory/requests/agg.json', {headers:{'X-Requested-With':'XMLHttpRequest'}});
+          if (!r.ok) throw 0;
+          const j = await r.json();
+          const total = (j.airports||[]).reduce((acc, ap)=> acc + ((ap.groups||[]).length||0), 0);
+          if (badge) badge.textContent = String(total);
+          if (window.__aggRefreshNow) window.__aggRefreshNow();
+        }catch(_){}
+      }
+      updateBadge();
+      setInterval(updateBadge, 30000);
+    })();
     /* ───────────────── Prefill when editing a queued-flight draft ───────────────── */
     {% if draft %}
     /* server pushed a queued-flight draft ⇒ convert form into edit-mode */

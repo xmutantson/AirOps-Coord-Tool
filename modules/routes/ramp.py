@@ -1589,6 +1589,14 @@ def edit_queued_flight(qid):
                            active='queued_flights',
                            advanced_data={})   # chips fetched by JS as usual
 
+# Minimal aggregated view for Cargo Requests v2
+@bp.get('/ramp/aggregated')
+def ramp_aggregated():
+    """
+    Minimal 4-column aggregated view (template expected: templates/ramp_aggregated.html).
+    """
+    return render_template('ramp_aggregated.html')
+
 @bp.route('/edit_flight/<int:fid>', methods=['GET','POST'])
 def edit_flight(fid):
     if request.method=='POST':

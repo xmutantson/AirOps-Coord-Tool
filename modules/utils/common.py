@@ -33,6 +33,21 @@ _pending_cleanup_last = 0.0
 # stray alias used in a few helpers
 _r = _random
 
+# ── Priority enum used for Ramp v2 aggregation ─────────────────────────────
+PRIO_INCIDENT_STAB      = 1
+PRIO_PROPERTY_PRESERVE  = 2
+PRIO_LIFE_SAVING        = 3
+PRIORITY_LABELS = {
+    PRIO_LIFE_SAVING: "Life-Saving",
+    PRIO_PROPERTY_PRESERVE: "Property Preservation",
+    PRIO_INCIDENT_STAB: "Incident Stabilization",
+}
+def prio_from_text(s: str) -> int:
+    t = (s or "").strip().lower()
+    if "life" in t:         return PRIO_LIFE_SAVING
+    if "preserv" in t:      return PRIO_PROPERTY_PRESERVE
+    return PRIO_INCIDENT_STAB
+
 # Safe defaults so import-time references don't crash (overridden by _hydrate_from_app).
 get_wargame_role_epoch       = lambda: ""
 configure_wargame_jobs       = lambda *a, **k: None
@@ -940,8 +955,10 @@ def init_db():
             assigned_tail    TEXT
           )
         """)
-        # ── Cargo Requests (aggregated, production feature) ────────────────
+        # ── Cargo Requests v1 (existing) ───────────────────────────────────
         _create_tables_cargo_requests(c)
+        # ── Cargo Requests v2 (priority+airport+need) ─────────────────────
+        _create_tables_cargo_requests_v2(c)
         # ── winlink messages table ───────────────────────────
         c.execute("""
             CREATE TABLE IF NOT EXISTS winlink_messages (
@@ -1152,6 +1169,7 @@ def run_migrations():
         """)
         # Ensure Cargo Requests tables/indexes exist on upgraded DBs
         _create_tables_cargo_requests(c)
+        _create_tables_cargo_requests_v2(c)
 
     # flight_cargo gained a NOT-NULL session_id
     ensure_column("flight_cargo", "session_id", "TEXT NOT NULL DEFAULT ''")
@@ -1935,6 +1953,50 @@ def _create_tables_cargo_requests(c):
     c.execute("CREATE INDEX IF NOT EXISTS idx_cargo_req_airport ON cargo_requests(airport_canon)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_cargo_req_remaining ON cargo_requests(airport_canon, requested_lb, fulfilled_lb)")
 
+def _create_tables_cargo_requests_v2(c):
+    """
+    v2 adds priority dimension + links each aggregate to its source requests.
+    - Aggregates one row per (airport, priority, need).
+    - 'requested_lb' is sum of all source rows in the group.
+    - 'fulfilled_lb' is NOT stored; we compute shipped dynamically from flights/flight_cargo.
+    """
+    c.execute("""
+      CREATE TABLE IF NOT EXISTS cargo_requests_v2 (
+        airport_canon   TEXT    NOT NULL,
+        priority_code   INTEGER NOT NULL,
+        need_sanitized  TEXT    NOT NULL,
+        requested_lb    REAL    NOT NULL DEFAULT 0,
+        created_at      TEXT    NOT NULL,
+        updated_at      TEXT    NOT NULL,
+        PRIMARY KEY (airport_canon, priority_code, need_sanitized)
+      )
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_crv2_airport_pri ON cargo_requests_v2(airport_canon, priority_code)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_crv2_need        ON cargo_requests_v2(need_sanitized)")
+    # Source rows (dedupe by fingerprint)
+    c.execute("""
+      CREATE TABLE IF NOT EXISTS cargo_request_sources (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        fingerprint      TEXT    NOT NULL UNIQUE,
+        source_comm_id   INTEGER,
+        source_ref       TEXT,                -- human/ref string
+        raw_json         TEXT,                -- original saved-data blob or parsed snippet
+        created_utc      TEXT    NOT NULL
+      )
+    """)
+    # Join table: which aggregate a source contributes to (one source can feed multiple aggregates)
+    c.execute("""
+      CREATE TABLE IF NOT EXISTS cargo_request_links (
+        source_id        INTEGER NOT NULL,
+        airport_canon    TEXT    NOT NULL,
+        priority_code    INTEGER NOT NULL,
+        need_sanitized   TEXT    NOT NULL,
+        qty_lb           REAL    NOT NULL,    -- contribution from this source to that aggregate
+        created_utc      TEXT    NOT NULL,
+        FOREIGN KEY(source_id) REFERENCES cargo_request_sources(id),
+        UNIQUE(source_id, airport_canon, priority_code, need_sanitized)
+      )
+    """)
 
 def get_preference(name: str) -> str | None:
     """Fetch a single preference value (or sensible default if not set)."""
@@ -1979,6 +2041,270 @@ def get_preference(name: str) -> str | None:
     if key == 'wx_display_names':
         v = val or ''
         return v
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cargo Requests v2 — time-aware fulfillment helpers
+#
+# Goal: Only credit flights that happened AFTER a request existed.
+# We use the canonical UTC flight timestamp stored on `flights.timestamp`
+# and the earliest per-group request timestamp (links.created_utc preferred).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _cr2_first_request_ts(airport_canon: str, priority_code: int, need_sanitized: str) -> str | None:
+    """
+    Return the earliest timestamp (ISO) when this (airport,priority,need) group
+    became a request, preferring cargo_request_links.created_utc and falling
+    back to cargo_requests_v2.created_at. Returns None if neither can be found.
+    """
+    ap = canonical_airport_code(airport_canon or "")
+    nm = (need_sanitized or "").strip().lower()
+    if not (ap and nm):
+        return None
+    # 1) earliest link (source-of-truth for when demand was logged)
+    row = dict_rows("""
+        SELECT MIN(created_utc) AS ts
+          FROM cargo_request_links
+         WHERE airport_canon=? AND priority_code=? AND need_sanitized=?
+    """, (ap, int(priority_code), nm))
+    ts = (row[0].get("ts") if row else None)
+    if ts:
+        return ts
+    # 2) fallback: the aggregate row’s created_at
+    row = dict_rows("""
+        SELECT created_at AS ts
+          FROM cargo_requests_v2
+         WHERE airport_canon=? AND priority_code=? AND need_sanitized=?
+         LIMIT 1
+    """, (ap, int(priority_code), nm))
+    return (row[0].get("ts") if row else None)
+
+def _cr2_sum_shipped_since(airport_canon: str, need_sanitized: str, since_iso_utc: str | None) -> float:
+    """
+    Sum shipped pounds for outbound flights that LANDED at `airport_canon`,
+    counting ONLY shipments at/after `since_iso_utc`.
+    Uses flights.timestamp as the canonical flight event time.
+    If `since_iso_utc` is None/unparseable, returns 0.0 (under-credit safe).
+    """
+    ap = canonical_airport_code(airport_canon or "")
+    nm = (need_sanitized or "").strip().lower()
+    if not (ap and nm and since_iso_utc):
+        return 0.0
+    try:
+        rows = dict_rows("""
+          SELECT SUM(fc.total_weight) AS wt
+            FROM flight_cargo fc
+            JOIN flights f ON f.id = fc.flight_id
+           WHERE f.airfield_landing = ?
+             AND f.direction = 'outbound'
+             AND fc.sanitized_name = ?
+             AND julianday(f.timestamp) >= julianday(?)
+        """, (ap, nm, since_iso_utc))
+        return float((rows[0].get("wt") if rows else 0.0) or 0.0)
+    except Exception:
+        return 0.0
+
+def cr2_get_airport_detail(airport: str) -> list[dict]:
+    """
+    Per-airport aggregates (time-aware):
+      shipped_lb only counts flights with flights.timestamp >= first request ts.
+    Returns:
+      [{'priority_code':3,'priority_label':'Life-Saving','need':'water',
+        'requested_lb':200,'shipped_lb':150,'outstanding_lb':50,
+        'sources':[{'id':..., 'comm_id':..., 'ref':...}, ...]}, ...]
+    """
+    ensure_cargo_request_tables()
+    ap = canonical_airport_code(airport or "")
+    if not ap:
+        return []
+    rows = dict_rows("""
+      SELECT priority_code, need_sanitized, requested_lb
+        FROM cargo_requests_v2
+       WHERE airport_canon=?
+       ORDER BY priority_code DESC, need_sanitized ASC
+    """, (ap,))
+    out = []
+    for r in rows:
+        pri = int(r["priority_code"])
+        nm  = (r["need_sanitized"] or "").strip().lower()
+        req = float(r.get("requested_lb") or 0.0)
+        # First request timestamp for this group
+        since = _cr2_first_request_ts(ap, pri, nm)
+        # Only credit shipments at/after the request existed
+        shp = _cr2_sum_shipped_since(ap, nm, since)
+        # Provenance sources for this group
+        sources = dict_rows("""
+          SELECT s.id, s.source_comm_id AS comm_id, s.source_ref AS ref
+            FROM cargo_request_links l
+            JOIN cargo_request_sources s ON s.id = l.source_id
+           WHERE l.airport_canon=? AND l.priority_code=? AND l.need_sanitized=?
+           ORDER BY s.id DESC
+        """, (ap, pri, nm))
+        out.append({
+            "priority_code": pri,
+            "priority_label": PRIORITY_LABELS.get(pri, "Incident Stabilization"),
+            "need": nm,
+            "requested_lb": round(req, 1),
+            "shipped_lb": round(float(shp or 0.0), 1),
+            "outstanding_lb": round(max(req - float(shp or 0.0), 0.0), 1),
+            "sources": sources,
+        })
+    return out
+
+def cr2_get_ramp_summary() -> list[dict]:
+    """
+    Airports with open demand (time-aware fulfillment):
+      outstanding per airport = Σ_over_groups(requested_lb − shipped_since_first_request_time)
+    Sorted by:
+      1) max priority in that airport (desc), then
+      2) airport code/name (asc).
+    """
+    ensure_cargo_request_tables()
+    airports = dict_rows("""
+      SELECT airport_canon AS airport,
+             MAX(priority_code) AS max_pri
+        FROM cargo_requests_v2
+       GROUP BY airport_canon
+    """)
+    out = []
+    for a in airports:
+        ap = a["airport"]
+        groups = dict_rows("""
+          SELECT v.priority_code,
+                 v.need_sanitized,
+                 v.requested_lb
+            FROM cargo_requests_v2 v
+           WHERE v.airport_canon = ?
+        """, (ap,))
+        total_req = 0.0
+        total_out = 0.0
+        has_ls = False
+        for g in groups:
+            pri = int(g["priority_code"])
+            nm  = (g["need_sanitized"] or "").strip().lower()
+            req = float(g["requested_lb"] or 0.0)
+            since = _cr2_first_request_ts(ap, pri, nm)
+            shp = _cr2_sum_shipped_since(ap, nm, since)
+            total_req += req
+            total_out += max(req - float(shp or 0.0), 0.0)
+            has_ls = has_ls or (pri >= PRIO_LIFE_SAVING)
+        out.append({
+            "airport": ap,
+            "max_pri": int(a.get("max_pri") or 1),
+            "requested_lb": round(total_req, 1),
+            "outstanding_lb": round(total_out, 1),
+            "has_life_saving": has_ls,
+        })
+    out.sort(key=lambda x: (-int(x["max_pri"] or 1), str(x["airport"] or "")))
+    return out
+
+# ───────────────────────────── CRv2 — RR WebEOC WA autodetect + dispatcher ─────────────
+def _rr_webeoc_guess_inline_xml(text: str) -> str:
+    """
+    If the user pasted the XML into the email body, pull it out.
+    Returns '' when not found.
+    """
+    import re
+    t = text or ""
+    m = re.search(r'(?s)(<\?xml[^>]*\?>\s*<RMS_Express_Form\b.*?</RMS_Express_Form>)', t)
+    return m.group(1) if m else ""
+
+def _rr_webeoc_is_wa_message(subject: str | None, body: str | None,
+                             attachment_names: list[str] | None = None) -> bool:
+    """
+    Heuristics: match WA RR WebEOC viewer emails either by attachment name or by body labels.
+    """
+    s = (subject or "").lower()
+    b = (body or "").lower()
+    names = [n.lower() for n in (attachment_names or [])]
+    # 1) attachment hint (most reliable)
+    if any("rr_webeoc_wa_viewer" in n and n.endswith(".xml") for n in names):
+        return True
+    # 2) body/subject hints (need 2+ markers to avoid false positives)
+    markers = [
+        "request for assistance or resources",
+        "delivery location name:",
+        "requestor tracking #",
+        "rr webeoc wa",               # sometimes present in templateversion lines
+        "rms_express_form_rr_webeoc_wa_viewer.xml",
+    ]
+    hit = sum(1 for m in markers if m in b or m in s)
+    return hit >= 2
+
+def _rr_webeoc_load_xml_for_message_id(message_id: int) -> str:
+    """
+    Best-effort: find and read the WA viewer XML from winlink_message_files.
+    Returns '' if not found/readable.
+    """
+    try:
+        rows = dict_rows("""
+          SELECT filename, saved_path
+            FROM winlink_message_files
+           WHERE message_id = ?
+           ORDER BY id DESC
+        """, (int(message_id),))
+        # Prefer the conventional viewer filename; else take any .xml
+        choice = None
+        for r in rows:
+            nm = (r.get("filename") or "").lower()
+            if "rr_webeoc_wa_viewer" in nm and nm.endswith(".xml"):
+                choice = r
+                break
+        if not choice:
+            choice = next((r for r in rows if str(r.get("filename","")).lower().endswith(".xml")), None)
+        if choice and choice.get("saved_path") and os.path.exists(choice["saved_path"]):
+            with open(choice["saved_path"], "r", encoding="utf-8", errors="ignore") as f:
+                return f.read()
+    except Exception:
+        pass
+    return ""
+
+def cr2_autodetect_rr_webeoc_from_winlink(message_id: int) -> int:
+    """
+    Given a row in winlink_messages, auto-detect the WA RR WebEOC request,
+    then ingest from XML (if readable) or fall back to the plaintext body.
+    Returns number of 'Detailed Description' lines ingested (with weights).
+    """
+    try:
+        msg_rows = dict_rows("SELECT id, subject, body FROM winlink_messages WHERE id=?", (int(message_id),))
+        if not msg_rows:
+            return 0
+        msg = msg_rows[0]
+        files = dict_rows("SELECT filename FROM winlink_message_files WHERE message_id=?", (int(message_id),))
+        names = [f.get("filename") or "" for f in files]
+        if not _rr_webeoc_is_wa_message(msg.get("subject"), msg.get("body"), names):
+            # Not a WA RR WebEOC email → do nothing
+            return 0
+        # Try to read attachment XML; if not, try inline-pasted XML; else body-only.
+        xml_text = _rr_webeoc_load_xml_for_message_id(int(message_id)) \
+                   or _rr_webeoc_guess_inline_xml(msg.get("body","")) \
+                   or None
+        # Friendly provenance string if we didn’t pass one in
+        src_ref = f"RR WebEOC WA from winlink #{message_id}"
+        return cr2_ingest_rr_webeoc_wa(
+            email_body=(msg.get("body") or ""),
+            xml_text=xml_text,
+            source_comm_id=None,
+            source_ref=src_ref
+        )
+    except Exception:
+        return 0
+
+def cr2_autodetect_rr_webeoc_from_text(subject: str, body: str,
+                                       *, source_comm_id: int | None = None,
+                                       source_ref: str | None = None) -> int:
+    """
+    Same as above, but for non-Winlink pipelines where we only have subject/body.
+    Attempts inline-XML extraction; otherwise body-only.
+    """
+    if not _rr_webeoc_is_wa_message(subject, body, None):
+        return 0
+    inline_xml = _rr_webeoc_guess_inline_xml(body)
+    return cr2_ingest_rr_webeoc_wa(
+        email_body=body or "",
+        xml_text=(inline_xml or None),
+        source_comm_id=source_comm_id,
+        source_ref=source_ref or "RR WebEOC WA (autodetect)"
+    )
 
 # ── ADS-B Adapter (Step 6) ──────────────────────────────────────────────────
 def _epoch_to_iso_utc(val) -> str:
@@ -3535,6 +3861,7 @@ def ensure_cargo_request_tables() -> None:
     """Public idempotent creator for Cargo Requests tables."""
     with sqlite3.connect(get_db_file()) as c:
         _create_tables_cargo_requests(c)
+        _create_tables_cargo_requests_v2(c)
 
 def _now_iso_z() -> str:
     try:
@@ -3592,6 +3919,98 @@ def cr_upsert_requests(airport: str, items: list[dict], *, source_email_id: str 
            WHERE airport_canon=? AND fulfilled_lb >= requested_lb
         """, (ap,))
     return n
+
+
+# ───────────────────────────── Cargo Requests v2 helpers (priority + sources)
+# NOTE:
+#   • Time-aware public readers live above:
+#       - cr2_get_airport_detail(...)
+#       - cr2_get_ramp_summary(...)
+#   • This block intentionally excludes alternative (non–time-aware) readers to avoid duplication.
+# ────────────────────────────────────────────────────────────────────────────
+def _hash_fingerprint(payload: dict) -> str:
+    import hashlib, json as _json
+    # Order-insensitive stable hash (includes key fields we use for idempotency)
+    s = _json.dumps(payload or {}, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(s).hexdigest()
+
+def cr2_upsert_request_group(*, airport: str, priority_code: int, need: str,
+                             qty_lb: float, source_comm_id: int | None,
+                             source_ref: str | None, raw_json: dict | None,
+                             fingerprint_hint: str | None = None,
+                             allow_raw_airport: bool = False) -> None:
+    """
+    Idempotently attach one source request to one (airport,priority,need) aggregate.
+    """
+    ensure_cargo_request_tables()
+    ap = canonical_airport_code(airport or "")
+    if not ap and allow_raw_airport:
+        # fall back to the operator’s label (uppercased) if we can’t canonicalize
+        ap = (airport or "").strip().upper()
+    need_s = cr_sanitize_item(need or "")
+    if not (ap and need_s and qty_lb and qty_lb > 0):
+        return
+    pr  = int(priority_code or PRIO_INCIDENT_STAB)
+    now = _now_iso_z()
+    # Build a fingerprint across the typical dedupe keys
+    fp = fingerprint_hint or _hash_fingerprint({
+        "airport": ap, "priority": pr, "need": need_s,
+        "qty_lb": round(float(qty_lb),1),
+        "source_ref": source_ref or "",
+        "comm": source_comm_id or 0,
+    })
+    with sqlite3.connect(get_db_file()) as c:
+        c.row_factory = sqlite3.Row
+        # Upsert source row (ignore if already seen)
+        c.execute("""
+          INSERT OR IGNORE INTO cargo_request_sources(fingerprint, source_comm_id, source_ref, raw_json, created_utc)
+          VALUES(?,?,?,?,?)
+        """, (fp, source_comm_id, source_ref, json.dumps(raw_json or {}, ensure_ascii=False), now))
+        src = c.execute("SELECT id FROM cargo_request_sources WHERE fingerprint=?", (fp,)).fetchone()
+        if not src:
+            # already present; still ensure link exists and aggregate totals are correct
+            src = c.execute("SELECT id FROM cargo_request_sources WHERE fingerprint=?", (fp,)).fetchone()
+        sid = int(src["id"])
+        # Link to aggregate (idempotent)
+        cur = c.execute("""
+          INSERT OR IGNORE INTO cargo_request_links(source_id, airport_canon, priority_code, need_sanitized, qty_lb, created_utc)
+          VALUES(?,?,?,?,?,?)
+        """, (sid, ap, pr, need_s, float(qty_lb), now))
+        if cur.rowcount:  # only when a NEW link is inserted
+            c.execute("""
+              INSERT INTO cargo_requests_v2(airport_canon,priority_code,need_sanitized,requested_lb,created_at,updated_at)
+              VALUES(?,?,?,?,?,?)
+              ON CONFLICT(airport_canon,priority_code,need_sanitized) DO UPDATE SET
+                requested_lb = requested_lb + excluded.requested_lb,
+                updated_at   = excluded.updated_at
+            """, (ap, pr, need_s, float(qty_lb), now, now))
+
+def cr2_compute_shipped_lb_map(airport: str) -> dict[str, float]:
+    """
+    Return {need_sanitized: shipped_lb} for OUTBOUND flights whose landing field is `airport`.
+    Uses flight_cargo totals (preferred). Falls back to parsing `flights.remarks` manifest if needed.
+    """
+    ap = canonical_airport_code(airport or "")
+    if not ap:
+        return {}
+    out: dict[str,float] = {}
+    try:
+        rows = dict_rows("""
+          SELECT fc.sanitized_name AS name, SUM(fc.total_weight) AS wt
+            FROM flight_cargo fc
+            JOIN flights f ON f.id = fc.flight_id
+           WHERE f.airfield_landing = ?
+             AND f.direction = 'outbound'
+           GROUP BY fc.sanitized_name
+        """, (ap,))
+        for r in rows:
+            nm = (r.get("name") or "").strip().lower()
+            wt = float(r.get("wt") or 0.0)
+            if nm:
+                out[nm] = round(out.get(nm, 0.0) + wt, 1)
+    except Exception:
+        pass
+    return out
 
 def cr_get_overview() -> list[dict]:
     """
