@@ -25,7 +25,7 @@ if not hasattr(flask, "Markup"):
     Markup = _Markup
 if not hasattr(werkzeug.urls, "url_encode"):
     werkzeug.urls.url_encode = werkzeug.urls.urlencode
-from flask_wtf.csrf import CSRFProtect
+from flask_wtf.csrf import CSRFProtect, CSRFError
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from zeroconf import Zeroconf
@@ -471,6 +471,37 @@ app.config.update(
 
 CSRFProtect(app)
 limiter = Limiter(app, key_func=get_remote_address, default_limits=["1000 per hour"])
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CSRF failures → standardize responses for global client handler
+@app.errorhandler(CSRFError)
+def _handle_csrf_error(e):
+    """
+    Return a consistent signal for CSRF failures:
+      - For XHR/JSON callers: 400 JSON + header X-CSRF-Error: 1
+      - For normal form posts / full-page: render session_expired.html (400) + same header
+    The client JS in base.html watches for this header and forces a reload.
+    """
+    try:
+        desc = getattr(e, "description", None) or "CSRF token missing or expired."
+    except Exception:
+        desc = "CSRF token missing or expired."
+
+    wants_json = (
+        (request.headers.get("X-Requested-With") == "XMLHttpRequest")
+        or ("application/json" in (request.headers.get("Accept") or ""))
+    )
+    if wants_json:
+        resp = jsonify({"ok": False, "error": "csrf", "message": desc})
+        resp.status_code = 400
+        resp.headers["X-CSRF-Error"] = "1"
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+
+    # Full-page fallback
+    body = render_template("session_expired.html", message=desc)
+    headers = {"X-CSRF-Error": "1", "Cache-Control": "no-store"}
+    return body, 400, headers
 
 # Jinja filter: seconds -> mm:ss
 app.jinja_env.filters['mmss'] = _mmss

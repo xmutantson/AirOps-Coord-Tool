@@ -22,22 +22,92 @@
     .main-nav a[data-tab="weather"].alert { background:#b00020; color:#fff; }
   </style>
 
-    <!-- Auto‑reload on CSRF expiry: any fetch that returns 401 → full page reload -->
-    <script>
-    (function(){
-      const _origFetch = window.fetch;
-      window.fetch = function(...args){
-        return _origFetch.apply(this,args).then(resp => {
-          if (resp.status === 401) {
-            // CSRF token expired or invalid → reload to get a fresh one
-            window.location.reload();
-            return new Promise(()=>{});  // never resolve downstream
+  <!-- Global CSRF-expiry watcher (inline). Traps any 400 with X-CSRF-Error: 1 and hard-blocks UI until reload. -->
+  <script>
+  (function () {
+    if (window.__CSRF_WATCH_INSTALLED__) return;
+    window.__CSRF_WATCH_INSTALLED__ = true;
+
+    function showSessionExpiredOverlay() {
+      if (window.__CSRF_EXPIRED_SHOWN__) return;
+      window.__CSRF_EXPIRED_SHOWN__ = true;
+
+      var overlay = document.createElement('div');
+      overlay.id = 'csrf-expired-overlay';
+      overlay.style.position = 'fixed';
+      overlay.style.inset = '0';
+      overlay.style.background = 'rgba(0,0,0,0.65)';
+      overlay.style.zIndex = '2147483647';
+      overlay.style.display = 'flex';
+      overlay.style.alignItems = 'center';
+      overlay.style.justifyContent = 'center';
+      overlay.innerHTML =
+        '<div style="background:#fff;padding:24px 28px;max-width:520px;width:90%;' +
+        'box-shadow:0 10px 30px rgba(0,0,0,.3);border-radius:12px;text-align:center;' +
+        'font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;">' +
+        '<h2 style="margin:0 0 8px">Session expired</h2>' +
+        '<p style="margin:0 0 16px">For security your CSRF token expired. Click OK to reload and continue.</p>' +
+        '<button id="csrf-ok" style="padding:10px 18px;border:none;border-radius:8px;background:#0b5cff;color:#fff;font-weight:600;cursor:pointer;">OK</button>' +
+        '</div>';
+
+      // Block interaction underneath overlay
+      ['click','mousedown','mouseup','touchstart','touchend','keydown'].forEach(ev =>
+        overlay.addEventListener(ev, function (e) { e.stopPropagation(); }, { capture: true })
+      );
+
+      document.body.appendChild(overlay);
+
+      function hardReload() {
+        try { window.__NAVIGATING_AWAY = true; } catch(_) {}
+        try { window.location.reload(); } catch (_) { window.location.href = window.location.href; }
+      }
+      overlay.querySelector('#csrf-ok').addEventListener('click', hardReload, { once: true });
+      window.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') hardReload();
+        ev.preventDefault(); ev.stopPropagation();
+      }, { capture: true });
+    }
+
+    function isCsrfFailure(status, headersGetter) {
+      try {
+        if (status !== 400) return false;
+        var v = headersGetter && headersGetter('X-CSRF-Error');
+        if (v == null) v = headersGetter && headersGetter('x-csrf-error');
+        return (v === '1');
+      } catch (_) { return false; }
+    }
+
+    // Wrap fetch()
+    if (window.fetch) {
+      const _fetch = window.fetch;
+      window.fetch = function () {
+        return _fetch.apply(this, arguments).then(function (res) {
+          if (isCsrfFailure(res.status, res.headers && res.headers.get.bind(res.headers))) {
+            showSessionExpiredOverlay();
           }
-          return resp;
+          return res;
         });
       };
-    })();
-    </script>
+    }
+
+    // Wrap XMLHttpRequest
+    if (window.XMLHttpRequest) {
+      const XHR = window.XMLHttpRequest;
+      const _open = XHR.prototype.open, _send = XHR.prototype.send;
+      XHR.prototype.open = function () { this.__csrf_watch = true; return _open.apply(this, arguments); };
+      XHR.prototype.send = function () {
+        if (this.__csrf_watch) {
+          this.addEventListener('loadend', function () {
+            if (isCsrfFailure(this.status, this.getResponseHeader.bind(this))) {
+              showSessionExpiredOverlay();
+            }
+          });
+        }
+        return _send.apply(this, arguments);
+      };
+    }
+  })();
+  </script>
 {# Auto-refresh only on Wargame dashboards #}
 {# auto-refresh for Wargame pages is JS-driven so we can pause while modals are open #}
 </head>

@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Session expired</title>
+  <meta http-equiv="Cache-Control" content="no-store">
+  <style>
+    html,body{height:100%;margin:0;font:16px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;}
+    .wrap{height:100%;display:flex;align-items:center;justify-content:center;background:#f6f7fb;}
+    .card{background:#fff;padding:24px 28px;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.12);max-width:520px;text-align:center}
+    h1{margin:0 0 8px;font-size:22px}
+    p{margin:0 0 16px;color:#444}
+    button{padding:10px 18px;border:0;border-radius:8px;background:#0b5cff;color:#fff;font-weight:600;cursor:pointer}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Session expired</h1>
+      <p>For your security the CSRF token expired. Click OK to reload and continue.</p>
+      <button id="ok">OK</button>
+    </div>
+  </div>
+  <script>
+    document.getElementById('ok').onclick = function () { location.reload(); };
+    // Allow pressing Enter
+    window.addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('ok').click(); });
+  </script>
+</body>
+</html>
