@@ -1,4 +1,4 @@
-<section class="agg-requests-panel">
+<section class="agg-requests-panel" aria-live="polite">
   <h3 class="muted" style="margin:0 0 8px;">Aggregated Requests</h3>
   <div id="agg-requests-airports"></div>
 </section>
@@ -10,6 +10,9 @@
   const BOOT_KEY = '__AGG_PANEL_BOOTSTRAPPED__';
   if (window[BOOT_KEY]) return;
   window[BOOT_KEY] = true;
+
+  // How often a card's effective priority should be recomputed (ms)
+  const EFFECTIVE_TTL_MS = 30_000;
 
   async function j(url) {
     const r = await fetch(url, {headers: {"X-Requested-With":"XMLHttpRequest"}});
@@ -52,40 +55,91 @@
       .agg-requests-panel .badge.is { background:#6c757d; color:#fff; }
       .agg-requests-panel .outstanding { font-weight:600; }
       .agg-requests-panel .src { font-size:12px; color:var(--agg-subtle); }
-      .agg-requests-panel .airport header .hl { color:#b30000; font-weight:600; }
+
+      /* Header coloring by highest ACTIVE priority */
+      .agg-requests-panel .airport header .name.pri-ls,
+      .agg-requests-panel .airport header .chip.pri-ls { color:#b30000; font-weight:600; }
+      .agg-requests-panel .airport header .name.pri-pp,
+      .agg-requests-panel .airport header .chip.pri-pp { color:#c07a00; font-weight:600; }
+
+      /* De-emphasize fulfilled rows */
+      .agg-requests-panel table.req tr.done td { color:var(--agg-subtle); }
     `;
     const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
+  }
+
+  // ---------- Helpers for "active-only" priority semantics ----------
+  function isActive(row){ return (row && (row.outstanding_lb || 0) > 0); }
+
+  function computeEffectiveMeta(rows){
+    let maxPri = 0;
+    for (const r of rows || []){
+      if (!isActive(r)) continue;
+      const pc = r.priority_code || 0;
+      if (pc > maxPri) maxPri = pc;
+    }
+    return { effective_pri: maxPri };
+  }
+
+  function setPriClass(el, pri){
+    if (!el) return;
+    el.classList.remove('pri-ls','pri-pp');
+    if (pri === 3) el.classList.add('pri-ls');
+    else if (pri === 2) el.classList.add('pri-pp');
+  }
+
+  function applyActiveDecor(card, eff){
+    const pri = eff.effective_pri || 0;
+    setPriClass(card.querySelector('header .name'), pri);
+    setPriClass(card.querySelector('header .chip'), pri);
+    // persist for sort & TTL
+    card.dataset.effectivePri = String(pri);
+    card.dataset.effTs = String(Date.now());
+  }
+
+  function updateCardOutstanding(card, v){
+    card.dataset.outstanding = String(v == null ? 0 : +v);
   }
 
   function airportCard(a){
     const div = document.createElement('div');
     div.className = 'airport';
     div.dataset.airport = a.airport;
+    // seed sort fallbacks from META; corrected after detail fetch
+    div.dataset.maxPri = String(a.max_pri || 0);
+    updateCardOutstanding(div, a.outstanding_lb || 0);
+
     div.innerHTML = `
       <header>
         <span class="name">${a.airport}</span>
-        <span class="chip ${a.has_life_saving ? 'hl':''}">
+        <span class="chip">
           Outstanding: ${a.outstanding_lb?.toFixed(1) ?? '0.0'} lb
         </span>
       </header>
       <div class="body"><div class="inner">Loading…</div></div>
     `;
+
     div.querySelector('header').addEventListener('click', async () => {
       div.classList.toggle('open');
       const body = div.querySelector('.body .inner');
-      // Always load details when opening; they’re cheap and stay fresh.
       if (div.classList.contains('open')) {
         const rows = await j(`/aggregate/ramp/v2/${encodeURIComponent(a.airport)}`);
         body.innerHTML = renderRows(a.airport, rows);
+        const eff = computeEffectiveMeta(rows);
+        applyActiveDecor(div, eff);
+        resortCards();
       }
     });
     return div;
   }
 
   function renderRows(airport, rows){
-    const tr = rows.map(r => {
+    // Active rows (outstanding>0) first by priority desc; fulfilled afterwards
+    const active = (rows||[]).filter(isActive).sort((a,b)=> (b.priority_code||0)-(a.priority_code||0));
+    const done   = (rows||[]).filter(r => !isActive(r));
+    const ordered = active.concat(done);
+    const tr = ordered.map(r => {
       const p = priBadge(r.priority_code, r.priority_label);
-      // Show exactly as requested: "remaining (original)". Keep shipped as a hint.
       const qty = `${(r.outstanding_lb||0).toFixed(1)} lb` +
                   ` <span class="muted">(${(r.requested_lb||0).toFixed(1)} lb)</span>` +
                   (r.shipped_lb>0 ? ` — shipped ${(r.shipped_lb||0).toFixed(1)} lb` : '');
@@ -93,7 +147,8 @@
         const comm = s.comm_id ? ` — <a href="/comms?id=${s.comm_id}" target="_blank" rel="noopener">Comms ${s.comm_id}</a>` : '';
         return `<div class="src">#${s.id}${comm}${s.ref ? ' — '+s.ref : ''}</div>`;
       }).join('');
-      return `<tr>
+      const rowCls = isActive(r) ? '' : ' class="done"';
+      return `<tr${rowCls}>
         <td>${p}</td>
         <td>${r.need}</td>
         <td>${qty}</td>
@@ -107,61 +162,108 @@
     </table>`;
   }
 
-  // Sort helper: active (outstanding>0) first, then by priority desc, then airport asc
-  function cmpAirports(a, b){
-    const az = (a.outstanding_lb || 0) <= 0;
-    const bz = (b.outstanding_lb || 0) <= 0;
-    if (az !== bz) return az ? 1 : -1; // zeros to the bottom
-    const ap = (a.max_pri || 0), bp = (b.max_pri || 0);
-    if (ap !== bp) return bp - ap;
-    return String(a.airport || '').localeCompare(String(b.airport || ''));
+  // Sort helpers (airports): outstanding>0 first, then EFFECTIVE max priority, then code
+  function _keyFromCard(card){
+    const zero = (parseFloat(card.dataset.outstanding || '0') || 0) <= 0;
+    const pri  = zero ? 0 : (parseInt(card.dataset.effectivePri || card.dataset.maxPri || '0') || 0);
+    return {zero, pri, code: String(card.dataset.airport||'')};
+  }
+  function cmpCards(a,b){
+    const ka=_keyFromCard(a), kb=_keyFromCard(b);
+    if (ka.zero!==kb.zero) return ka.zero ? 1 : -1;
+    if (ka.pri!==kb.pri)   return kb.pri - ka.pri;
+    return ka.code.localeCompare(kb.code);
+  }
+  function resortCards(){
+    const root = document.getElementById('agg-requests-airports');
+    if (!root) return;
+    const cards = Array.from(root.querySelectorAll('.airport'));
+    cards.sort(cmpCards).forEach(c => root.appendChild(c));
+  }
+
+  // Recompute effective priority for a single card (optionally refresh its table if open)
+  async function recomputeEffective(card, {refreshTable=false} = {}){
+    const ap = card.dataset.airport;
+    const rows = await j(`/aggregate/ramp/v2/${encodeURIComponent(ap)}`);
+    if (refreshTable && card.classList.contains('open')) {
+      const body = card.querySelector('.body .inner');
+      if (body) body.innerHTML = renderRows(ap, rows);
+    }
+    const eff = computeEffectiveMeta(rows);
+    applyActiveDecor(card, eff);
   }
 
   async function bootstrap(){
     style();
     const root = document.getElementById('agg-requests-airports');
     if (!root) return;
-    const data = await j('/aggregate/ramp/v2');
-    const ordered = data.slice().sort(cmpAirports);
-    ordered.forEach(a => root.appendChild(airportCard(a)));
 
-    // ---- Auto-refresh: update chips + any OPEN airport details ----
+    // Initial list from summary meta (no coloring yet)
+    const meta = await j('/aggregate/ramp/v2');
+    meta.slice()
+        .sort((a,b)=>{
+          const az = (a.outstanding_lb || 0) <= 0;
+          const bz = (b.outstanding_lb || 0) <= 0;
+          if (az !== bz) return az ? 1 : -1;
+          // fall back to meta priority only for initial ordering; corrected after first effective pass
+          const ap = (a.max_pri || 0), bp = (b.max_pri || 0);
+          if (ap !== bp) return bp - ap;
+          return String(a.airport || '').localeCompare(String(b.airport || ''));
+        })
+        .forEach(a => root.appendChild(airportCard(a)));
+
+    // Background pass: compute EFFECTIVE (active-only) priorities for all cards and color them
+    await Promise.all(
+      Array.from(root.querySelectorAll('.airport')).map(card =>
+        recomputeEffective(card, {refreshTable:false}).catch(()=>{})
+      )
+    );
+    resortCards();
+
+    // ---- Auto-refresh: update chips + periodically recompute effective priorities ----
     async function refreshAll({force=false} = {}){
       try{
-        const fresh = await j('/aggregate/ramp/v2');           // [{airport, outstanding_lb, has_life_saving, max_pri}, ...]
-        const ordered = fresh.slice().sort(cmpAirports);
+        const fresh = await j('/aggregate/ramp/v2'); // [{airport, outstanding_lb, max_pri}, ...]
         const byAp = new Map(fresh.map(x => [x.airport, x]));
-        // Update existing cards (and add new ones if they appear)
+
         for (const card of Array.from(root.querySelectorAll('.airport'))){
           const ap = card.dataset.airport;
           const meta = byAp.get(ap);
+
           if (meta){
+            // Update numeric chip only (no color changes here → avoids "red flash")
             const chip = card.querySelector('.chip');
             if (chip){
               chip.textContent = `Outstanding: ${(meta.outstanding_lb||0).toFixed(1)} lb`;
-              chip.classList.toggle('hl', !!meta.has_life_saving);
             }
-            // If the card is open (or force==true), refresh its table
-            if (force || card.classList.contains('open')){
-              const rows = await j(`/aggregate/ramp/v2/${encodeURIComponent(ap)}`);
-              card.querySelector('.body .inner').innerHTML = renderRows(ap, rows);
+            updateCardOutstanding(card, meta.outstanding_lb || 0);
+            card.dataset.maxPri = String(meta.max_pri || 0);
+
+            const lastTs = parseInt(card.dataset.effTs || '0') || 0;
+            const stale = (Date.now() - lastTs) >= EFFECTIVE_TTL_MS;
+
+            // Recompute effective pri if open, forced, or stale
+            if (force || card.classList.contains('open') || stale){
+              await recomputeEffective(card, {refreshTable: force || card.classList.contains('open')}).catch(()=>{});
             }
           } else {
             // airport disappeared (everything satisfied) → remove the card
             card.remove();
           }
         }
+
         // Add any new airports that showed up
-        for (const a of ordered){
+        for (const a of fresh){
           if (!root.querySelector(`.airport[data-airport="${a.airport}"]`)){
-            root.appendChild(airportCard(a));
+            const card = airportCard(a);
+            root.appendChild(card);
+            // compute effective for the new card
+            recomputeEffective(card, {refreshTable:false}).catch(()=>{});
           }
         }
-        // Reorder DOM to match 'ordered' sequence (append moves existing nodes)
-        for (const a of ordered){
-          const card = root.querySelector(`.airport[data-airport="${a.airport}"]`);
-          if (card) root.appendChild(card);
-        }
+
+        // Resort DOM using EFFECTIVE priorities
+        resortCards();
       }catch(_e){ /* silent; next tick will catch up */ }
     }
 
