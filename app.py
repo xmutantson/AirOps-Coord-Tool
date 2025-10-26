@@ -779,6 +779,25 @@ if aggregate_api_bp:
 else:
     logger.warning("Skipping blueprint 'aggregate' (missing or failed import)")
 
+# --- Rate-limit exemptions for high-frequency Aggregate endpoints -------------
+# The ramp aggregated panel polls these JSON endpoints frequently. Exempt them
+# specifically (rather than the whole blueprint) to avoid tripping the limiter.
+try:
+    # Endpoint function names are scoped by the blueprint name ("aggregate.*").
+    f_summary = app.view_functions.get('aggregate.ramp_v2')
+    f_detail  = app.view_functions.get('aggregate.ramp_v2_airport_detail')
+
+    if f_summary:
+        limiter.exempt(f_summary)
+    if f_detail:
+        limiter.exempt(f_detail)
+
+    if f_summary or f_detail:
+        logger.info("Limiter: exempted /aggregate/ramp/v2* endpoints from rate limits")
+except Exception as e:
+    logger.warning("Limiter: could not exempt aggregate ramp endpoints: %s", e)
+# -----------------------------------------------------------------------------
+
 # Shutdown hook from services
 _jobs = _safe_import("modules.services.jobs")
 _shutdown_scheduler = getattr(_jobs, "_shutdown_scheduler", lambda: None)
