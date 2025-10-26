@@ -18,3 +18,4 @@ PyYAML>=6.0.1,<7
 WeasyPrint>=60.0
 dsame3_simple
 pyrtlsdr>=0.3.0
+avwx-engine>=1.8,<2

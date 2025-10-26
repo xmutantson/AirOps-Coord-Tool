@@ -1789,6 +1789,12 @@ table.wg-radio-table tr.read { opacity: .8; }
   max-width: none !important;
 }
 
+/* ── Weather page: METAR panel should use full-width cards ── */
+#metar-panel .card {
+  width: 100% !important;
+  max-width: none !important;
+}
+
 /* Ensure Training directory controls float above footer comfortably */
 #dir-controls {
   bottom: 4.25rem !important; /* sits above sticky footer */

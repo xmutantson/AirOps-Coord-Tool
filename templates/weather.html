@@ -27,10 +27,70 @@
     <button id="wx-request" type="button">Go</button>
   </div>
   <span id="wx-request-status" class="wx-status"></span>
-  <!-- Right-justified SAME toggle -->
-  <button id="same-toggle" type="button" class="button" style="margin-left:auto">
+
+  <!-- Right-justified controls -->
+  <button id="metar-toggle" type="button" class="button" style="margin-left:auto">METAR/TAF Request</button>
+  <button id="same-toggle" type="button" class="button" style="margin-left:.5rem">
     SAME Alerts <span id="same-badge" style="display:none;margin-left:.35rem;border-radius:9px;padding:.05rem .4rem;font-size:.8em;background:#b00020;color:#fff;">NEW</span>
   </button>
+</div>
+
+<!-- Collapsible METAR/TAF panel (hidden by default; full width; entries render as a single-column table) -->
+<div id="metar-panel" style="display:none; margin:.5rem 0 1rem;">
+  <div class="card" style="padding:.75rem;">
+    <div style="display:flex; gap:.5rem; flex-wrap:wrap; align-items:flex-end;">
+      <label class="wx-field" style="min-width:260px;">
+        <span>ICAO IDs (comma/space separated)</span>
+        <input id="metar-ids" placeholder="e.g. KBLI KSEA CYVR">
+      </label>
+      <div class="wx-inline-row" style="gap:.5rem;">
+        <button id="metar-fetch" type="button" class="button">Fetch via Internet</button>
+        <button id="metar-compose" type="button" class="button" title="Prepare Winlink messages (one per ICAO)">Prepare via Winlink</button>
+        <button id="metar-paste-toggle" type="button" class="button">Paste response</button>
+      </div>
+      <label class="wx-inline" style="margin-left:auto;">
+        <input id="metar-show-decoded" type="checkbox"> Show decoded (plain English)
+      </label>
+      <span id="metar-status" class="wx-status" style="margin-left:.5rem;"></span>
+    </div>
+
+    <!-- Paste flow (manual Winlink) -->
+    <form id="metar-paste-form" style="display:none; margin-top:.75rem;">
+      <div class="wx-row two">
+        <label class="wx-field">
+          <span>ICAO IDs (for this paste)</span>
+          <input id="metar-paste-ids" placeholder="KBLI KSEA">
+        </label>
+        <div class="wx-field">
+          <span>&nbsp;</span>
+          <button id="metar-paste-save" type="submit" class="button">Save pasted result</button>
+        </div>
+      </div>
+      <label class="wx-field">
+        <span>Raw METAR/TAF text</span>
+        <textarea id="metar-paste-text" rows="6" placeholder="Paste the raw report you received via Winlink…"></textarea>
+      </label>
+    </form>
+
+    <hr>
+    <div style="display:flex; align-items:center; gap:.5rem;">
+      <strong>Request History</strong>
+      <label class="wx-inline" style="margin-left:auto;">
+        <select id="metar-view-scope">
+          <option value="last">Show last 4</option>
+          <option value="all">Show all</option>
+        </select>
+      </label>
+      <button id="metar-unhide-all" type="button" class="button" title="Clear local hides">Unhide all</button>
+    </div>
+
+    <!-- Single-column table to keep width constrained -->
+    <div id="metar-list" style="margin-top:.5rem;">
+      <table id="metar-table" class="table" style="width:100%;">
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
 </div>
 
 <!-- Collapsible SAME panel (pushes maps down when opened) -->
@@ -311,6 +371,227 @@
     }
   });
 
+  // -------------------- METAR/TAF panel logic --------------------
+  const metarToggle = $('#metar-toggle');
+  const metarPanel  = $('#metar-panel');
+  const metarIds    = $('#metar-ids');
+  const metarFetch  = $('#metar-fetch');
+  const metarCompose= $('#metar-compose');
+  const metarPasteToggle = $('#metar-paste-toggle');
+  const metarPasteForm   = $('#metar-paste-form');
+  const metarPasteIds    = $('#metar-paste-ids');
+  const metarPasteText   = $('#metar-paste-text');
+  const metarPasteSave   = $('#metar-paste-save');
+  const metarStatus      = $('#metar-status');
+  const metarList        = $('#metar-list');
+  const metarTableBody   = document.querySelector('#metar-table tbody');
+  const metarViewScope   = $('#metar-view-scope');
+  const metarShowDecoded = $('#metar-show-decoded');
+  const metarUnhideAll   = $('#metar-unhide-all');
+
+  const STORAGE_HIDE = 'metar_taf_hidden';
+
+  function getHiddenSet(){
+    try{ return new Set(JSON.parse(localStorage.getItem(STORAGE_HIDE) || '[]')); }catch(_){ return new Set(); }
+  }
+  function setHiddenSet(s){
+    try{ localStorage.setItem(STORAGE_HIDE, JSON.stringify(Array.from(s))); }catch(_){}
+  }
+
+  function normIds(text){
+    return (text||'')
+      .toUpperCase()
+      .split(/[^A-Z0-9]+/)
+      .map(s=>s.trim())
+      .filter(s=>/^[A-Z0-9]{3,4}$/.test(s));
+  }
+
+  async function loadMetarList(){
+    const decode = metarShowDecoded?.checked ? 1 : 0;
+    const r = await fetch(`/api/weather/metar_taf/list?decode=${decode}`);
+    const j = await r.json().catch(()=>({ok:false}));
+    if (!j.ok){ return; }
+    const hidden = getHiddenSet();
+    const rows = j.items || [];
+    const last = rows.slice(0,4);
+
+    function renderRow(rec){
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      tr.dataset.id = rec.id;
+      if (hidden.has(rec.id)) tr.style.opacity = '.5';
+      td.style.padding = '8px 10px';
+      td.style.verticalAlign = 'top';
+
+      // Header bar
+      const hdr = document.createElement('div');
+      hdr.className = 'wx-row two';
+      hdr.style.alignItems = 'center';
+
+      const meta = document.createElement('div');
+      meta.className = 'muted';
+      const idsStr = Array.isArray(rec.ids) ? rec.ids.join(', ') : '';
+      const method = String(rec.method||'').toUpperCase();
+      meta.textContent = `#${rec.id} • ${rec.fetched_at_utc} • ${method} • ${idsStr}`;
+
+      const actions = document.createElement('div');
+      actions.className = 'wx-inline-row';
+      actions.style.justifyContent = 'flex-end';
+      actions.style.gap = '.5rem';
+      const btnTog = document.createElement('button');
+      btnTog.type='button'; btnTog.className='button small'; btnTog.dataset.toggle = String(rec.id); btnTog.textContent='Expand';
+      const btnHide = document.createElement('button');
+      btnHide.type='button'; btnHide.className='button small'; btnHide.dataset.hide = String(rec.id); btnHide.textContent = hidden.has(rec.id) ? 'Unhide' : 'Hide';
+      actions.append(btnTog, btnHide);
+      hdr.append(meta, actions);
+
+      // Body block (raw + optional plain-English)
+      const pre = document.createElement('pre');
+      pre.className = 'metar-pre';
+      pre.style.display = 'none';
+      pre.style.margin = '.5rem 0 0';
+      pre.style.whiteSpace = 'pre-wrap';
+      pre.style.overflowWrap = 'anywhere';
+      pre.textContent = rec.raw_text || '';
+
+      const plain = (rec.plain||'').trim();
+      if (plain){
+        const det = document.createElement('details');
+        det.style.marginTop = '.5rem';
+        const sum = document.createElement('summary');
+        sum.textContent = 'Plain-English';
+        const pre2 = document.createElement('pre');
+        pre2.style.whiteSpace = 'pre-wrap';
+        pre2.style.overflowWrap = 'anywhere';
+        pre2.textContent = plain;
+        det.append(sum, pre2);
+        pre.appendChild(det);
+      }
+
+      td.append(hdr, pre);
+      tr.appendChild(td);
+      return tr;
+    }
+
+    const scope = metarViewScope?.value || 'last';
+    const list = (scope === 'last') ? last : rows;
+
+    metarTableBody.innerHTML = '';
+    if (!list.length){
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.className = 'muted';
+      td.textContent = 'no requests yet';
+      tr.appendChild(td);
+      metarTableBody.appendChild(tr);
+      return;
+    }
+    list.forEach(rec => metarTableBody.appendChild(renderRow(rec)));
+  }
+
+  metarList.addEventListener('click', (e)=>{
+    const btn = e.target.closest('button'); if (!btn) return;
+    if (btn.dataset.toggle){
+      const id = btn.dataset.toggle;
+      const row = metarTableBody.querySelector(`tr[data-id="${id}"]`);
+      const pre = row?.querySelector('.metar-pre');
+      if (!pre) return;
+      const open = pre.style.display !== 'none';
+      pre.style.display = open ? 'none' : 'block';
+      btn.textContent = open ? 'Expand' : 'Collapse';
+    } else if (btn.dataset.hide){
+      const id = parseInt(btn.dataset.hide, 10);
+      const hidden = getHiddenSet();
+      if (hidden.has(id)) hidden.delete(id); else hidden.add(id);
+      setHiddenSet(hidden);
+      loadMetarList();
+    }
+  });
+
+  metarUnhideAll?.addEventListener('click', ()=>{
+    setHiddenSet(new Set());
+    loadMetarList();
+  });
+
+  metarViewScope?.addEventListener('change', loadMetarList);
+  metarShowDecoded?.addEventListener('change', loadMetarList);
+
+  metarToggle?.addEventListener('click', ()=>{
+    const open = metarPanel.style.display !== 'none';
+    if (open){
+      metarPanel.style.display = 'none';
+    } else {
+      metarPanel.style.display = 'block';
+      loadMetarList();
+    }
+  });
+
+  metarPasteToggle?.addEventListener('click', ()=>{
+    metarPasteForm.style.display = (metarPasteForm.style.display === 'none') ? 'block' : 'none';
+  });
+
+  metarPasteForm?.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const ids = normIds(metarPasteIds.value);
+    const raw = metarPasteText.value || '';
+    if (!raw.trim()){
+      metarStatus.textContent = 'nothing to save';
+      setTimeout(()=> metarStatus.textContent='', 1000);
+      return;
+    }
+    metarPasteSave.disabled = true;
+    metarStatus.textContent = 'saving…';
+    try{
+      const r = await fetch('/api/weather/metar_taf/store', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ ids, raw_text: raw })
+      });
+      const j = await r.json();
+      if (j.ok){
+        metarStatus.textContent = `saved #${j.id}`;
+        metarPasteText.value = '';
+        loadMetarList();
+      } else {
+        metarStatus.textContent = `error: ${j.error||'failed'}`;
+      }
+    }catch(_){ metarStatus.textContent = 'error'; }
+    finally{ metarPasteSave.disabled = false; setTimeout(()=> metarStatus.textContent='', 1500); }
+  });
+
+  metarFetch?.addEventListener('click', async ()=>{
+    const ids = normIds(metarIds.value);
+    if (!ids.length){ metarStatus.textContent = 'enter ICAO(s)'; setTimeout(()=> metarStatus.textContent='', 900); return; }
+    metarFetch.disabled = true; metarStatus.textContent = 'fetching…';
+    try{
+      const r = await fetch('/api/weather/metar_taf/fetch', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ ids })
+      });
+      const j = await r.json();
+      if (j.ok){
+        metarStatus.textContent = `saved #${j.id}`;
+        loadMetarList();
+      } else {
+        metarStatus.textContent = `error: ${j.error||'failed'}`;
+      }
+    }catch(_){ metarStatus.textContent = 'error'; }
+    finally{ metarFetch.disabled = false; setTimeout(()=> metarStatus.textContent='', 1500); }
+  });
+
+  // Prepare via Winlink → one message per ICAO, each body has a single URL
+  metarCompose?.addEventListener('click', ()=>{
+    const ids = normIds(metarIds.value);
+    if (!ids.length){ metarStatus.textContent = 'enter ICAO(s)'; setTimeout(()=> metarStatus.textContent='', 900); return; }
+    const base = 'https://aviationweather.gov/api/data/metar';
+    const msgs = ids.map(id=>{
+      const params = new URLSearchParams({ ids: id, hours: '0', sep: 'true', taf: 'true' });
+      return { to:'INQUIRY', subject:'REQUEST', body: `${base}?${params.toString()}` };
+    });
+    renderPreview(msgs);
+  });
+
   // Auto-refresh every 15s; incremental updates avoid flicker
   setInterval(async ()=>{
     try { await syncCatalog(); } catch(_) {}
@@ -561,4 +842,3 @@
 })();
 </script>
 {% endblock %}
-

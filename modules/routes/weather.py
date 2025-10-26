@@ -14,6 +14,8 @@ from typing import List, Dict
 import os  # for stem handling (canonicalization)
 import hashlib
 import json
+import re
+import urllib.parse, urllib.request
 from app import scheduler
 
 from modules.utils.common import (
@@ -47,6 +49,159 @@ def _stem(s: str) -> str:
       'WCVS.JPG' -> 'WCVS', 'wa_for_wa' -> 'WA_FOR_WA'
     """
     return os.path.splitext((s or "").strip())[0].upper()
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+# ----------------------- METAR/TAF request log ------------------------
+def _ensure_metar_table() -> None:
+    """
+    Create a tiny history table for METAR/TAF requests (idempotent).
+    NOTE: hides are per-client via localStorage, per product spec.
+    """
+    dict_rows("""
+      CREATE TABLE IF NOT EXISTS wx_metar_taf_log (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        ids              TEXT NOT NULL,           -- comma-separated ICAO list
+        method           TEXT NOT NULL,           -- 'internet' | 'manual'
+        raw_text         TEXT NOT NULL,           -- raw payload
+        source_url       TEXT,                    -- if fetched
+        fetched_at_utc   TEXT NOT NULL,           -- ISO8601
+        created_at_utc   TEXT NOT NULL            -- ISO8601
+      )
+    """)
+_ensure_metar_table()
+
+def _try_decode_metar_taf(raw_text: str) -> str:
+    """
+    Best-effort plain-English summary using avwx-engine if present.
+    - We do *not* fetch network data; we parse the provided text.
+    - If decoding fails or avwx isn't available, return "".
+    """
+    if not raw_text:
+        return ""
+    try:
+        # Defer import so app starts even if package missing
+        from avwx import Metar, Taf  # type: ignore
+    except Exception:
+        return ""
+
+    lines = [l.strip() for l in (raw_text or "").splitlines() if l.strip()]
+    out: list[str] = []
+    for ln in lines:
+        try:
+            if ln.startswith("METAR") or ln.startswith("SPECI"):
+                # avwx 1.x supports parsing from full report string
+                m = Metar.from_report(ln)  # type: ignore[attr-defined]
+                summ = getattr(m, "summary", None) or getattr(m, "speech", None) or ""
+                if summ: out.append(f"METAR: {summ}")
+            elif ln.startswith("TAF"):
+                t = Taf.from_report(ln)  # type: ignore[attr-defined]
+                summ = getattr(t, "summary", None) or getattr(t, "speech", None) or ""
+                if summ: out.append(f"TAF: {summ}")
+        except Exception:
+            # Keep going for other lines
+            continue
+    return "\n".join(out).strip()
+
+def _sanitize_ids(raw: List[str] | str) -> List[str]:
+    """Normalize ICAO list; accept 3–4 alnum; de-dupe, preserve order."""
+    if isinstance(raw, str):
+        toks = re.split(r"[^A-Za-z0-9]+", raw.upper())
+    else:
+        toks = [str(x or "").upper() for x in raw]
+    out, seen = [], set()
+    for t in toks:
+        t = t.strip()
+        if not t: continue
+        if not re.fullmatch(r"[A-Z0-9]{3,4}", t): continue
+        if t in seen: continue
+        seen.add(t)
+        out.append(t)
+    return out
+
+def _insert_metar_record(ids: List[str], method: str, raw_text: str, source_url: str | None = None) -> int:
+    ids_csv = ",".join(ids)
+    now_iso = _utc_now_iso()
+    dict_rows("""
+      INSERT INTO wx_metar_taf_log (ids, method, raw_text, source_url, fetched_at_utc, created_at_utc)
+      VALUES (?, ?, ?, ?, ?, ?)
+    """, (ids_csv, method, raw_text, source_url or "", now_iso, now_iso))
+    row = dict_rows("SELECT last_insert_rowid() AS id")
+    return int(row[0]["id"]) if row else 0
+
+def _maybe_decode_text(raw_text: str) -> str:
+    """
+    Best-effort decode to plain English:
+      - Try avwx-engine if installed (METAR/TAF).
+      - Else try python-metar (METAR only).
+      - Else return empty string.
+    """
+    text = (raw_text or "").strip()
+    if not text:
+        return ""
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    decoded_lines: List[str] = []
+
+    # avwx-engine path
+    try:
+        import avwx  # type: ignore
+        # We don't know station a priori per line; use from_report helpers.
+        for ln in lines:
+            try:
+                if ln.startswith(("METAR", "SPECI")):
+                    m = avwx.Metar.from_report(ln)  # type: ignore[attr-defined]
+                    if m and m.translations:
+                        decoded_lines.append(m.translations.get("summary", "") or m.summary or "")
+                    else:
+                        decoded_lines.append(m.summary if m else "")
+                elif ln.startswith("TAF"):
+                    t = avwx.Taf.from_report(ln)  # type: ignore[attr-defined]
+                    if t and t.translations:
+                        decoded_lines.append(t.translations.get("summary", "") or t.summary or "")
+                    else:
+                        decoded_lines.append(t.summary if t else "")
+            except Exception:
+                # keep going
+                pass
+    except Exception:
+        # python-metar fallback (METAR only)
+        try:
+            from metar import Metar as _Metar  # type: ignore
+            for ln in lines:
+                try:
+                    if ln.startswith(("METAR", "SPECI")):
+                        obs = _Metar.Metar(ln)
+                        decoded_lines.append(obs.string())  # human-readable sentence
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    return "\n".join([l for l in decoded_lines if l]).strip()
+
+def _rows_to_api(rows, include_decoded: bool = False):
+    out = []
+    for r in rows:
+        try:
+            ids = [x for x in (r["ids"] or "").split(",") if x]
+        except Exception:
+            ids = []
+        rec = {
+            "id": int(r["id"]),
+            "ids": ids,
+            "method": r.get("method") or "",
+            "raw_text": r.get("raw_text") or "",
+            "source_url": r.get("source_url") or "",
+            "fetched_at_utc": r.get("fetched_at_utc") or r.get("created_at_utc") or "",
+        }
+        if include_decoded:
+            try:
+                rec["decoded_text"] = _maybe_decode_text(rec["raw_text"])
+            except Exception:
+                rec["decoded_text"] = ""
+        out.append(rec)
+    return out
 
 # ----------------------------- SAME API ------------------------------
 @bp_api.get("/alerts")
@@ -568,3 +723,64 @@ def request_updates():
                 results.append({"to": m["to"], "subject": m["subject"], "ok": False, "error": str(e)})
         return jsonify({"ok": any_ok, "requested_at": ts, "results": results, "count": len(results), "mode": "pat_sync"})
 
+
+# --------------------------- NEW: METAR/TAF API -----------------------
+@bp_api.post("/metar_taf/fetch")
+def metar_taf_fetch():
+    """Fetch METAR/TAF from aviationweather.gov and store raw text."""
+    js = request.get_json(silent=True) or {}
+    ids = _sanitize_ids(js.get("ids") or [])
+    if not ids:
+        return jsonify({"ok": False, "error": "no ICAO ids"}), 400
+    try:
+        q = { "ids": ",".join(ids), "hours": "0", "sep": "true", "taf": "true" }
+        url = "https://aviationweather.gov/api/data/metar?" + urllib.parse.urlencode(q)
+        req = urllib.request.Request(url, headers={"User-Agent":"AOCT/1.0"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            body = r.read().decode("utf-8", "replace")
+        rec_id = _insert_metar_record(ids, "internet", body, source_url=url)
+        return jsonify({"ok": True, "id": rec_id})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@bp_api.post("/metar_taf/store")
+def metar_taf_store():
+    """Store a pasted METAR/TAF response (e.g., from Winlink Express)."""
+    js = request.get_json(silent=True) or {}
+    ids = _sanitize_ids(js.get("ids") or [])
+    raw = (js.get("raw_text") or "").strip()
+    if not raw:
+        return jsonify({"ok": False, "error": "empty raw_text"}), 400
+    if not ids:
+        # Best-effort: try to infer any ICAOs present in the text
+        ids = _sanitize_ids(re.findall(r"\b[A-Z0-9]{3,4}\b", raw.upper()))
+    rec_id = _insert_metar_record(ids, "manual", raw, source_url=None)
+    return jsonify({"ok": True, "id": rec_id})
+
+@bp_api.get("/metar_taf/list")
+def metar_taf_list():
+    """
+    Recent METAR/TAF request history.
+    Optional: ?n=50 (<=200), ?decode=0|1 (include plain-English if libs available)
+    (also accepts ?translate=1 for compatibility)
+    """
+    try:
+        n = int(request.args.get("n", "50"))
+    except Exception:
+        n = 50
+    n = max(1, min(200, n))
+    want_decode = str(request.args.get("decode", request.args.get("translate", "0"))).lower() in ("1","true","yes")
+    rows = dict_rows("""
+      SELECT id, ids, method, raw_text, source_url, fetched_at_utc, created_at_utc
+        FROM wx_metar_taf_log
+       ORDER BY id DESC
+       LIMIT ?
+    """, (n,))
+    items = _rows_to_api(rows)
+    if want_decode:
+        for it in items:
+            try:
+                it["plain"] = _try_decode_metar_taf(it.get("raw_text") or "")
+            except Exception:
+                it["plain"] = ""
+    return jsonify({"ok": True, "items": items})
