@@ -53,6 +53,86 @@ def _stem(s: str) -> str:
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
+def _extract_metar_taf_blocks(raw: str) -> tuple[list[str], str]:
+    """
+    Parse arbitrary email/text and pull out:
+      • METAR/SPECI lines (single-line products)
+      • TAF blocks (may span multiple lines; include AMD/COR; keep all lines)
+    Returns (ordered_unique_station_ids, extracted_text).
+    Robust to Saildocs headers/footers like the example you sent.
+    """
+    if not raw:
+        return ([], "")
+    lines = (raw.replace("\r\n", "\n").replace("\r", "\n")).split("\n")
+    metars: list[str] = []
+    taf_blocks: list[list[str]] = []
+    ids_ordered: list[str] = []
+    seen_ids: set[str] = set()
+
+    def _add_id(sta: str):
+        s = (sta or "").strip().upper()
+        if re.fullmatch(r"[A-Z0-9]{3,4}", s) and s not in seen_ids:
+            seen_ids.add(s); ids_ordered.append(s)
+
+    i = 0
+    N = len(lines)
+    while i < N:
+        ln = lines[i]
+        s = ln.strip()
+        if not s:
+            i += 1; continue
+        # METAR / SPECI — take whole line
+        m = re.match(r"^(METAR|SPECI)\s+([A-Z0-9]{3,4})\b.*", s, re.IGNORECASE)
+        if m:
+            metars.append(s if ln == s else ln.rstrip())
+            _add_id(m.group(2))
+            i += 1; continue
+        # TAF (with optional AMD/COR) — capture continuation lines too
+        t = re.match(r"^TAF(?:\s+(?:AMD|COR))?\s+([A-Z0-9]{3,4})\b.*", s, re.IGNORECASE)
+        if t:
+            block: list[str] = [ln.rstrip()]
+            _add_id(t.group(1))
+            j = i + 1
+            while j < N:
+                nxt = lines[j]
+                nxts = nxt.strip()
+                # stop when another product starts or a hard separator appears
+                if not nxts:
+                    break
+                if re.match(r"^(METAR|SPECI)\s+[A-Z0-9]{3,4}\b", nxts, re.IGNORECASE):
+                    break
+                if re.match(r"^TAF(?:\s+(?:AMD|COR))?\s+[A-Z0-9]{3,4}\b", nxts, re.IGNORECASE):
+                    break
+                # accept common TAF continuation starters, or any indented line
+                if (nxt.startswith((" ", "\t")) or
+                    re.match(r"^(FM\d{6}|TEMPO|PROB\d{2}|BECMG|NSW|TX\d{4}/\d{4}|TN\d{4}/\d{4}|RMK)\b", nxts, re.IGNORECASE)):
+                    block.append(nxt.rstrip()); j += 1; continue
+                # If the next line looks unrelated (headers/footers), stop.
+                if re.match(r"^(Message ID:|Date:|From:|To:|Subject:|URL:|=====)", nxts):
+                    break
+                # Conservative: include one more neutral line then stop
+                block.append(nxt.rstrip()); j += 1
+                if j < N and not lines[j].strip():
+                    break
+            taf_blocks.append(block)
+            i = j; continue
+        i += 1
+
+    # Prefer to keep exactly the aviation lines; if none found, fall back to raw
+    extracted = []
+    if metars:
+        extracted.extend(metars)
+    if taf_blocks:
+        if extracted: extracted.append("")  # spacer between METAR and TAF
+        for b in taf_blocks:
+            extracted.extend(b)
+            extracted.append("")            # blank line between TAFs
+        if extracted and extracted[-1] == "":
+            extracted.pop()
+    if not extracted:
+        return (_sanitize_ids(re.findall(r"\b[A-Z0-9]{3,4}\b", raw.upper())), raw.strip())
+    return (ids_ordered, "\n".join(extracted).strip())
+
 # ----------------------- METAR/TAF request log ------------------------
 def _ensure_metar_table() -> None:
     """
@@ -74,35 +154,176 @@ _ensure_metar_table()
 
 def _try_decode_metar_taf(raw_text: str) -> str:
     """
-    Best-effort plain-English summary using avwx-engine if present.
-    - We do *not* fetch network data; we parse the provided text.
-    - If decoding fails or avwx isn't available, return "".
+    Best-effort plain-English summary.
+      • METAR: "Valid DD HH:MMZ — METAR: <summary>"
+      • TAF:   one bullet per forecast line using AVWX's per-line summaries, each
+               prefixed by the correct time label (Valid / From / TEMPO / BECMG / PROBxx).
+    Falls back to concise, hand-built summaries if the library is missing.
     """
     if not raw_text:
         return ""
-    try:
-        # Defer import so app starts even if package missing
-        from avwx import Metar, Taf  # type: ignore
-    except Exception:
+
+    # Pull out just the aviation lines/blocks first
+    _ids, extracted = _extract_metar_taf_blocks(raw_text)
+    text = extracted or raw_text
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+    metar_lines: list[str] = []
+    taf_blocks: list[str] = []
+    i = 0
+    while i < len(lines):
+        s = lines[i].strip()
+        if not s:
+            i += 1
+            continue
+        if s.startswith(("METAR", "SPECI")):
+            metar_lines.append(s)
+            i += 1
+            continue
+        if s.startswith("TAF"):
+            j = i + 1
+            cur = [lines[i].rstrip()]
+            while j < len(lines) and lines[j].strip():
+                cur.append(lines[j].rstrip())
+                j += 1
+            taf_blocks.append("\n".join(cur))
+            i = j
+            continue
+        i += 1
+
+    def _fmt_dt(dt) -> str | None:
+        try:
+            d, h = int(getattr(dt, "day")), int(getattr(dt, "hour"))
+            m = getattr(dt, "minute", None)
+            if m is None:
+                return f"{d:02d} {h:02d}Z"
+            return f"{d:02d} {h:02d}:{int(m):02d}Z"
+        except Exception:
+            return None
+
+    def _fmt_range(st, en, tag: str | None = None) -> str:
+        a = _fmt_dt(st)
+        b = _fmt_dt(en)
+        if tag and tag.upper() == "FROM":
+            return f"From {a or ''}".strip()
+        if tag and tag.upper() in ("TEMPO", "BECMG") and a and b:
+            return f"{tag.upper()} {a}–{b}"
+        if tag and tag.upper().startswith("PROB") and a and b:
+            return f"{tag.upper()} {a}–{b}"
+        if a and b:
+            return f"{a}–{b}"
+        if a:
+            return f"From {a}"
         return ""
 
-    lines = [l.strip() for l in (raw_text or "").splitlines() if l.strip()]
+    def _metar_valid_prefix(ln: str) -> str:
+        # METAR KATL 262052Z ...
+        m = re.search(r"\b(\d{2})(\d{2})(\d{2})Z\b", ln)
+        if not m:
+            return ""
+        dd, hh, mm = map(int, m.groups())
+        return f"Valid {dd:02d} {hh:02d}:{mm:02d}Z — "
+
     out: list[str] = []
-    for ln in lines:
-        try:
-            if ln.startswith("METAR") or ln.startswith("SPECI"):
-                # avwx 1.x supports parsing from full report string
+
+    # ---------- Try AVWX for full decode ----------
+    try:
+        from avwx import Metar, Taf  # type: ignore
+
+        # METAR lines
+        for ln in metar_lines:
+            try:
                 m = Metar.from_report(ln)  # type: ignore[attr-defined]
-                summ = getattr(m, "summary", None) or getattr(m, "speech", None) or ""
-                if summ: out.append(f"METAR: {summ}")
-            elif ln.startswith("TAF"):
-                t = Taf.from_report(ln)  # type: ignore[attr-defined]
-                summ = getattr(t, "summary", None) or getattr(t, "speech", None) or ""
-                if summ: out.append(f"TAF: {summ}")
+                summ = (
+                    getattr(m, "summary", None)
+                    or getattr(m, "speech", None)
+                    or ""
+                )
+                prefix = _metar_valid_prefix(ln)
+                if summ:
+                    out.append(f"{prefix}METAR: {summ}")
+            except Exception:
+                # ignore and fall back later if needed
+                pass
+
+        # TAF blocks → per-forecast bullets using AVWX's per-line summaries
+        for block in taf_blocks:
+            try:
+                # Parse with AVWX; rely on its per-line `summary` list which aligns
+                # with `data.forecast` (times + type).
+                t = Taf.from_report(block)  # type: ignore[attr-defined]
+                summaries = t.summary or []
+                data = getattr(t, "data", None)
+                forecasts = list(getattr(data, "forecast", []) or [])
+                lines_out: list[str] = ["TAF:"]
+
+                # Pair each forecast line with its summary (if any)
+                n = max(len(forecasts), len(summaries))
+                for idx in range(n):
+                    f = forecasts[idx] if idx < len(forecasts) else None
+                    seg_summ = summaries[idx].strip() if idx < len(summaries) else ""
+
+                    # Forecast window & type/tag (BASE/FM/TEMPO/BECMG/PROBxx)
+                    st = getattr(f, "start_time", None)
+                    en = getattr(f, "end_time", None)
+                    tag = (getattr(f, "type", None) or "").upper() if f else ""
+                    # Convert AVWX Timestamp -> datetime for formatter
+                    st_dt = getattr(st, "dt", None) or getattr(st, "datetime", None)
+                    en_dt = getattr(en, "dt", None) or getattr(en, "datetime", None)
+
+                    # Label logic
+                    label = _fmt_range(st_dt, en_dt, tag or None)
+                    base_like = not tag or tag in ("", "BASE", "MAIN")
+                    # The first line is the header validity window → prefix with "Valid"
+                    if idx == 0 and base_like and label and "–" in label:
+                        label = f"Valid {label}"
+                    elif not label and seg_summ:
+                        # Fallback if no times came through for some reason
+                        label = "Segment"
+
+                    bullet = ("  • " + label) if label else "  •"
+                    if seg_summ:
+                        bullet += f" — {seg_summ}"
+                    lines_out.append(bullet.rstrip())
+
+                out.append("\n".join(lines_out).rstrip())
+
+            except Exception:
+                # As a last resort, keep at least the header validity window if present
+                txt = (block or "").replace("\r\n", "\n").replace("\r", "\n")
+                m = re.search(r"\b(\d{2})(\d{2})/(\d{2})(\d{2})\b", txt)
+                lines_out = ["TAF:"]
+                if m:
+                    d1,h1,d2,h2 = map(int, m.groups())
+                    lines_out.append(f"  • Valid {d1:02d} {h1:02d}Z–{d2:02d} {h2:02d}Z")
+                out.append("\n".join(lines_out))
+
+    except Exception:
+        # Library unavailable → METAR fallback (python-metar) + bare timing for TAF
+        try:
+            from metar import Metar as _Metar  # type: ignore
+            for ln in metar_lines:
+                try:
+                    obs = _Metar.Metar(ln)
+                    prefix = _metar_valid_prefix(ln)
+                    out.append(prefix + "METAR: " + obs.string())
+                except Exception:
+                    pass
         except Exception:
-            # Keep going for other lines
-            continue
-    return "\n".join(out).strip()
+            pass
+        for block in taf_blocks:
+            txt = (block or "").replace("\r\n", "\n").replace("\r", "\n")
+            lines_out = ["TAF:"]
+            m = re.search(r"\b(\d{2})(\d{2})/(\d{2})(\d{2})\b", txt)
+            if m:
+                d1,h1,d2,h2 = map(int, m.groups())
+                lines_out.append(f"  • Valid {d1:02d} {h1:02d}Z–{d2:02d} {h2:02d}Z")
+            for fm in re.findall(r"\bFM(\d{2})(\d{2})(\d{2})\b", txt):
+                d,h,mi = map(int, fm)
+                lines_out.append(f"  • From {d:02d} {h:02d}:{mi:02d}Z")
+            out.append("\n".join(lines_out))
+
+    return "\n".join([s for s in out if s]).strip()
 
 def _sanitize_ids(raw: List[str] | str) -> List[str]:
     """Normalize ICAO list; accept 3–4 alnum; de-dupe, preserve order."""
@@ -745,16 +966,16 @@ def metar_taf_fetch():
 
 @bp_api.post("/metar_taf/store")
 def metar_taf_store():
-    """Store a pasted METAR/TAF response (e.g., from Winlink Express)."""
+    """Store a pasted METAR/TAF response (tolerates whole emails)."""
     js = request.get_json(silent=True) or {}
-    ids = _sanitize_ids(js.get("ids") or [])
     raw = (js.get("raw_text") or "").strip()
     if not raw:
         return jsonify({"ok": False, "error": "empty raw_text"}), 400
+    ids, extracted = _extract_metar_taf_blocks(raw)
     if not ids:
-        # Best-effort: try to infer any ICAOs present in the text
+        # Fall back to any tokens if we truly couldn't find products
         ids = _sanitize_ids(re.findall(r"\b[A-Z0-9]{3,4}\b", raw.upper()))
-    rec_id = _insert_metar_record(ids, "manual", raw, source_url=None)
+    rec_id = _insert_metar_record(ids, "manual", extracted or raw, source_url=None)
     return jsonify({"ok": True, "id": rec_id})
 
 @bp_api.get("/metar_taf/list")

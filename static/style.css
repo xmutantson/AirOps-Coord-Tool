@@ -1795,6 +1795,19 @@ table.wg-radio-table tr.read { opacity: .8; }
   max-width: none !important;
 }
 
+/* Expired tag in request history */
+.wx-expired{
+  color:#b00020;
+  font-weight:700;
+}
+
+/* ── Weather: compact ICAO entry ── */
+#metar-ids{
+  width: 14ch;          /* ~6–8 chars + wiggle room */
+  min-width: 10ch;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
 /* Ensure Training directory controls float above footer comfortably */
 #dir-controls {
   bottom: 4.25rem !important; /* sits above sticky footer */

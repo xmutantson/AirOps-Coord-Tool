@@ -41,35 +41,29 @@
     <div style="display:flex; gap:.5rem; flex-wrap:wrap; align-items:flex-end;">
       <label class="wx-field" style="min-width:260px;">
         <span>ICAO IDs (comma/space separated)</span>
-        <input id="metar-ids" placeholder="e.g. KBLI KSEA CYVR">
+        <input id="metar-ids" class="force-upper" placeholder="e.g. KSEA CYVR">
       </label>
       <div class="wx-inline-row" style="gap:.5rem;">
         <button id="metar-fetch" type="button" class="button">Fetch via Internet</button>
         <button id="metar-compose" type="button" class="button" title="Prepare Winlink messages (one per ICAO)">Prepare via Winlink</button>
         <button id="metar-paste-toggle" type="button" class="button">Paste response</button>
       </div>
-      <label class="wx-inline" style="margin-left:auto;">
-        <input id="metar-show-decoded" type="checkbox"> Show decoded (plain English)
+      <!-- Force decoded ON; hide the toggle from the UI -->
+      <label class="wx-inline hidden" style="margin-left:auto;display:none;">
+        <input id="metar-show-decoded" type="checkbox" checked> Show decoded (plain English)
       </label>
       <span id="metar-status" class="wx-status" style="margin-left:.5rem;"></span>
     </div>
 
     <!-- Paste flow (manual Winlink) -->
     <form id="metar-paste-form" style="display:none; margin-top:.75rem;">
-      <div class="wx-row two">
-        <label class="wx-field">
-          <span>ICAO IDs (for this paste)</span>
-          <input id="metar-paste-ids" placeholder="KBLI KSEA">
-        </label>
-        <div class="wx-field">
-          <span>&nbsp;</span>
-          <button id="metar-paste-save" type="submit" class="button">Save pasted result</button>
-        </div>
-      </div>
       <label class="wx-field">
         <span>Raw METAR/TAF text</span>
         <textarea id="metar-paste-text" rows="6" placeholder="Paste the raw report you received via Winlink…"></textarea>
       </label>
+      <div style="display:flex;justify-content:flex-end;margin-top:.5rem;">
+        <button id="metar-paste-save" type="submit" class="button">Save pasted result</button>
+      </div>
     </form>
 
     <hr>
@@ -81,6 +75,7 @@
           <option value="all">Show all</option>
         </select>
       </label>
+      <button id="metar-hide-expired" type="button" class="button" title="Hide all expired METAR reports">Hide expired</button>
       <button id="metar-unhide-all" type="button" class="button" title="Clear local hides">Unhide all</button>
     </div>
 
@@ -320,7 +315,7 @@
 
         <label class="wx-field">
           <span>Body</span>
-          <textarea class="wx-body" rows="8">${m.body}</textarea>
+          <textarea class="wx-body" rows="3">${m.body}</textarea>
           <div class="wx-actions">
             <button type="button" class="button small" data-copy=".wx-body">Copy Body</button>
           </div>
@@ -379,7 +374,6 @@
   const metarCompose= $('#metar-compose');
   const metarPasteToggle = $('#metar-paste-toggle');
   const metarPasteForm   = $('#metar-paste-form');
-  const metarPasteIds    = $('#metar-paste-ids');
   const metarPasteText   = $('#metar-paste-text');
   const metarPasteSave   = $('#metar-paste-save');
   const metarStatus      = $('#metar-status');
@@ -388,8 +382,10 @@
   const metarViewScope   = $('#metar-view-scope');
   const metarShowDecoded = $('#metar-show-decoded');
   const metarUnhideAll   = $('#metar-unhide-all');
+  const metarHideExpired = $('#metar-hide-expired');
 
   const STORAGE_HIDE = 'metar_taf_hidden';
+  const METAR_EXPIRE_MIN = 60;
 
   function getHiddenSet(){
     try{ return new Set(JSON.parse(localStorage.getItem(STORAGE_HIDE) || '[]')); }catch(_){ return new Set(); }
@@ -406,20 +402,81 @@
       .filter(s=>/^[A-Z0-9]{3,4}$/.test(s));
   }
 
+  // Extract all (ICAO, tmsUTC) pairs from METAR lines within a raw payload
+  function extractMetarTimes(raw){
+    if (!raw) return [];
+    const out = [];
+    // e.g. "METAR KPSC 260553Z ..."
+    const re = /^(?:METAR|SPECI)\s+([A-Z0-9]{3,4})\s+(\d{2})(\d{2})(\d{2})Z/mg;
+    let m;
+    while ((m = re.exec(raw)) !== null){
+      const icao = m[1];
+      const dd = parseInt(m[2],10), hh = parseInt(m[3],10), mm = parseInt(m[4],10);
+      const tms = anchorDayToUtc(dd, hh, mm);
+      if (tms != null) out.push({icao, tms});
+    }
+    return out;
+  }
+
+  // Convert DD,HH,MM (Zulu) to epoch ms anchored to current UTC month/year (with wrap near month edges)
+  function anchorDayToUtc(dd, hh, mm){
+    const now = new Date();
+    const y = now.getUTCFullYear(), mon = now.getUTCMonth(), today = now.getUTCDate();
+    let y2 = y, mon2 = mon;
+    if ((dd - today) > 15){           // likely previous month
+      if (mon2 === 0){ mon2 = 11; y2 = y - 1; } else { mon2 -= 1; }
+    } else if ((today - dd) > 15){    // likely next month
+      if (mon2 === 11){ mon2 = 0; y2 = y + 1; } else { mon2 += 1; }
+    }
+    // Guard DD in [1..31]
+    if (!(dd >= 1 && dd <= 31)) return null;
+    return Date.UTC(y2, mon2, dd, hh, mm, 0, 0);
+  }
+
+  // Build a map of latest METAR time per ICAO across a set of rows
+  function latestMapForRows(rows){
+    const latest = new Map();
+    (rows||[]).forEach(rec=>{
+      const pairs = extractMetarTimes(rec.raw_text||"");
+      for (const {icao, tms} of pairs){
+        const prev = latest.get(icao) || 0;
+        if (tms > prev) latest.set(icao, tms);
+      }
+    });
+    return latest;
+  }
+
+  // A record is expired if EVERY METAR inside it is >60 min old OR older than the newest seen for that ICAO.
+  function recordExpired(rec, latestMap){
+    const pairs = extractMetarTimes(rec.raw_text||"");
+    if (!pairs.length) return false; // no METAR time → do not mark expired
+    const nowMs = Date.now();
+    let anyFresh = false;
+    for (const {icao, tms} of pairs){
+      const ageMin = (nowMs - tms) / 60000;
+      const newer = (latestMap.get(icao)||0) > tms;
+      const expired = (ageMin > METAR_EXPIRE_MIN) || newer;
+      if (!expired){ anyFresh = true; break; }
+    }
+    return !anyFresh;
+  }
+
+  let _metarRowsCache = [];  // keep last full set for "Hide expired"
+
   async function loadMetarList(){
-    const decode = metarShowDecoded?.checked ? 1 : 0;
-    const r = await fetch(`/api/weather/metar_taf/list?decode=${decode}`);
+    // Always include plain-English (we'll keep the checkbox in UI for now)
+    const r = await fetch(`/api/weather/metar_taf/list?decode=1`);
     const j = await r.json().catch(()=>({ok:false}));
     if (!j.ok){ return; }
     const hidden = getHiddenSet();
     const rows = j.items || [];
+    _metarRowsCache = rows.slice(); // cache for Hide-expired action
     const last = rows.slice(0,4);
 
     function renderRow(rec){
       const tr = document.createElement('tr');
       const td = document.createElement('td');
       tr.dataset.id = rec.id;
-      if (hidden.has(rec.id)) tr.style.opacity = '.5';
       td.style.padding = '8px 10px';
       td.style.verticalAlign = 'top';
 
@@ -432,7 +489,11 @@
       meta.className = 'muted';
       const idsStr = Array.isArray(rec.ids) ? rec.ids.join(', ') : '';
       const method = String(rec.method||'').toUpperCase();
-      meta.textContent = `#${rec.id} • ${rec.fetched_at_utc} • ${method} • ${idsStr}`;
+      // Expired badge
+      const latestMap = latestMapForRows(_metarRowsCache);
+      const expired = recordExpired(rec, latestMap);
+      meta.innerHTML = `#${rec.id} • ${rec.fetched_at_utc} • ${method} • ${idsStr}` +
+        (expired ? ` • <span class="wx-expired">EXPIRED</span>` : ``);
 
       const actions = document.createElement('div');
       actions.className = 'wx-inline-row';
@@ -441,7 +502,7 @@
       const btnTog = document.createElement('button');
       btnTog.type='button'; btnTog.className='button small'; btnTog.dataset.toggle = String(rec.id); btnTog.textContent='Expand';
       const btnHide = document.createElement('button');
-      btnHide.type='button'; btnHide.className='button small'; btnHide.dataset.hide = String(rec.id); btnHide.textContent = hidden.has(rec.id) ? 'Unhide' : 'Hide';
+      btnHide.type='button'; btnHide.className='button small'; btnHide.dataset.hide = String(rec.id); btnHide.textContent = 'Hide';
       actions.append(btnTog, btnHide);
       hdr.append(meta, actions);
 
@@ -457,6 +518,7 @@
       const plain = (rec.plain||'').trim();
       if (plain){
         const det = document.createElement('details');
+        det.open = true; // expanded by default
         det.style.marginTop = '.5rem';
         const sum = document.createElement('summary');
         sum.textContent = 'Plain-English';
@@ -474,7 +536,9 @@
     }
 
     const scope = metarViewScope?.value || 'last';
-    const list = (scope === 'last') ? last : rows;
+    // Filter hidden completely out of the list
+    const base = (scope === 'last') ? last : rows;
+    const list = base.filter(rec => !hidden.has(rec.id));
 
     metarTableBody.innerHTML = '';
     if (!list.length){
@@ -502,14 +566,27 @@
     } else if (btn.dataset.hide){
       const id = parseInt(btn.dataset.hide, 10);
       const hidden = getHiddenSet();
-      if (hidden.has(id)) hidden.delete(id); else hidden.add(id);
+      hidden.add(id);
       setHiddenSet(hidden);
-      loadMetarList();
+      // Remove immediately without a full reload
+      const row = metarTableBody.querySelector(`tr[data-id="${id}"]`);
+      row?.remove();
+      if (!metarTableBody.children.length) loadMetarList();
     }
   });
 
   metarUnhideAll?.addEventListener('click', ()=>{
     setHiddenSet(new Set());
+    loadMetarList();
+  });
+
+  metarHideExpired?.addEventListener('click', ()=>{
+    const hidden = getHiddenSet();
+    const latest = latestMapForRows(_metarRowsCache);
+    (_metarRowsCache||[]).forEach(rec => {
+      if (recordExpired(rec, latest)) hidden.add(rec.id);
+    });
+    setHiddenSet(hidden);
     loadMetarList();
   });
 
@@ -532,11 +609,9 @@
 
   metarPasteForm?.addEventListener('submit', async (e)=>{
     e.preventDefault();
-    const ids = normIds(metarPasteIds.value);
     const raw = metarPasteText.value || '';
     if (!raw.trim()){
-      metarStatus.textContent = 'nothing to save';
-      setTimeout(()=> metarStatus.textContent='', 1000);
+      window.showToast?.('Nothing to save', 'error', 2500);
       return;
     }
     metarPasteSave.disabled = true;
@@ -545,7 +620,8 @@
       const r = await fetch('/api/weather/metar_taf/store', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ ids, raw_text: raw })
+        // IDs are auto-extracted on the server
+        body: JSON.stringify({ raw_text: raw })
       });
       const j = await r.json();
       if (j.ok){
@@ -553,7 +629,8 @@
         metarPasteText.value = '';
         loadMetarList();
       } else {
-        metarStatus.textContent = `error: ${j.error||'failed'}`;
+        window.showToast?.(`Error: ${j.error||'failed'}`, 'error', 3500);
+        metarStatus.textContent = `error`;
       }
     }catch(_){ metarStatus.textContent = 'error'; }
     finally{ metarPasteSave.disabled = false; setTimeout(()=> metarStatus.textContent='', 1500); }
@@ -561,7 +638,11 @@
 
   metarFetch?.addEventListener('click', async ()=>{
     const ids = normIds(metarIds.value);
-    if (!ids.length){ metarStatus.textContent = 'enter ICAO(s)'; setTimeout(()=> metarStatus.textContent='', 900); return; }
+    if (!ids.length){
+      window.showToast?.('Enter at least one ICAO (e.g., KPSC)', 'error', 3000);
+      metarIds?.focus();
+      return;
+    }
     metarFetch.disabled = true; metarStatus.textContent = 'fetching…';
     try{
       const r = await fetch('/api/weather/metar_taf/fetch', {
@@ -574,7 +655,8 @@
         metarStatus.textContent = `saved #${j.id}`;
         loadMetarList();
       } else {
-        metarStatus.textContent = `error: ${j.error||'failed'}`;
+        window.showToast?.(`Error: ${j.error||'failed'}`, 'error', 3500);
+        metarStatus.textContent = `error`;
       }
     }catch(_){ metarStatus.textContent = 'error'; }
     finally{ metarFetch.disabled = false; setTimeout(()=> metarStatus.textContent='', 1500); }
@@ -583,7 +665,11 @@
   // Prepare via Winlink → one message per ICAO, each body has a single URL
   metarCompose?.addEventListener('click', ()=>{
     const ids = normIds(metarIds.value);
-    if (!ids.length){ metarStatus.textContent = 'enter ICAO(s)'; setTimeout(()=> metarStatus.textContent='', 900); return; }
+    if (!ids.length){
+      window.showToast?.('Enter at least one ICAO (e.g., KPSC)', 'error', 3000);
+      metarIds?.focus();
+      return;
+    }
     const base = 'https://aviationweather.gov/api/data/metar';
     const msgs = ids.map(id=>{
       const params = new URLSearchParams({ ids: id, hours: '0', sep: 'true', taf: 'true' });
