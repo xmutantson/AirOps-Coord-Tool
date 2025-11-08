@@ -185,7 +185,7 @@
       const panel = document.getElementById('wg-plane-panel');
       if (panel) panel.dataset.planeId = String(id);
       const title = document.getElementById('wgpp-title');
-      if (title && !/plane\s*:/.test(title.textContent||'')) {
+      if (title && !/\(plane\s+\d+\)/.test(title.textContent||'')) {
         title.textContent = `${title.textContent} (plane ${id})`;
       }
     } catch(_) {}
