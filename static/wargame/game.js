@@ -275,6 +275,9 @@
     }
     // Minimal modal controller used by WG_UI
     function openModal({ title, bodyHTML, okLabel="OK", onOK, onCancel }){
+      // If modal wasn't found initially, try to wire it again
+      if(!modalEl){ wireModal(); }
+      // If still not found after retry, fall back to confirm dialog
       if(!modalEl){ if(confirm((title||"").replace(/<[^>]+>/g,''))){ onOK&&onOK(); } else { onCancel&&onCancel(); } return; }
       modalMsgEl && (modalMsgEl.innerHTML = title || "");
       modalBodyEl && (modalBodyEl.innerHTML = bodyHTML || "");
