@@ -442,7 +442,7 @@ def _key_to_flight_id(key: str) -> int | None:
 # Strict canonicalizer: only positive integers; no implicit remap to 0/alpha.
 def _canon_plane_id_or_none(v) -> Optional[str]:
     s = str(v or "").strip().lower()
-    m = _re.match(r'^(?:plane[:#])?([1-9]\d*)$', s)
+    m = _re.match(r'^(?:plane[:#])?(\d+)$', s)
     return f"plane:{m.group(1)}" if m else None
 
 # --- Normalizers (plane_id / flight_ref) -------------------------------------
@@ -606,8 +606,8 @@ STATE = {
         "queues": {"loads_waiting": 0, "requests": []},  # requests: [{id, lines:[{display_name,unit_lb,size,qty}], ...}]
         # Visual-only aircraft positions for completeness (same as original client)
         "planes": [
-            {"id": "plane:0", "pose": {"x": 244, "y": 290, "facing": "right"}},  # 24+220, 450-160
-            {"id": "plane:1", "pose": {"x": 244, "y": 610, "facing": "right"}},  # 24+220, 450+160
+            {"id": 0, "plane_id": 0, "pose": {"x": 244, "y": 290, "facing": "right"}},  # 24+220, 450-160
+            {"id": 1, "plane_id": 1, "pose": {"x": 244, "y": 610, "facing": "right"}},  # 24+220, 450+160
         ],
     },
     # session_id -> list of carts (with poses); matches client default
