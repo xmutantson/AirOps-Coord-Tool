@@ -1,11 +1,12 @@
 from flask import Blueprint, render_template, redirect, url_for, make_response, request, session, flash
-
 import json
+
 try:
-    from modules.utils.common import get_preference, dict_rows
+    from modules.utils.common import get_preference, dict_rows, set_preference
 except Exception:
     get_preference = None
     dict_rows = None
+    set_preference = None
 
 def _wg_settings():
     # Try via get_preference first
@@ -74,8 +75,46 @@ def wargame_choose_role():
     resp = make_response(redirect(url_for(endpoint)))
     resp.set_cookie('wargame_role', role, max_age=60*60*24*30, samesite='Lax')
 
-    # Optional: apply supervisor settings on selection if available
+    # If Supervisor is selected, persist settings from the form, then apply
     if role == 'super':
+        try:
+            current = _wg_settings() or {}
+            def _num(name, default=0.0):
+                v = (request.form.get(name) or "").strip()
+                try:
+                    return float(v)
+                except Exception:
+                    return float(current.get(name, default) or default)
+            def _int(name, default=0):
+                v = (request.form.get(name) or "").strip()
+                try:
+                    return max(0, int(float(v)))
+                except Exception:
+                    return int(current.get(name, default) or default)
+            def _yesno(name, default="no"):
+                return "yes" if (request.form.get(name) or "").strip().lower() == "yes" else ("no" if name not in current else current.get(name, default))
+
+            new_settings = {
+                "cargo_flow":         (request.form.get("cargo_flow") or current.get("cargo_flow") or "hybrid"),
+                "radio_rate":         _num("radio_rate", 0.0),
+                "radio_use_batch":    _yesno("radio_use_batch", "yes"),
+                "radio_count_batch":  _yesno("radio_count_batch", "yes"),
+                "inv_rate":           _num("inv_rate", 0.0),
+                "ramp_rate":          _num("ramp_rate", 0.0),
+                "balance_pct":        _int("balance_pct", 20),
+                "max_radio":          _int("max_radio", 3),
+                "max_ramp":           _int("max_ramp", 3),
+                "max_inventory":      _int("max_inventory", 3),
+            }
+            # Preserve optional split rates if you had them previously
+            for k in ("inv_in_rate", "inv_out_rate"):
+                if k in current and k not in new_settings:
+                    new_settings[k] = current[k]
+            if set_preference:
+                set_preference("wargame_settings", json.dumps(new_settings))
+        except Exception:
+            # Non-fatal; fall through and try to apply whatever is already stored
+            pass
         try:
             from modules.services.wargame import apply_supervisor_settings
             apply_supervisor_settings()

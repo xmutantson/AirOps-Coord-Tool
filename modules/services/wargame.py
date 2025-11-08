@@ -2,12 +2,16 @@
 import uuid
 import sqlite3, json
 from datetime import datetime
+from typing import Optional, Dict, Any
 import time
+import math
+from functools import lru_cache
 
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
 from app import DB_FILE
 
 from modules.utils.common import _parse_manifest # Star import won't get this one
+from modules.utils.common import sanitize_name
 
 # --- Reset/migration helpers (import or safe fallbacks) ---
 try:
@@ -17,6 +21,44 @@ except Exception:
         pass
     def run_migrations():               # no-op fallback
         pass
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Telemetry claims helper (centralizer, append-agnostic)
+#   • Return a normalized event dict; caller is responsible for appending it to
+#     STATE["claims"][session_id] (done inside routes.wargame_api via _append_claim).
+#   • We keep it here so other modules can reuse the exact same shape without
+#     importing routes (avoids circulars).
+# Shape:
+#   {
+#     ts, event, plane_id, player_id, flight_ref, cart_id?, diff?
+#     ...plus any extra fields you pass via **extra
+#   }
+# ──────────────────────────────────────────────────────────────────────────────
+def add_claim(
+    event: str,
+    *,
+    plane_id: Optional[str] = None,
+    player_id: Optional[int] = None,
+    flight_ref: Optional[Dict[str, Any]] = None,
+    cart_id: Optional[str] = None,
+    diff: Optional[Dict[str, Any]] = None,
+    ts: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Build a canonical telemetry-claim payload (no append, no I/O)."""
+    from modules.utils.common import iso8601_ceil_utc  # late import, no cycles
+    payload: Dict[str, Any] = {
+        "ts": ts or iso8601_ceil_utc(),
+        "event": (event or "").strip(),
+    }
+    if plane_id is not None:  payload["plane_id"]  = plane_id
+    if player_id is not None: payload["player_id"] = int(player_id)
+    if flight_ref is not None:payload["flight_ref"]= flight_ref
+    if cart_id is not None:   payload["cart_id"]   = cart_id
+    if diff is not None:      payload["diff"]      = diff
+    if extra:                 payload.update(dict(extra))
+    return payload
+
 # --- end helpers ---
 def get_wargame_role_epoch() -> str:
     """Return the current epoch; create one if missing."""
@@ -30,6 +72,154 @@ def get_wargame_role_epoch() -> str:
 def bump_wargame_role_epoch() -> None:
     """Rotate epoch so all existing role cookies become stale."""
     set_preference('wargame_role_epoch', uuid.uuid4().hex)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Size-class helpers (S/M/L/XL) computed from real WARGAME_ITEMS unit weights
+#
+_DEFAULT_BREAKPOINTS = (10.0, 25.0, 50.0)  # S ≤10, 10< M ≤25, 25< L ≤50, XL >50
+
+def _get_wargame_items() -> dict:
+    """
+    Lazy fetch of WARGAME_ITEMS to avoid import-order/circular issues.
+    Prefers app.WARGAME_ITEMS; falls back to modules.utils.common.WARGAME_ITEMS; else {}.
+    """
+    try:
+        import app as _app
+        items = getattr(_app, "WARGAME_ITEMS", None)
+        if isinstance(items, dict) and items:
+            return items
+    except Exception:
+        pass
+    try:
+        import modules.utils.common as _common
+        items = getattr(_common, "WARGAME_ITEMS", None)
+        if isinstance(items, dict) and items:
+            return items
+    except Exception:
+        pass
+    return {}
+
+def _collect_unit_weights() -> list[float]:
+    """
+    Collects the multiset of allowed unit weights across all items.
+    Each weight is counted once per item it appears under.
+    """
+    items = _get_wargame_items()
+    ws: list[float] = []
+    for _name, weights in (items or {}).items():
+        try:
+            for w in (weights or []):
+                wv = float(w)
+                if wv > 0:
+                    ws.append(wv)
+        except Exception:
+            # keep going; one bad row shouldn't kill the computation
+            continue
+    ws.sort()
+    return ws
+
+@lru_cache(maxsize=1)
+def compute_size_breakpoints() -> tuple[float, float, float]:
+    """
+    Compute (Q1, Q2, Q3) using nearest-rank percentiles over the multiset of
+    allowed unit weights. Falls back to _DEFAULT_BREAKPOINTS if insufficient data.
+    """
+    ws = _collect_unit_weights()
+    if not ws:
+        return _DEFAULT_BREAKPOINTS
+
+    def q(p: float) -> float:
+        n = len(ws)
+        if n == 0:
+            return float("nan")
+        k = max(1, min(n, int(math.ceil(p * n))))  # nearest-rank
+        return float(ws[k - 1])
+
+    q1, q2, q3 = q(0.25), q(0.50), q(0.75)
+    # sanity: ensure monotonic and non-degenerate; else default
+    if not (q1 <= q2 <= q3) or (abs(q3 - q1) < 1e-9):
+        return _DEFAULT_BREAKPOINTS
+    return (q1, q2, q3)
+
+@lru_cache(maxsize=256)
+def size_class_for(unit_lb: float) -> str:
+    """
+    Map a concrete unit weight (lb) to one of S/M/L/XL using the quantile
+    breakpoints derived from WARGAME_ITEMS. Defaults to S/M/L/XL at 10/25/50
+    if breakpoints aren't computable.
+    """
+    try:
+        w = float(unit_lb or 0.0)
+    except Exception:
+        # bad input → pick a safe middle
+        return "M"
+    if w <= 0:
+        return "S"
+    q1, q2, q3 = compute_size_breakpoints()
+    if w <= q1: return "S"
+    if w <= q2: return "M"
+    if w <= q3: return "L"
+    return "XL"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Spawn tickets view (no mutation): open inbound batches → spawnable truck lines
+def get_open_spawn_tickets() -> list[dict]:
+    """
+    Convert all *open* inbound inventory batches into spawn tickets.
+    Each ticket describes how many units are still required for an exact
+    (sanitized_name, size_lb) pair, plus a size-class for art.
+    Does NOT mutate the database.
+    Returns: list of dicts with keys:
+      - display_name (str)  : sanitized item name for UI
+      - unit_lb (float)     : weight per unit (aka size_lb in DB)
+      - qty_remaining (int) : how many units still required
+      - size (str)          : S|M|L|XL derived from unit_lb
+      - source (dict)       : {batch_id:int, item_id:int}
+    """
+    tickets: list[dict] = []
+    with sqlite3.connect(DB_FILE) as c:
+        c.row_factory = sqlite3.Row
+        # Pull open inbound batches in creation order for stable ticket ordering
+        batches = c.execute("""
+            SELECT id, created_at
+              FROM wargame_inventory_batches
+             WHERE direction='in' AND satisfied_at IS NULL
+             ORDER BY datetime(created_at) ASC, id ASC
+        """).fetchall()
+        if not batches:
+            return tickets
+
+        for b in batches:
+            items = c.execute("""
+                SELECT
+                  id        AS item_id,
+                  name      AS display_name,
+                  size_lb   AS unit_lb,
+                  qty_required,
+                  qty_done
+                FROM wargame_inventory_batch_items
+                WHERE batch_id=?
+                ORDER BY id ASC
+            """, (b["id"],)).fetchall()
+
+            for it in items:
+                req = int(it["qty_required"] or 0)
+                done = int(it["qty_done"] or 0)
+                remaining = req - done
+                if remaining <= 0:
+                    continue
+                # Use sanitized name for canonical display (matches reconciliation)
+                name_sanitized = sanitize_name(it["display_name"] or "")
+                unit_lb = float(it["unit_lb"] or 0.0)
+                tickets.append({
+                    "display_name": name_sanitized,
+                    "unit_lb": unit_lb,
+                    "qty_remaining": remaining,
+                    "size": size_class_for(unit_lb),
+                    "source": {"batch_id": int(b["id"]), "item_id": int(it["item_id"])},
+                })
+
+    return tickets
 
 def wargame_task_start_once(role: str, kind: str, key: str, gen_at: str, sched_for: str | None = None) -> None:
     rows = dict_rows(

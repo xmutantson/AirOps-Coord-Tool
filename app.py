@@ -207,6 +207,13 @@ SENTINEL_DIR.mkdir(parents=True, exist_ok=True)
 def _inject_boot_id():
     return {"BOOT_ID": current_app.config.get("BOOT_ID")}
 
+# Install the Delivery-Truck spawner job at startup (safe to call multiple times)
+try:
+    from modules.services.jobs import configure_wargame_truck_spawner_job
+    configure_wargame_truck_spawner_job(app)
+except Exception as _e:
+    logging.getLogger(__name__).debug("truck spawner configure failed: %s", _e)
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Time probe / auto-set controls (OFF by default; safe logging only)
 AOCT_SET_HOST_TIME       = os.getenv("AOCT_SET_HOST_TIME","0").lower() in ("1","true","yes")

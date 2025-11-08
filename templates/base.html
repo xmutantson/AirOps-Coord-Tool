@@ -199,9 +199,41 @@
   </header>
 {% endif %}
 
-<main class="container">
-  {% block content %}{% endblock %}
-</main>
+  <main class="container">
+    {% block content %}{% endblock %}
+    <!-- Modal mount point: ensures modals are bounded between header & footer -->
+    <div id="modal-root" aria-live="polite">
+      <!-- App-wide modal (suppressed on Wargame pages to avoid #wg-modal ID clash) -->
+      {% if not wargame_mode %}
+      <div id="wg-modal" class="backdrop" style="display:none;">
+        <div class="card" role="dialog" aria-modal="true" aria-labelledby="wg-modal-msg">
+          <div id="wg-modal-msg" class="msg">Message</div>
+          <div id="wg-modal-body" class="body"></div>
+          <div class="actions">
+            <button id="wg-modal-cancel" class="btn">Cancel</button>
+            <button id="wg-modal-ok" class="btn btn-primary">OK</button>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- RampBoss paperwork modal template: only present in Wargame mode -->
+      {% if wargame_mode %}
+      <template id="wg-rampboss-modal-tpl">
+        <div class="wg-screen" role="dialog" aria-modal="true">
+          <div class="wg-sticky">
+            <div id="wg-rb-title" class="wg-title">RampBoss — Paperwork</div>
+            <button id="wg-rb-complete" class="btn btn-primary" style="margin-left:auto">Mark Paperwork Complete</button>
+            <button id="wg-rb-close" class="btn">Close</button>
+          </div>
+          <div class="wg-body">
+            <iframe id="wg-rb-iframe" title="RampBoss" src="about:blank"></iframe>
+          </div>
+        </div>
+      </template>
+      {% endif %}
+    </div>
+  </main>
 
 <footer id="app-footer" class="app-footer">
   <span id="inet-left" class="inet-msg">⚠ No internet detected⚠ </span>

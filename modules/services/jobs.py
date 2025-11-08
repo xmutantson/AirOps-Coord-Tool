@@ -36,6 +36,7 @@ from modules.utils.remote_inventory import (
 )
 from modules.utils.common import adsb_fetch_stream_snapshot, adsb_bulk_upsert, get_preference
 from modules.utils.common import winlink_attachments_root
+from modules.utils.common import canonical_airport_code, airport_aliases
 from app import DB_FILE, scheduler
 from flask import current_app
 app = current_app  # legacy shim for helpers
@@ -139,6 +140,164 @@ def _winlink_ccs() -> list[str]:
                 out.append(v)
     except Exception:
         pass
+    return out
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Outbound candidates (wargame interactive mode)
+# Prefer queued_flights (+ flight_cargo), then open flights (direction='outbound'),
+# final fallback: parse manifest lines out of remarks/cargo_type.
+# Returns list of dicts with:
+#   {queue_id, flight_id, tail_number, airfield_takeoff, airfield_landing,
+#    eta, cargo_weight (lbs, float), has_manifest (bool)}
+# Notes:
+#   • Filters to our default origin (incl. aliases) when configured.
+#   • has_manifest is true if any itemization exists (flight_cargo rows, printed PDF path,
+#     or a recognizable "Manifest: ..." block in text).
+# ─────────────────────────────────────────────────────────────────────────────
+def list_outbound_candidates() -> list[dict]:
+    def _canon_set(s: str) -> set[str]:
+        """All canonical aliases (ICAO-preferred) for an airport token."""
+        if not s:
+            return set()
+        try:
+            can = canonical_airport_code((s or "").strip().upper())
+        except Exception:
+            can = (s or "").strip().upper()
+        if not can:
+            return set()
+        out = {can}
+        try:
+            for a in (airport_aliases(can) or []):
+                c = canonical_airport_code(a) or a
+                if c:
+                    out.add(c)
+        except Exception:
+            pass
+        return out
+
+    def _is_self_origin(code: str, self_canons: set[str]) -> bool:
+        if not self_canons:
+            return True  # no preference set → include all
+        try:
+            c = canonical_airport_code(code or "")
+        except Exception:
+            c = (code or "").strip().upper()
+        return bool(c and (c in self_canons))
+
+    def _parse_weight_text(s: str) -> float:
+        """best-effort parse '120 lb', '55kg', etc. Returns pounds."""
+        if not s:
+            return 0.0
+        txt = (s or "").lower()
+        import re as _re
+        m = _re.search(r"([\d.]+)\s*(kg|kgs|kilogram|kilograms|lb|lbs)?", txt)
+        if not m:
+            return 0.0
+        val = float(m.group(1))
+        unit = (m.group(2) or "lb").lower()
+        if unit.startswith("kg"):
+            val *= 2.20462
+        return float(val)
+
+    def _has_manifest_text(txt: str) -> bool:
+        import re as _re
+        return bool(_re.search(r"\bmanifest\s*:", (txt or ""), flags=_re.I))
+
+    # resolve our origin alias set (if any)
+    try:
+        self_pref = (get_preference('default_origin') or '').strip().upper()
+        self_canons = _canon_set(self_pref) if self_pref else set()
+    except Exception:
+        self_canons = set()
+
+    out: list[dict] = []
+
+    # Lazy import to avoid any heavy imports at module load
+    try:
+        from modules.utils import manifest as _mutils
+        _parse_manifest_items = getattr(_mutils, "_parse_manifest_items", None)
+    except Exception:
+        _parse_manifest_items = None
+
+    # 1) queued_flights (+ flight_cargo)
+    queued = dict_rows("""
+        SELECT id, tail_number, airfield_takeoff, airfield_landing,
+               eta, cargo_type, cargo_weight, remarks, IFNULL(manifest_pdf_path,'') AS manifest_pdf_path
+          FROM queued_flights
+          ORDER BY id DESC
+    """)
+    for q in queued:
+        if not _is_self_origin(q.get('airfield_takeoff',''), self_canons):
+            continue
+        # Sum normalized cargo rows if present
+        row = dict_rows("""
+            SELECT
+              SUM(COALESCE(NULLIF(total_weight,0),
+                           COALESCE(weight_per_unit,0)*COALESCE(quantity,0))) AS w
+            FROM flight_cargo
+            WHERE queued_id=?
+        """, (q['id'],))
+        w_fc = float(row[0]['w'] or 0.0) if row else 0.0
+        # fallback: parse items out of cargo_type/remarks
+        w_txt = 0.0
+        parsed_any = False
+        if w_fc <= 0.0 and _parse_manifest_items:
+            chunk = " ".join([(q.get('cargo_type') or ''), (q.get('remarks') or '')]).strip()
+            items = _parse_manifest_items(chunk) or []
+            if items:
+                parsed_any = True
+                try:
+                    w_txt = float(sum(float(it.get("total") or 0.0) for it in items))
+                except Exception:
+                    w_txt = 0.0
+        # final: numeric scrap from cargo_weight string
+        w_misc = 0.0
+        if max(w_fc, w_txt) <= 0.0:
+            w_misc = _parse_weight_text(q.get('cargo_weight') or '')
+        weight = round(max(w_fc, w_txt, w_misc), 1) if max(w_fc, w_txt, w_misc) > 0 else 0.0
+        has_manifest = bool(
+            (w_fc > 0) or parsed_any or _has_manifest_text(q.get('remarks','')) or (q.get('manifest_pdf_path') or '')
+        )
+        out.append({
+            "queue_id": int(q['id']),
+            "flight_id": None,
+            "tail_number": (q.get('tail_number') or '').strip().upper(),
+            "airfield_takeoff": (q.get('airfield_takeoff') or '').strip().upper(),
+            "airfield_landing": (q.get('airfield_landing') or '').strip().upper(),
+            "eta": (q.get('eta') or '').strip(),
+            "cargo_weight": weight,
+            "has_manifest": bool(has_manifest),
+        })
+
+    # 2) open flights (direction=outbound, complete=0)
+    flights = dict_rows("""
+        SELECT id, tail_number, airfield_takeoff, airfield_landing,
+               eta, cargo_type, cargo_weight, cargo_weight_real, remarks,
+               IFNULL(manifest_pdf_path,'') AS manifest_pdf_path
+          FROM flights
+         WHERE IFNULL(complete,0)=0 AND LOWER(IFNULL(direction,''))='outbound'
+         ORDER BY id DESC
+    """)
+    for f in flights:
+        if not _is_self_origin(f.get('airfield_takeoff',''), self_canons):
+            continue
+        weight = round(_parse_lbs(f) or 0.0, 1)
+        has_manifest = bool(
+            _has_manifest_text(f.get('remarks','')) or (f.get('manifest_pdf_path') or '')
+        )
+        out.append({
+            "queue_id": None,
+            "flight_id": int(f['id']),
+            "tail_number": (f.get('tail_number') or '').strip().upper(),
+            "airfield_takeoff": (f.get('airfield_takeoff') or '').strip().upper(),
+            "airfield_landing": (f.get('airfield_landing') or '').strip().upper(),
+            "eta": (f.get('eta') or '').strip(),
+            "cargo_weight": weight,
+            "has_manifest": bool(has_manifest),
+        })
+
+    # Sort by ETA (string HHMM sorts OK) then newest first within same ETA.
+    out.sort(key=lambda r: ((r.get("eta") or "9999"), 0 if r.get("queue_id") else 1))
     return out
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -658,9 +817,15 @@ def configure_wargame_jobs():
     except Exception:
         pass
 
-    # NEW: install cargo request reconciler (every 60s)
+    # install cargo request reconciler (every 60s)
     try:
         configure_cargo_reconciler_job()
+    except Exception:
+        pass
+
+    # Always-on Delivery-Truck spawner (no prefs; safe to call repeatedly).
+    try:
+        configure_wargame_truck_spawner_job()
     except Exception:
         pass
 
@@ -2606,6 +2771,66 @@ def configure_cargo_reconciler_job():
         trigger='interval',
         seconds=60,
         replace_existing=True
+    )
+    if scheduler.state != STATE_RUNNING:
+        scheduler.start()
+
+def _truck_spawner_tick():
+    """
+    Every few seconds: pack up to N 'box equivalents' onto the Delivery truck.
+    Runs when Wargame mode is on. Pure world-state mutation; DB remains the source of truth.
+    """
+    # Only run when Wargame mode is on. (Do NOT gate on a missing preference.)
+    try:
+        enabled = (get_preference('wargame_mode') or 'yes').strip().lower() == 'yes'
+        if not enabled:
+            return
+    except Exception:
+        return
+    try:
+        raw = get_preference('wargame_truck_spawn_quanta') or '16'
+        quanta = max(1, int(float(raw)))
+    except Exception:
+        quanta = 16
+    try:
+        # Lazy import to avoid cycles
+        from modules.routes import wargame_api as _wapi
+        added = int(_wapi.pack_delivery_truck_spawn_once(quanta) or 0)
+        try:
+            LOG.debug("Truck spawner tick: added %s unit(s)", added)
+        except Exception:
+            pass
+    except Exception as e:
+        try:
+            LOG.debug("Truck spawner tick failed: %s", e)
+        except Exception:
+            pass
+
+def configure_wargame_truck_spawner_job(app=None):
+    """
+    Install/refresh the Delivery-Truck spawner job.
+    Always installs (no preference gate). Interval remains tunable via
+    wargame_truck_spawn_interval_s (default 7s; clamped 5–10).
+    """
+    try:
+        scheduler.remove_job('wargame_truck_spawner')
+    except JobLookupError:
+        pass
+    try:
+        raw = get_preference('wargame_truck_spawn_interval_s') or '7'
+        sec = int(float(raw))
+    except Exception:
+        sec = 7
+    sec = max(5, min(10, sec))  # clamp 5–10s
+    scheduler.add_job(
+        id='wargame_truck_spawner',
+        func=_truck_spawner_tick,
+        trigger='interval',
+        seconds=sec,
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=sec,
     )
     if scheduler.state != STATE_RUNNING:
         scheduler.start()

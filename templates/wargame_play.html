@@ -8,7 +8,7 @@
   <div style="background:#0f1115;border:1px solid #333;min-width:320px;max-width:92vw;color:#eaeaea;border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,.45);padding:16px;">
     <h3 style="margin:0 0 10px 0;">Enter your display name</h3>
     <div style="display:flex;gap:.5rem;align-items:center;">
-      <input id="wg-name-input" type="text" maxlength="24" placeholder="e.g., Kameron"
+      <input id="wg-name-input" type="text" maxlength="24" placeholder="e.g., Kameron" autocomplete="name"
              style="flex:1;min-width:220px;background:#141820;border:1px solid #2a2f3a;color:#eaeaea;border-radius:6px;padding:8px 10px;" />
       <button id="wg-name-commit" class="btn btn-primary">Save</button>
     </div>
@@ -17,6 +17,42 @@
 </div>
 
 <div id="game-root"></div>
+
+<style id="wg-ui-styles">
+  /* high-contrast dark styles for WG_UI (cargo table + modal UI) */
+  .wg-table { width: 84vw; max-width: 1080px; border-collapse: collapse; font-size: 14px; background:#0b0e13; color:#e9eef5; }
+  .wg-table th, .wg-table td { border-bottom: 1px solid #2b3440; padding: 8px 10px; text-align: left; background:#0e131a; color:#e9eef5; }
+  .wg-table tr:nth-child(even) td { background:#0c1117; }
+  .wg-table th { font-weight: 600; color: #f1f5fb; background:#0b1016; }
+  .wg-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+  .wg-pill { display:inline-block; padding:2px 8px; border:1px solid #3a3f4a; border-radius:999px; color:#e8eef8; font-size:12px; background:#121821; }
+  .wg-qtybtn { margin-right:.25rem; margin-bottom:.25rem; }
+  .wg-muted { opacity:.9; color:#cbd5e1; }
+  .wg-titlebar { padding:8px 10px; background:#0b0e13; border:1px solid #232833; border-radius:6px; margin:0 0 10px 0; color:#e9eef5; }
+  .wg-flex { display:flex; gap:.5rem; align-items:center; justify-content:space-between; }
+  .wg-note { font-size:12px; color:#a7b4c5; }
+  .wg-iframe { width:84vw; max-width:1080px; height:58vh; background:#0b0e13; border:1px solid #232833; border-radius:6px; }
+</style>
+
+<!-- Reusable bounded/scrollable popover menu (inline; above Phaser, inside overlay) -->
+<style>
+  .wg-pop{ position:absolute; z-index:59; pointer-events:auto; }
+  .wg-menu{
+    min-width:240px; max-width:min(440px,96vw);
+    max-height:min(60vh, calc(100vh - 24px));
+    background:#fff; border:1px solid #cfd4dc; border-radius:10px;
+    box-shadow:0 8px 24px rgba(0,0,0,.18); overflow:hidden; font-size:.95rem;
+  }
+  .wg-menu-header{ position:sticky; top:0; display:flex; align-items:center; justify-content:space-between;
+    gap:.5rem; padding:.5rem .6rem; background:linear-gradient(#fff,#f7f9fc); border-bottom:1px solid #e5e8ee; }
+  .wg-menu-title{ font-weight:600; }
+  .wg-menu-close{ border:0; background:transparent; font-size:1rem; line-height:1; padding:.25rem .4rem; cursor:pointer; }
+  .wg-menu-body{ padding:.4rem; overflow:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; max-height:inherit; }
+  .wg-menu-list{ list-style:none; margin:0; padding:0; }
+  .wg-menu-item button{ display:block; width:100%; text-align:left; background:#fff; border:0; border-radius:8px; padding:.45rem .6rem; font:inherit; cursor:pointer; }
+  .wg-menu-item button:hover{ background:#f3f6fb; }
+  .wg-menu-empty{ padding:.5rem .6rem; color:#667085; }
+</style>
 
 <!-- Debug panel -->
 <div id="wg-debug"
@@ -113,21 +149,140 @@
   </details>
 </div>
 
-<!-- Minimal modal for interactions -->
-<div id="wg-modal" style="display:none;position:fixed;inset:0;align-items:center;justify-content:center;background:rgba(0,0,0,0.45);z-index:50;">
-  <div style="background:#0f1115;border:1px solid #333;min-width:320px;max-width:92vw;color:#eaeaea;border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,.45);">
-    <div id="wg-modal-msg" style="padding:12px 14px;border-bottom:1px solid #2a2a2a;font-weight:600;"></div>
-    <div id="wg-modal-body" style="padding:12px 14px;"></div>
-    <div style="display:flex;gap:.5rem;justify-content:flex-end;padding:12px 14px;border-top:1px solid #2a2a2a;">
-      <button id="wg-modal-cancel" class="btn">Cancel</button>
-      <button id="wg-modal-ok" class="btn btn-primary">OK</button>
-    </div>
-  </div>
-</div>
+<!-- Wargame overlay root (DOM screens mount here, above the Phaser canvas) -->
+<div id="wg-overlay-root" aria-live="polite" aria-label="Wargame overlay root"></div>
+
+<!-- Overlay state observer: toggles .is-open & scroll lock -->
+<script>
+(function(){
+  const root = document.getElementById('wg-overlay-root');
+  if (!root) return;
+  function update(){
+    const open = root.childElementCount > 0;
+    root.classList.toggle('is-open', open);
+    document.body.classList.toggle('wg-scroll-lock', open);
+  }
+  new MutationObserver(update).observe(root, { childList:true });
+  update();
+})();
+</script>
+
+<!-- Reserved: iframe modal host for future §8 (RampBoss) direct mounting.
+     (Current implementation mounts via #wg-overlay-root programmatically.) -->
+<div id="wg-iframe-modal" style="display:none;"></div>
 
 <script>
   // Provide a default (used before join; replaced after name gate)
   window.PLAYER_NAME = "";
+</script>
+
+<!-- Optional: allow game.js to set the active plane id at runtime -->
+<script>
+  window.addEventListener('wg:set-plane-id', (ev) => {
+    try {
+      const id = Number(ev?.detail?.id);
+      if (!Number.isFinite(id)) return;
+      const panel = document.getElementById('wg-plane-panel');
+      if (panel) panel.dataset.planeId = String(id);
+      const title = document.getElementById('wgpp-title');
+      if (title && !/plane\s*:/.test(title.textContent||'')) {
+        title.textContent = `${title.textContent} (plane ${id})`;
+      }
+    } catch(_) {}
+  });
+  // Usage: window.dispatchEvent(new CustomEvent('wg:set-plane-id', { detail:{ id: 12 } }));
+</script>
+
+<!-- NOTE: Outbound “flights” panel now shows Wargame Ramp Requests via WGNet.wgGetOutboundFlights(),
+           which maps requests → flight-ish rows using a surrogate id. Plane pinning will
+           transparently translate that surrogate back into {request_id} on the server. -->
+
+<!-- Inline helper: window.wgUI.openMenu({scene, sprite|{x,y}, title, items[]}) -->
+<script>
+(() => {
+  const overlay = document.getElementById('wg-overlay-root');
+  if (!overlay) { console.warn('wgUI: #wg-overlay-root not found'); return; }
+  const MARGIN = 12;
+  let current = null, screenRef = {x:0,y:0};
+
+  function close() {
+    if (!current) return;
+    current.remove();
+    current = null;
+    document.removeEventListener('keydown', esc);
+    document.removeEventListener('click', outside, true);
+    window.removeEventListener('resize', reclamp);
+  }
+  function esc(ev){ if (ev.key === 'Escape') close(); }
+  function outside(ev){ if (current && !current.contains(ev.target)) close(); }
+
+  function worldToScreen(scene, x, y){
+    try{
+      const cam = scene && scene.cameras && scene.cameras.main;
+      if (!cam) return {x,y};
+      return {
+        x: Math.round((x - cam.worldView.x) * cam.zoom),
+        y: Math.round((y - cam.worldView.y) * cam.zoom)
+      };
+    }catch(_){ return {x,y}; }
+  }
+  function clamp(node, x, y){
+    const vw = window.innerWidth, vh = window.innerHeight;
+    node.style.left = '0px'; node.style.top = '0px';
+    node.style.maxHeight = `min(60vh, ${vh - 2*MARGIN}px)`;
+    void node.offsetWidth; // layout
+    const r = node.getBoundingClientRect();
+    let nx = x, ny = y;
+    if (nx + r.width > vw - MARGIN) nx = Math.max(MARGIN, vw - r.width - MARGIN);
+    if (ny + r.height > vh - MARGIN) ny = Math.max(MARGIN, vh - r.height - MARGIN);
+    if (nx < MARGIN) nx = MARGIN;
+    if (ny < MARGIN) ny = MARGIN;
+    node.style.left = nx + 'px';
+    node.style.top  = ny + 'px';
+  }
+  function build({ title='Menu', items=[] }){
+    const wrap = document.createElement('div');
+    wrap.className = 'wg-pop';
+    wrap.innerHTML = `
+      <div class="wg-menu" role="dialog" aria-label="${title}">
+        <header class="wg-menu-header">
+          <div class="wg-menu-title">${title}</div>
+          <button class="wg-menu-close" type="button" aria-label="Close">✕</button>
+        </header>
+        <div class="wg-menu-body">${
+          items.length ? `<ul class="wg-menu-list">${
+            items.map(i=>`<li class="wg-menu-item"><button type="button" data-key="${i.key??''}">${i.label??String(i)}</button></li>`).join('')
+          }</ul>` : `<div class="wg-menu-empty">No actions</div>`}
+        </div>
+      </div>`;
+    wrap.querySelector('.wg-menu-close').addEventListener('click', close);
+    wrap.addEventListener('click', (e)=>{
+      const btn = e.target.closest('button[data-key]'); if (!btn) return;
+      const key = btn.getAttribute('data-key'); const hit = items.find(i => (''+(i.key??'')) === key);
+      if (hit && typeof hit.onClick === 'function') hit.onClick({ close });
+    });
+    return wrap;
+  }
+  function reclamp(){ if (current) clamp(current, screenRef.x, screenRef.y); }
+
+  function openMenu(opts){
+    close();
+    const { scene, sprite } = opts || {};
+    let pt = { x: opts?.x ?? 0, y: opts?.y ?? 0 };
+    if (sprite && sprite.x!=null && sprite.y!=null) pt = worldToScreen(scene || sprite.scene, sprite.x, sprite.y);
+    else if (opts?.worldX!=null && opts?.worldY!=null) pt = worldToScreen(scene, opts.worldX, opts.worldY);
+    const node = build(opts || {});
+    overlay.appendChild(node);
+    screenRef = pt;
+    clamp(node, pt.x, pt.y);
+    current = node;
+    document.addEventListener('keydown', esc);
+    document.addEventListener('click', outside, true);
+    window.addEventListener('resize', reclamp, { once:true });
+    return node;
+  }
+  window.wgUI = { openMenu, close, worldToScreen };
+})();
 </script>
 
 <!-- Vendor Phaser -->
@@ -136,6 +291,426 @@
 <script src="{{ url_for('static', filename='wargame/assetkit.js') }}"></script>
 <!-- Net shim -->
 <script src="{{ url_for('static', filename='wargame/net.js') }}"></script>
+
+<!-- Data source + pin shim: wire Plane Panel to /api/wargame/requests.
+     IMPORTANT: this must load BEFORE game.js so first render uses it. -->
+<script>
+(function(){
+  function install(){
+    if (!window.WGNet) { return void setTimeout(install, 10); }
+
+    const LIST_URL   = "/api/wargame/requests";  // ✅ working endpoint
+    // Stay in lockstep with WGNet’s offset if available
+    const DISP_OFF   = (window.WGNet && WGNet.REQ_OFFSET) || 400000000; // UI shows REQ-(offset+id)
+
+    const hasCore = (WGNet && typeof WGNet.wgGetOutboundFlights === 'function'
+                          && typeof WGNet.wgPinPlane === 'function');
+    if (hasCore) {
+      // Core already handles Requests-as-Flights + pin translation; do nothing.
+      try { window.dispatchEvent(new CustomEvent("wg:data:provider-ready")); } catch(_){}
+      return;
+    }
+    // Legacy fallback only if core isn’t present:
+    const _origFlights = async ()=>[];
+    const _origPin = async ()=>({ ok:false });
+
+    async function fetchRequests(){
+      try{
+        const r = await fetch(LIST_URL, {
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: { "Accept":"application/json", "X-Requested-With":"XMLHttpRequest" }
+        });
+        if (!r.ok) throw new Error("status " + r.status);
+        const j = await r.json();
+        return Array.isArray(j) ? j : (Array.isArray(j?.requests) ? j.requests : []);
+      }catch(e){
+        console.warn("[WG] fetch /api/wargame/requests failed:", e);
+        return [];
+      }
+    }
+
+    function mapReq(req){
+      const id    = req.id ?? req.request_id ?? null;
+      const dest  = req.destination ?? req.dest ?? req.to ?? "—";
+      const lines = Array.isArray(req.lines) ? req.lines : [];
+      const weight = (typeof req.requested_weight === "number")
+        ? req.requested_weight
+        : lines.reduce((s,l)=> s + (Number(l.qty)||0) * (Number(l.unit_lb)||0), 0);
+      return {
+        // columns the renderer expects
+        id:   id!=null ? (DISP_OFF + Number(id)) : null,         // <- SURROGATE id
+        tail: id!=null ? `REQ-${DISP_OFF + Number(id)}` : "REQ-?",
+        pilot: dest,                  // show destination in 'Pilot'
+        pilot_name: dest,             // also provide pilot_name to avoid blanks
+        from: "Stockpile",
+        origin: "Stockpile",
+        // extras / hints for pins
+        _wg_is_request: true,
+        _wg_request_id: (id!=null ? Number(id) : null),
+        request_id: (id!=null ? Number(id) : null),
+        destination: dest, lines, weight
+      };
+    }
+
+    function fillRow(r){
+      // ensure sane defaults even if we fall back to legacy provider
+      const rid  = r.request_id ?? r.id ?? null;
+      const tail = r.tail || (rid!=null ? `REQ-${DISP_OFF + Number(rid)}` : "REQ-?");
+      const dest = r.pilot || r.pilot_name || r.destination || r.dest || "—";
+      return {
+        ...r,
+        tail,
+        pilot: dest,
+        pilot_name: dest,
+        from: r.from || r.origin || "Stockpile",
+        origin: r.origin || r.from || "Stockpile",
+      };
+    }
+
+    WGNet.wgGetOutboundFlights = async function(){
+      const reqs = await fetchRequests();
+      if (reqs.length) {
+        try { window.WG_OUTBOUND_IS_REQUESTS = true; } catch(_){}
+        return reqs.map(mapReq);
+      }
+      const rows = await _origFlights();
+      return (rows || []).map(fillRow);
+    };
+
+    // --- Pin support: translate REQ-… (with offset) -> real id and POST ---
+    function parsePlaneId(){
+      const el = document.getElementById('wg-plane-panel');
+      if (el?.dataset?.planeId != null) {
+        const n = Number(String(el.dataset.planeId).replace(/[^0-9\-]/g,''));
+        if (Number.isFinite(n)) return n;
+      }
+      const t = document.getElementById('wgpp-title')?.textContent || "";
+      const m = t.match(/plane\s*:?\s*(\d+)/i);
+      if (m) {
+        const n = Number(m[1]);
+        if (Number.isFinite(n)) return n;
+      }
+      return null;
+    }
+    function toRealReqId(rowOrId){
+      let v = rowOrId;
+      if (v && typeof v === 'object') v = v.request_id ?? v.id ?? v.tail ?? v;
+      if (typeof v === 'string'){
+        const m = v.match(/^REQ-(\d+)/i);
+        if (m) v = Number(m[1]);
+      }
+      const n = Number(v);
+      if (!Number.isFinite(n)) return null;
+      return n >= DISP_OFF ? (n - DISP_OFF) : n;
+    }
+    WGNet.wgPinPlane = async function(rowOrId){
+      const reqId   = toRealReqId(rowOrId);
+      const planeId = parsePlaneId();
+      if (reqId == null){
+        console.warn("[WG] pin: could not derive request id from", rowOrId);
+        return { ok:false };
+      }
+      try{
+        const r = await fetch('/api/wargame/plane/pin', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: {
+            'Content-Type':'application/json',
+            'Accept':'application/json',
+            'X-Requested-With':'XMLHttpRequest'
+          },
+          body: JSON.stringify({
+            plane_id: (Number.isFinite(planeId) && planeId > 0) ? `plane:${planeId}` : null, // string "plane:n"
+            session_id: window.WG_SESSION_ID ?? 1,
+            player_id: window.WG_PLAYER_ID ?? 0,
+            flight_ref: { request_id: Number(reqId) }            // maps REQ-… -> real id
+          })
+        });
+        const j = await r.json().catch(()=>({}));
+        if (r.ok && (j.ok || j.pin)) return { ok:true };
+        console.warn('[WG] pin failed:', r.status, j);
+      }catch(e){ console.warn('[WG] pin error:', e); }
+      return _origPin(rowOrId);
+    };
+
+    try { window.dispatchEvent(new CustomEvent("wg:data:provider-ready")); } catch(_){}
+  }
+  install();
+})();
+</script>
+
+<!-- Compat shim: rewrite legacy '/api/wargame/requests/:id/pin' -> '/api/wargame/plane/pin' -->
+<script>
+(function(){
+  const nativeFetch = window.fetch && window.fetch.bind(window);
+  if (!nativeFetch) return;
+  const DISP_OFF = (window.WGNet && WGNet.REQ_OFFSET) || 400000000;
+
+  function parsePlaneId(){
+    const el = document.getElementById('wg-plane-panel');
+    if (el?.dataset?.planeId != null) {
+      const n = Number(String(el.dataset.planeId).replace(/[^0-9\-]/g,''));
+      if (Number.isFinite(n)) return n;
+    }
+    const t = document.getElementById('wgpp-title')?.textContent || '';
+    const m = t.match(/plane\s*:?\s*(\d+)/i);
+    if (m) { const n = Number(m[1]); if (Number.isFinite(n)) return n; }
+    return undefined;
+  }
+
+  window.fetch = async (input, init) => {
+    const url = (typeof input === 'string') ? input : (input && input.url);
+    const method = (init?.method || '').toUpperCase();
+    const match = url && url.match(/\/api\/wargame\/requests\/(\d+)\/pin\b/);
+    if (match && method === 'POST') {
+      const rawId = Number(match[1]);
+      const requestId = Number.isFinite(rawId) && rawId >= DISP_OFF ? (rawId - DISP_OFF) : rawId;
+      let body = {};
+      try { body = init?.body ? JSON.parse(init.body) : {}; } catch(_) {}
+      const planeId = (typeof body.plane_id === 'number') ? body.plane_id : parsePlaneId();
+      const payload = {
+        plane_id: (Number.isFinite(planeId) && planeId > 0) ? `plane:${planeId}` : null,
+        session_id: body.session_id ?? (window.WG_SESSION_ID ?? 1),
+        player_id: body.player_id ?? (window.WG_PLAYER_ID ?? 0),
+        flight_ref: { request_id: requestId }
+      };
+      console.warn('[WG] fetch shim: rewriting', url, '→ /api/wargame/plane/pin', payload);
+      return nativeFetch('/api/wargame/plane/pin', {
+        ...init,
+        method: 'POST',
+        headers: {
+          ...(init?.headers || {}),
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+        body: JSON.stringify(payload)
+      });
+    }
+    return nativeFetch(input, init);
+  };
+})();
+</script>
+
 <!-- Game -->
 <script src="{{ url_for('static', filename='wargame/game.js') }}"></script>
+
+<!-- Plane Panel template (scoped to Wargame page) -->
+<template id="wg-plane-panel-tpl">
+  <div id="wg-plane-panel" class="wg-panel" role="dialog" aria-modal="true" data-plane-id="plane:0">
+    <div class="wg-sticky">
+      <div id="wgpp-title" class="wg-title">Plane Panel — Wargame Ramp Requests</div>
+      <div id="wgpp-status-pill" class="wg-pill" style="margin-left:auto">status: —</div>
+      <button id="wgpp-close" class="btn">Close</button>
+    </div>
+    <div class="wg-grid">
+      <div class="wg-col" id="wgpp-requests-col">
+        <h3 id="wgpp-requests-title">Wargame Ramp Requests</h3>
+        <table class="wg-table">
+          <!-- Keep the old ids so existing JS keeps working;
+               we’ll shim data to avoid blanks. -->
+          <thead><tr><th id="wgpp-col-a">Request #</th><th id="wgpp-col-b">Destination</th><th id="wgpp-col-c">From</th><th></th></tr></thead>
+          <tbody id="wgpp-flights-body"></tbody>
+        </table>
+        <!-- Anchor: Requests list (destination, item_count, requested_weight, Pin action) -->
+        <div id="wg-requests-table"></div>
+        <!-- Single-cart mode: hide carts table entirely -->
+        <div style="display:none">
+          <h3 style="margin-top:1rem;">Carts</h3>
+          <table class="wg-table">
+            <thead><tr><th>Cart</th><th>Lines</th><th></th></tr></thead>
+            <tbody id="wgpp-carts-body"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="wg-col" id="wgpp-detail-col">
+        <h3>Required lines</h3>
+        <table class="wg-table">
+          <thead><tr><th>Item</th><th>Size</th><th>Qty</th></tr></thead>
+          <tbody id="wgpp-req-body"></tbody>
+        </table>
+        <!-- Anchor: Manifest lines for the currently pinned request -->
+        <div id="wg-manifest-table"></div>
+        <h3 style="margin-top:1rem;">Validate</h3>
+        <table class="wg-table">
+          <thead><tr><th>Kind</th><th>Item</th><th>Qty</th></tr></thead>
+          <tbody id="wgpp-val-body"></tbody>
+        </table>
+        <div class="wg-actions">
+          <button id="wgpp-unpin" class="btn">Unpin</button>
+          <button id="wgpp-paperwork" class="btn">Mark Paperwork Complete</button>
+          <button id="wgpp-load" class="btn btn-primary">Load</button>
+          <!-- New, explicit action slots for WG UI -->
+          <button id="wg-btn-load" class="btn btn-primary" disabled>Load into Plane</button>
+          <button id="wg-btn-paperwork" class="btn" disabled>Paperwork Done</button>
+        </div>
+      </div>
+    </div>
+  </div>
+ </template>
+
+<script>
+// Safe, deferred panel wiring: resolve elements at render-time and
+// wait until the panel is actually mounted before touching the DOM.
+(function(){
+  const $ = (id) => document.getElementById(id);
+  const fmtLb = (x) => {
+    const n = Number(x||0);
+    return (Math.abs(n - Math.trunc(n)) < 1e-6) ? (Math.trunc(n) + ' lb') : (n + ' lb');
+  };
+  function parsePlaneId(){
+    const el = $('wg-plane-panel');
+    if (el?.dataset?.planeId) {
+      const n = Number(String(el.dataset.planeId).replace(/[^0-9\-]/g,''));
+      if (Number.isFinite(n)) return n;
+    }
+    const t = $('wgpp-title')?.textContent || '';
+    const m = t.match(/plane\s*:?\s*(\d+)/i);
+    return (m && Number(m[1])) || 0;
+  }
+
+  // Defer any work until the panel + required bodies exist
+  function whenPanelReady(run){
+    const ready = () =>
+      $('wg-plane-panel') &&
+      $('wgpp-requests-col') &&
+      $('wgpp-req-body') &&
+      $('wgpp-val-body') &&
+      $('wgpp-status-pill');
+    if (ready()) { run(); return; }
+    const root = $('wg-overlay-root') || document.body;
+    const mo = new MutationObserver(() => { if (ready()) { mo.disconnect(); run(); } });
+    mo.observe(root, { childList:true, subtree:true });
+  }
+
+  function clear(el){ if (!el) return; el.innerHTML = ''; }
+
+  function flipPinnedUI(isPinned){
+    const left   = $('wgpp-requests-col');
+    const status = $('wgpp-status-pill');
+    if (left)   left.style.display = isPinned ? 'none' : '';
+    if (status) status.textContent = 'status: ' + (isPinned ? 'pinned' : 'idle');
+    if (!isPinned) { clear($('wgpp-req-body')); clear($('wgpp-val-body')); }
+  }
+
+  function renderRequired(pin){
+    const reqBody = $('wgpp-req-body'); if (!reqBody) return;
+    clear(reqBody);
+    const lines = (pin && pin.required) || [];
+    for (const ln of lines){
+      const tr  = document.createElement('tr');
+      const tdN = document.createElement('td');
+      const tdU = document.createElement('td');
+      const tdQ = document.createElement('td');
+      tdN.textContent = ln.display_name || ln.name || '';
+      tdU.textContent = fmtLb(ln.unit_lb ?? ln.size_lb ?? 0);
+      tdQ.textContent = String(ln.qty || 0);
+      tr.append(tdN, tdU, tdQ);
+      reqBody.appendChild(tr);
+    }
+  }
+
+  function renderValidate(diff){
+    const valBody = $('wgpp-val-body'); if (!valBody) return;
+    clear(valBody);
+    const rows = [];
+    (diff?.shortages || []).forEach(s => {
+      const q = Number(s.short || 0); if (q>0) rows.push({ kind:'Short', name:s.display_name||s.name, qty:q });
+    });
+    (diff?.excess || []).forEach(e => {
+      const q = Number(e.extra || 0); if (q>0) rows.push({ kind:'Extra', name:e.display_name||e.name, qty:q });
+    });
+    for (const r of rows){
+      const tr  = document.createElement('tr');
+      const tdK = document.createElement('td');
+      const tdN = document.createElement('td');
+      const tdQ = document.createElement('td');
+      tdK.textContent = r.kind;
+      tdN.textContent = r.name || '';
+      tdQ.textContent = String(r.qty||0);
+      tr.append(tdK, tdN, tdQ);
+      valBody.appendChild(tr);
+    }
+  }
+
+  // Unpin (event delegation-safe via deferred binding)
+  document.addEventListener('click', (e)=>{
+    const btn = e.target.closest('#wgpp-unpin');
+    if (!btn) return;
+    whenPanelReady(async () => {
+      try { await WGNet.wgPlaneUnselect(parsePlaneId()); } catch {}
+      // Flip will happen via the unselect event
+    });
+  });
+
+  // Wrap handlers so they wait for the panel to exist
+  const safe = (fn) => (ev) => whenPanelReady(() => fn(ev));
+
+  WGNet.onEvent('wg:plane_pin', safe((ev) => {
+    const pin = ev?.data?.pin;
+    flipPinnedUI(true);
+    if (pin) renderRequired(pin);
+  }));
+
+  WGNet.onEvent('wg:plane_status', safe((ev) => {
+    const pin  = ev?.data?.pin;
+    const diff = ev?.data?.diff;
+    if (pin)  { flipPinnedUI(true); renderRequired(pin); }
+    if (diff) { renderValidate(diff); }
+  }));
+
+  WGNet.onEvent('wg:plane_unselect', safe(() => {
+    flipPinnedUI(false);
+  }));
+
+  // First open: ask server for current status so panel re-opens hydrated
+  whenPanelReady(() => {
+    const pid = parsePlaneId();
+    // Only query if a valid plane id is present
+    if (pid && Number.isFinite(pid) && Number(pid) > 0) {
+      WGNet.wgPlaneStatus(pid).catch(()=>{});
+    }
+  });
+})();
+</script>
+
+<!-- Lightweight label patcher: swap 'Outbound flights' -> 'Cargo requests' in UI -->
+<script>
+(function(){
+  const RE_HEAD = /\boutbound flights\b/i;
+  const RE_EMPTY = /\bno open ones\b/i;
+  const swapText = (node) => {
+    if (!node || node.nodeType !== Node.TEXT_NODE) return;
+    let t = node.nodeValue || "";
+    const orig = t;
+    t = t.replace(RE_HEAD, "Wargame Ramp Requests");
+    t = t.replace(RE_EMPTY, "No open requests");
+    if (t !== orig) node.nodeValue = t;
+  };
+  const walk = (el) => {
+    if (!el) return;
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+    let n;
+    while ((n = walker.nextNode())) swapText(n);
+  };
+  const patchAll = () => walk(document.body);
+  // Run once after load, then observe changes (Phaser overlay / Reacty bits)
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", patchAll, { once:true });
+  } else {
+    patchAll();
+  }
+  const mo = new MutationObserver((muts) => {
+    for (const m of muts) {
+      if (m.type === "childList") {
+        m.addedNodes && m.addedNodes.forEach(n => { if (n.nodeType === 1) walk(n); });
+      } else if (m.type === "characterData") {
+        swapText(m.target);
+      }
+    }
+  });
+  mo.observe(document.body, { childList:true, subtree:true, characterData:true });
+})();
+</script>
 {% endblock %}

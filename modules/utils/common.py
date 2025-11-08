@@ -1057,8 +1057,29 @@ def init_db():
     except Exception as e:
         logger.warning("Help DB init skipped: %s", e)
 
+    # ── Auto-migrations at startup (deploy-proof) ────────────────────────────
+    # Run after base schema ensures so every instance self-heals before traffic.
+    try:
+        run_migrations()
+        # explicit, greppable startup marker for ops
+        print("MIGRATIONS: completed")
+        try:
+            logger.info("MIGRATIONS: completed")
+        except Exception:
+            pass
+    except Exception as e:
+        # Never block startup entirely; surface loudly in logs/stdout.
+        print(f"MIGRATIONS: failed: {e}")
+        try: logger.exception("MIGRATIONS: failed")
+        except Exception: pass
+
 def run_migrations():
     print("🔧 running DB migrations…")
+    # Ensure a sane SQLite environment for long-running migrations
+    with sqlite3.connect(get_db_file(), timeout=30) as c:
+        c.execute("PRAGMA journal_mode=WAL;")
+        c.execute("PRAGMA busy_timeout=30000;")
+        c.execute("PRAGMA foreign_keys=ON;")
     # flights table
     for col, typ in [
         ("is_ramp_entry",    "INTEGER DEFAULT 0"),
@@ -3400,14 +3421,8 @@ def seed_wargame_baseline_inventory():
     Seed some shelf stock so outbound requests and Ramp can be fulfilled from the start.
     Quantities are modest and use the canonical nouns/sizes from WARGAME_ITEMS.
     """
-    stock = [
-        ('emergency supplies', 'batteries', 10,  12),
-        ('emergency supplies', 'batteries', 25,   8),
-        ('food',               'beans',     25,  10),
-        ('food',               'rice',      20,  10),
-        ('medical supplies',   'bandages',   5,  20),
-        ('water',              'water',     20,  20),
-    ]
+    from modules.services.inventory import get_wargame_seed_items
+    stock = get_wargame_seed_items()
     with sqlite3.connect(get_db_file()) as c:
         # lookup category IDs by display_name (seed_default_categories already ran)
         rows = dict_rows("SELECT id, display_name FROM inventory_categories")

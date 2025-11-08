@@ -969,6 +969,160 @@ body.wargame-play #game-root {
   inset: 0;           /* fill the fixed main pane */
 }
 
+/* ───────────────────────────────────────────────────────────────
+   Wargame micro-utilities & scoped chrome
+   (moved from inline <style> in base.html; scoped to avoid leaks)
+   ─────────────────────────────────────────────────────────────── */
+/* Tables & micro-utilities only apply inside Wargame or overlay root */
+body.wargame .wg-table,
+#wg-overlay-root .wg-table { width:100%; border-collapse:collapse; }
+body.wargame .wg-table th, body.wargame .wg-table td,
+#wg-overlay-root .wg-table th, #wg-overlay-root .wg-table td {
+  padding:.5rem .6rem; border-bottom:1px solid #2b3440; text-align:left;
+}
+body.wargame .wg-table thead th,
+#wg-overlay-root .wg-table thead th { color:#a9b6c8; font-weight:600; }
+body.wargame .wg-mono, #wg-overlay-root .wg-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+body.wargame .wg-pill, #wg-overlay-root .wg-pill {
+  display:inline-block; padding:.1rem .45rem; border:1px solid #3b4656; border-radius:.5rem; font-weight:600;
+}
+body.wargame .wg-flex, #wg-overlay-root .wg-flex { display:flex; }
+
+/* Dark button chrome inside WG containers (overlay or #wg-modal only) */
+#wg-overlay-root .wg-screen .btn,
+#wg-overlay-root .wg-panel .btn,
+#wg-modal .btn {
+  padding:.4rem .7rem; border:1px solid #3b4656; border-radius:8px; background:#1a2230; color:#dbe7ff; cursor:pointer;
+}
+#wg-overlay-root .wg-screen .btn:disabled,
+#wg-overlay-root .wg-panel .btn:disabled,
+#wg-modal .btn:disabled { opacity:.5; cursor:not-allowed; }
+#wg-overlay-root .wg-screen .btn-primary,
+#wg-overlay-root .wg-panel .btn-primary,
+#wg-modal .btn-primary { background:#0b5cff; border-color:#0b5cff; color:#fff; }
+
+/* App-wide modal (#wg-modal) chrome */
+#wg-modal.backdrop {
+  position:fixed; inset:0; display:none; align-items:center; justify-content:center;
+  background:rgba(0,0,0,.55); z-index:99998;
+}
+#wg-modal .card {
+  width:min(920px,92vw); max-height:86vh; overflow:auto;
+  background:#0f1115; color:#e6eefc; border:1px solid #2b3440; border-radius:12px;
+  box-shadow:0 10px 30px rgba(0,0,0,.5);
+}
+#wg-modal .msg { padding:14px 16px; font:600 16px system-ui, -apple-system, Segoe UI, Roboto, sans-serif; border-bottom:1px solid #2b3440; }
+#wg-modal .body { padding:14px 16px; }
+#wg-modal .actions {
+  display:flex; gap:.5rem; justify-content:flex-end; padding:12px 16px;
+  border-top:1px solid #2b3440; position:sticky; bottom:0; background:#0f1115;
+}
+
+/* Plane Panel container (scoped to overlay root) */
+#wg-overlay-root .wg-panel {
+  width:min(1100px,96vw); max-height:88vh;
+  background:#0f1115; color:#e6eefc; border:1px solid #2b3440; border-radius:12px;
+  display:flex; flex-direction:column;
+}
+/* sticky header already exists, add only title font */
+#wg-overlay-root .wg-title { font:600 16px system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+#wg-overlay-root .wg-grid  { display:grid; grid-template-columns: 1fr 1fr; gap:1rem; padding:1rem; overflow:auto; }
+#wg-overlay-root .wg-col h3{ margin:.25rem 0 .5rem; color:#cbd9ee; }
+#wg-overlay-root .wg-actions{ display:flex; gap:.5rem; justify-content:flex-end; margin-top:1rem; }
+#wg-overlay-root .wg-iframe { width:100%; height:60vh; border:1px solid #232833; border-radius:6px; background:#0b0e13; }
+
+/* ───────────────────────────────────────────────────────────────
+   Wargame Overlay — bounded modal container under #wg-overlay-root
+   (Overrides any generic .wg-screen rules via higher specificity.)
+   ─────────────────────────────────────────────────────────────── */
+#wg-overlay-root{
+  position: fixed;
+  inset: 0;
+  z-index: 1002;                  /* above header(1000)/footer */
+  display: grid;
+  place-items: center;            /* center on both axes */
+  padding: 3.5rem 1rem 2.5rem;    /* safe area for sticky header/footer */
+  pointer-events: none;           /* clicks only on children */
+  font-family: system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+}
+/* Backdrop appears only when overlay has children */
+#wg-overlay-root::before{
+  content:"";
+  position: fixed;
+  inset:0;
+  background: rgba(0,0,0,.35);
+  opacity: 0;
+  transition: opacity .12s ease;
+  pointer-events: none;
+  z-index: 0;              /* sits behind bounded panel */
+}
+#wg-overlay-root.is-open::before{
+  opacity: 1;
+  pointer-events: auto;
+}
+/* Bounded screen container */
+#wg-overlay-root .wg-screen{
+  position: relative;
+  margin: 0;                                /* grid handles centering */
+  width: min(1100px, 96vw);
+  max-height: min(85vh, calc(100vh - 6rem));/* keep it contained */
+  display: flex;
+  flex-direction: column;
+  background: #0f1115;
+  color: #e6eefc;
+  border: 1px solid #2b3440;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.50);
+  overflow: hidden;
+  pointer-events: auto;                    /* clickable even though root is not */
+}
+/* Plane Panel & popovers must also be clickable inside the overlay root */
+#wg-overlay-root .wg-panel,
+#wg-overlay-root .wg-pop,
+#wg-overlay-root .wg-menu {
+  pointer-events: auto;
+  z-index: 1;                    /* over the root's ::before backdrop */
+}
+
+/* Nice-to-have: obvious cursor on any “Pin” control variants */
+#wg-overlay-root .wg-table .pin-btn,
+#wg-overlay-root .wg-table [data-action="pin"],
+#wg-overlay-root .wg-table button[data-key="pin"],
+#wg-overlay-root .wg-table button.pin {
+  cursor: pointer;
+}
+#wg-overlay-root .wg-sticky{
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  padding: .75rem 1rem;
+  border-bottom: 1px solid #2b3440;
+  background: #0f1115;
+  z-index: 1;
+}
+#wg-overlay-root .wg-body{
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  background: #0f1115;
+  padding: 10px;
+}
+/* Scroll lock while an overlay is open */
+body.wg-scroll-lock{ overflow: hidden; }
+/* Small screens: tighten chrome to keep content visible */
+@media (max-width: 740px){
+  #wg-overlay-root .wg-screen{
+    margin: 1rem auto;
+    width: 98vw;
+    max-height: calc(100vh - 2rem);
+    border-radius: 10px;
+  }
+}
+
 /* Wargame Radio inbox: unread/read cues */
 /* Support both legacy .wg-inbox and current .wg-radio-table */
 table.wg-inbox thead th,
@@ -1970,4 +2124,12 @@ details.req-group[open] > summary.req-group-h::before { transform: rotate(90deg)
   margin-top:8px;
   display:grid;
   gap:.75rem;
+}
+/* ── Hard-disable visible debug HUD/panels in Wargame UI ─────────────────── */
+#wg-debug,
+.wg-debug,
+[data-wg-debug],
+.wg-debug-hud {
+  display: none !important;
+  visibility: hidden !important;
 }
