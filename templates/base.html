@@ -203,8 +203,7 @@
     {% block content %}{% endblock %}
     <!-- Modal mount point: ensures modals are bounded between header & footer -->
     <div id="modal-root" aria-live="polite">
-      <!-- App-wide modal (suppressed on Wargame pages to avoid #wg-modal ID clash) -->
-      {% if not wargame_mode %}
+      <!-- App-wide modal (used for stockpile, truck cargo, etc.) -->
       <div id="wg-modal" class="backdrop" style="display:none;">
         <div class="card" role="dialog" aria-modal="true" aria-labelledby="wg-modal-msg">
           <div id="wg-modal-msg" class="msg">Message</div>
@@ -215,7 +214,6 @@
           </div>
         </div>
       </div>
-      {% endif %}
 
       <!-- RampBoss paperwork modal template: only present in Wargame mode -->
       {% if wargame_mode %}
