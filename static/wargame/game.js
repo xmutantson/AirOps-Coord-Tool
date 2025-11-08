@@ -1869,7 +1869,7 @@
     if (plane_id == null){ _noSelectionModal(); return; }
     const payload = {
       plane_id,
-      request_id: reqId,
+      flight_ref: { request_id: reqId },
       session_id: (window.WG_SESSION_ID ?? 1),
       player_id:  (window.WG_PLAYER_ID ?? null)
     };
