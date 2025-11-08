@@ -1862,7 +1862,10 @@
   async function fetchRequests(){
     const r = await fetch('/api/wargame/requests', { credentials:'same-origin' });
     const j = await r.json().catch(()=>({}));
-    return Array.isArray(j.requests) ? j.requests : [];
+    return {
+      requests: Array.isArray(j.requests) ? j.requests : [],
+      origin: j.origin || '—'
+    };
   }
   async function pinRequest(reqId){
     const plane_id = _state.plane_id;
@@ -1925,7 +1928,7 @@
   }
 
   // Table: Request list (destination, item_count, requested_weight, Pin)
-  function renderRequestsTable(el, requests){
+  function renderRequestsTable(el, requests, origin){
     const tbody = $('#wgpp-requests-body', el) || $('#wgpp-flights-body', el); // fallback to old id if template not updated
     if (!tbody) return;
     tbody.innerHTML = "";
@@ -1933,16 +1936,15 @@
       tbody.innerHTML = `<tr><td colspan="4" class="wg-muted" style="padding:.6rem">No open requests.</td></tr>`;
       return;
     }
+    origin = origin || '—';
     for (const r of requests){
       const dest   = r.destination || r.airfield_to || r.to || '—';
-      const count  = r.item_count  ?? r.lines_count ?? (Array.isArray(r.lines)?r.lines.length:0);
-      const weight = r.requested_weight ?? r.total_lb ?? r.weight ?? 0;
       const id     = r.id ?? r.request_id ?? r.req_id;
       const tr = document.createElement('tr');
       tr.innerHTML = `
+        <td class="wg-mono">${esc(id)}</td>
         <td>${esc(dest)}</td>
-        <td class="wg-mono">${esc(count)}</td>
-        <td class="wg-mono">${Number(weight||0).toFixed(0)}</td>
+        <td>${esc(origin)}</td>
         <td style="text-align:right;">
           <button data-id="${esc(id)}" class="btn btn-primary">Pin</button>
         </td>`;
@@ -1988,7 +1990,8 @@
     }
     for (const ln of rows){
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${esc(ln.display_name||ln.name||'item')}</td><td>${formatSize(ln.size||'M')}</td><td class="wg-mono">${esc(ln.qty||0)}</td>`;
+      const weight = (ln.unit_lb != null) ? Number(ln.unit_lb).toFixed(1) : '—';
+      tr.innerHTML = `<td>${esc(ln.display_name||ln.name||'item')}</td><td class="wg-mono">${weight}</td><td class="wg-mono">${esc(ln.qty||0)}</td>`;
       tbody.appendChild(tr);
     }
   }
@@ -2101,8 +2104,8 @@
     if (!r.ok){ throw j; }
     // Clear manifest area and refresh request list
     renderManifestTable(_state.el, []);
-    const reqs = await fetchRequests().catch(()=>[]);
-    renderRequestsTable(_state.el, reqs);
+    const {requests, origin} = await fetchRequests().catch(()=>({requests:[], origin:'—'}));
+    renderRequestsTable(_state.el, requests, origin);
     await checkStatus();
   }
 
@@ -2138,8 +2141,8 @@
       initWargamePanel(el);
 
       // Populate left column with requests
-      const reqs = await fetchRequests();
-      renderRequestsTable(el, reqs);
+      const {requests, origin} = await fetchRequests();
+      renderRequestsTable(el, requests, origin);
 
       // Remove/hide the cart selector section from the template if present.
       // We support a few likely structures; safe no-ops if not found.

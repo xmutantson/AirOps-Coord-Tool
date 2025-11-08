@@ -1471,7 +1471,9 @@ def api_requests():
         result.sort(key=lambda r: (r["created_at"] or "", int(r["id"] or 0)))
     except Exception:
         pass
-    return jsonify({"requests": result})
+    # Include default origin from preferences
+    origin = (get_preference("default_origin") or "").strip().upper()
+    return jsonify({"requests": result, "origin": origin})
 
 # Convenience: manifest for a single request id (lines only)
 @bp.get("/api/wargame/request/<int:req_id>/manifest")
