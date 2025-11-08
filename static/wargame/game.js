@@ -2036,6 +2036,9 @@
       const j = await r.json().catch(()=>({}));
       _state.lastStatus = j || {};
       setStatusPill(_state.el, _state.lastStatus.status || '—');
+      // Render required lines if a request is pinned
+      const required = (_state.lastStatus.pin && _state.lastStatus.pin.required) || [];
+      renderManifestTable(_state.el, required);
       // Render shortages/excess summary
       renderValidate(_state.el, _state.lastStatus.diff || null);
       // Enable/disable buttons
