@@ -1724,7 +1724,43 @@
     });
   }
 
-  window.WG_UI = { openTruckCargo, openCartCargo, openStockpileLogging, openStockpileInventory, openTruckShippingLogging };
+  function openRampBossPaperwork({ plane_id, onDone }){
+    const titleBar = `
+      <div class="wg-titlebar wg-flex">
+        <div>Flight Paperwork Review</div>
+        <div class="wg-note">Review manifest and complete paperwork below.</div>
+      </div>`;
+    const iframe = `<iframe class="wg-iframe" src="/ramp_boss" title="Ramp Boss Paperwork"></iframe>`;
+    const bodyHTML = `${titleBar}${iframe}`;
+    window.openModal({
+      title: "Flight Paperwork",
+      bodyHTML,
+      okLabel: "Mark Paperwork Complete",
+      onOK: async ()=>{
+        try{
+          const payload = {
+            plane_id,
+            session_id: (window.WG_SESSION_ID ?? 1),
+            player_id: (window.WG_PLAYER_ID ?? null)
+          };
+          const r = await fetch('/api/wargame/plane/paperwork_complete', {
+            method:'POST',
+            credentials:'same-origin',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify(payload)
+          });
+          const j = await r.json().catch(()=>({}));
+          if (!r.ok){ throw j; }
+          onDone && onDone();
+        }catch(e){
+          alert("Paperwork completion failed: "+(e&&e.message?e.message:"error"));
+        }
+      },
+      onCancel: ()=>{}
+    });
+  }
+
+  window.WG_UI = { openTruckCargo, openCartCargo, openStockpileLogging, openStockpileInventory, openTruckShippingLogging, openRampBossPaperwork };
 })();
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2001,22 +2037,60 @@
     if (!tbody) return;
     tbody.innerHTML = "";
     const rows = [];
-    const add = (kind, arr) => {
-      (arr||[]).forEach(x=>{
-        rows.push({ kind, size: formatSize(x.size||'M'), qty: Number(x.qty||0)|0 });
+
+    // Process shortages (required > on cart)
+    if (diff && diff.shortages){
+      diff.shortages.forEach(x => {
+        const required = Number(x.required || 0);
+        const have = Number(x.have || 0);
+        let status = '';
+        if (have === 0) {
+          status = '⚠️ Missing';
+        } else {
+          status = `⚠️ Short (need ${required - have} more)`;
+        }
+        rows.push({
+          item: x.display_name || 'item',
+          required,
+          have,
+          status,
+          alert: have === 0
+        });
       });
-    };
-    if (diff){
-      add('shortage', diff.shortages);
-      add('excess', diff.excess);
     }
+
+    // Process excess (on cart > required, including unauthorized)
+    if (diff && diff.excess){
+      diff.excess.forEach(x => {
+        const required = Number(x.required || 0);
+        const have = Number(x.have || 0);
+        let status = '';
+        let alert = false;
+        if (required === 0) {
+          status = '❌ UNAUTHORIZED';
+          alert = true;
+        } else {
+          status = `ℹ️ Extra (+${have - required})`;
+        }
+        rows.push({
+          item: x.display_name || 'item',
+          required,
+          have,
+          status,
+          alert
+        });
+      });
+    }
+
     if (!rows.length){
-      tbody.innerHTML = `<tr><td colspan="3" class="wg-muted" style="padding:.6rem">No differences — looks exact.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="4" class="wg-muted" style="padding:.6rem">✓ All cargo matches manifest exactly.</td></tr>`;
       return;
     }
+
     for (const r of rows){
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${esc(r.kind)}</td><td>${esc(r.size)}</td><td class="wg-mono">${esc(r.qty)}</td>`;
+      const alertClass = r.alert ? ' style="background-color: rgba(255,100,100,0.15); font-weight: bold;"' : '';
+      tr.innerHTML = `<td${alertClass}>${esc(r.item)}</td><td class="wg-mono"${alertClass}>${esc(r.required)}</td><td class="wg-mono"${alertClass}>${esc(r.have)}</td><td${alertClass}>${esc(r.status)}</td>`;
       tbody.appendChild(tr);
     }
   }
@@ -2090,23 +2164,38 @@
   async function paperworkDone(){
     const plane_id = _state.plane_id;
     if (plane_id == null){ _noSelectionModal(); return; }
-    const payload = {
-      plane_id,
-      session_id: (window.WG_SESSION_ID ?? 1),
-      player_id:  (window.WG_PLAYER_ID ?? null)
-    };
-    const r = await fetch('/api/wargame/plane/paperwork_complete', {
-      method:'POST', credentials:'same-origin',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(payload)
-    });
-    const j = await r.json().catch(()=>({}));
-    if (!r.ok){ throw j; }
-    // Clear manifest area and refresh request list
-    renderManifestTable(_state.el, []);
-    const {requests, origin} = await fetchRequests().catch(()=>({requests:[], origin:'—'}));
-    renderRequestsTable(_state.el, requests, origin);
-    await checkStatus();
+    // Open ramp boss paperwork modal
+    if (window.WG_UI && typeof window.WG_UI.openRampBossPaperwork === 'function'){
+      window.WG_UI.openRampBossPaperwork({
+        plane_id,
+        onDone: async () => {
+          // Clear manifest area and refresh request list
+          renderManifestTable(_state.el, []);
+          const {requests, origin} = await fetchRequests().catch(()=>({requests:[], origin:'—'}));
+          renderRequestsTable(_state.el, requests, origin);
+          await checkStatus();
+        }
+      });
+    } else {
+      // Fallback: direct API call without modal
+      const payload = {
+        plane_id,
+        session_id: (window.WG_SESSION_ID ?? 1),
+        player_id:  (window.WG_PLAYER_ID ?? null)
+      };
+      const r = await fetch('/api/wargame/plane/paperwork_complete', {
+        method:'POST', credentials:'same-origin',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      });
+      const j = await r.json().catch(()=>({}));
+      if (!r.ok){ throw j; }
+      // Clear manifest area and refresh request list
+      renderManifestTable(_state.el, []);
+      const {requests, origin} = await fetchRequests().catch(()=>({requests:[], origin:'—'}));
+      renderRequestsTable(_state.el, requests, origin);
+      await checkStatus();
+    }
   }
 
   // Provide a single entrypoint used by the scene when near a plane
