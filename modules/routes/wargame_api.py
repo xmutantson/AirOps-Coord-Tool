@@ -441,7 +441,7 @@ def _key_to_flight_id(key: str) -> int | None:
 # --- Normalizers (plane_id / flight_ref) -------------------------------------
 # Strict canonicalizer: only positive integers; no implicit remap to 0/alpha.
 def _canon_plane_id_or_none(v) -> Optional[str]:
-    s = str(v or "").strip().lower()
+    s = str(v if v is not None else "").strip().lower()
     m = _re.match(r'^(?:plane[:#])?(\d+)$', s)
     return f"plane:{m.group(1)}" if m else None
 
