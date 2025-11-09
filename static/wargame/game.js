@@ -1187,10 +1187,18 @@
           });
           heldItemKey = null;
         } catch (e) {
+          console.error("Carrier deposit failed:", e);
           cancelPending(pend);
           applyCarrierDelta(entry, { add:{}, remove:{ [heldSize]:q } });
-          setHeldBoxTexture(heldSize);
-          toggleCarry(true);
+          // If server says we're not holding anything, clear client state instead of restoring it
+          if (e && (e.code === 'not_holding' || e.message === 'not_holding')) {
+            toggleCarry(false);
+            heldItemKey = null;
+            alert("Item was not in your hands on the server. Client state has been reset.");
+          } else {
+            setHeldBoxTexture(heldSize);
+            toggleCarry(true);
+          }
           try { await bootstrapFromServer(); } catch(_) {}
         }
         return;
@@ -1752,6 +1760,10 @@
           const errCode = e && e.code ? ` (${e.code})` : '';
           const errData = e && e.data ? `\nDetails: ${JSON.stringify(e.data)}` : '';
           alert("Drop failed: "+errMsg+errCode+errData);
+          // If server says we're not holding anything, clear client state
+          if (e && e.code === 'not_holding') {
+            onDone && onDone(); // This will call toggleCarry(false) to clear visual state
+          }
         }
       },
       onCancel: ()=>{}
