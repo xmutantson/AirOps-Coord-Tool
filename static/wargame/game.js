@@ -995,12 +995,22 @@
       }
 
       fresh.forEach(c=>{
+        const act=(c.action||'').toLowerCase(); const sizeHuman=binToHuman(c.size||'medium');
+
         if (consumeMatchingPending(c)) {
+          // Even for pending claims, we need to refresh visual state from server
+          if (act==='stockpile_add' || act==='stockpile_remove'){
+            touchedStockpile = true;
+          } else if (act==='carrier_add' || act==='carrier_remove'){
+            const uid=c.carrier_uid;
+            if (String(c.carrier_type||"").toLowerCase()==='truck'){
+              touchedTruck = true;
+            }
+          }
           if (typeof c.id==='number' && c.id>seenClaimId) seenClaimId=c.id;
           return;
         }
 
-        const act=(c.action||'').toLowerCase(); const sizeHuman=binToHuman(c.size||'medium');
         if (act==='stockpile_add' || act==='stockpile_remove'){
           touchedStockpile = true;
         } else if (act==='carrier_add' || act==='carrier_remove'){
