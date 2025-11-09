@@ -1784,7 +1784,7 @@
       const statusData = await window.WGNet.wgPlaneStatus(plane_id);
       const manifest = (statusData && statusData.pin && statusData.pin.loaded_manifest) || [];
       if (manifest.length > 0) {
-        const items = manifest.map(ln => `${ln.qty || 1}× ${ln.display_name || ln.name || 'item'} (${ln.size || 'M'})`).join(', ');
+        const items = manifest.map(ln => `${ln.qty || 1}× ${ln.display_name || ln.name || 'item'} (${ln.unit_lb || 0}lb)`).join(', ');
         manifestHTML = `<div class="wg-note" style="margin-top:0.5rem; padding:0.5rem; background:rgba(11,92,255,0.1); border-left:3px solid #0b5cff;"><strong>Loaded Cargo:</strong> ${esc(items)}</div>`;
       }
     } catch(e) {
