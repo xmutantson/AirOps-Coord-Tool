@@ -9,6 +9,7 @@
 .vscode/
 .DS_Store
 Thumbs.db
+# Note: .vscode/ scripts are excluded from Docker image (build happens outside container)
 
 # ---- Python build/run cruft ----
 __pycache__/

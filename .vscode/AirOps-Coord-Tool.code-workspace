@@ -1,0 +1,20 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		}
+	],
+	"settings": {
+		"terminal.integrated.defaultProfile.windows": "Git Bash",
+		"terminal.integrated.profiles.windows": {
+			"Git Bash": {
+				"path": "C:\\Program Files\\Git\\bin\\bash.exe",
+				"icon": "terminal-bash"
+			}
+		},
+		"files.associations": {
+			"Dockerfile*": "dockerfile",
+			"docker-compose*.yml": "dockercompose"
+		}
+	}
+}

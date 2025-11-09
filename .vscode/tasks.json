@@ -1,0 +1,184 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "🚀 Build & Push (latest + date tag)",
+      "type": "shell",
+      "command": "wsl",
+      "args": [
+        "bash",
+        "-c",
+        "mount | grep -q /mnt/x || (sudo mkdir -p /mnt/x && sudo mount -t drvfs 'X:' /mnt/x) && cd /mnt/x/Storage/Documents/air-ops-vscode/AirOps-Coord-Tool && bash .vscode/docker-build.sh"
+      ],
+      "problemMatcher": [],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared",
+        "showReuseMessage": true,
+        "clear": false
+      }
+    },
+    {
+      "label": "🏠 Build Local (Fast Test)",
+      "type": "shell",
+      "command": "wsl",
+      "args": [
+        "bash",
+        "-c",
+        "mount | grep -q /mnt/x || (sudo mkdir -p /mnt/x && sudo mount -t drvfs 'X:' /mnt/x) && cd /mnt/x/Storage/Documents/air-ops-vscode/AirOps-Coord-Tool && bash .vscode/docker-build-local.sh"
+      ],
+      "problemMatcher": [],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": true,
+        "clear": false
+      }
+    },
+    {
+      "label": "🔧 Setup Buildx (First Time)",
+      "type": "shell",
+      "command": "wsl",
+      "args": [
+        "bash",
+        "-c",
+        "mount | grep -q /mnt/x || (sudo mkdir -p /mnt/x && sudo mount -t drvfs 'X:' /mnt/x) && cd /mnt/x/Storage/Documents/air-ops-vscode/AirOps-Coord-Tool && bash .vscode/docker-setup-buildx.sh"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared",
+        "showReuseMessage": true,
+        "clear": false
+      }
+    },
+    {
+      "label": "🔐 Login to GHCR",
+      "type": "shell",
+      "command": "wsl",
+      "args": [
+        "bash",
+        "-c",
+        "mount | grep -q /mnt/x || (sudo mkdir -p /mnt/x && sudo mount -t drvfs 'X:' /mnt/x) && cd /mnt/x/Storage/Documents/air-ops-vscode/AirOps-Coord-Tool && bash .vscode/docker-login.sh"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared",
+        "showReuseMessage": true,
+        "clear": false
+      }
+    },
+    {
+      "label": "📊 Docker System Info",
+      "type": "shell",
+      "command": "wsl",
+      "args": [
+        "bash",
+        "-c",
+        "mount | grep -q /mnt/x || (sudo mkdir -p /mnt/x && sudo mount -t drvfs 'X:' /mnt/x) && cd /mnt/x/Storage/Documents/air-ops-vscode/AirOps-Coord-Tool && bash .vscode/docker-info.sh"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared",
+        "showReuseMessage": true,
+        "clear": false
+      }
+    },
+    {
+      "label": "🧹 Clean Up Old Images",
+      "type": "shell",
+      "command": "wsl",
+      "args": ["bash", "-c", "docker image prune -f && echo && docker system df"],
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": true,
+        "clear": false
+      }
+    },
+    {
+      "label": "🔍 View GHCR Images",
+      "type": "shell",
+      "command": "wsl",
+      "args": ["bash", "-c", "docker images ghcr.io/xmutantson/aircraft_ops_tool"],
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared",
+        "showReuseMessage": true,
+        "clear": false
+      }
+    },
+    {
+      "label": "🐧 WSL: Start Docker Service",
+      "type": "shell",
+      "command": "wsl",
+      "args": ["bash", "-c", "sudo service docker start && docker --version"],
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared",
+        "showReuseMessage": true,
+        "clear": false
+      }
+    },
+    {
+      "label": "🔌 WSL: Mount Network Drive",
+      "type": "shell",
+      "command": "wsl",
+      "args": ["bash", "-c", "sudo mkdir -p /mnt/x && sudo mount -t drvfs 'X:' /mnt/x && echo 'X: mounted to /mnt/x' && ls -la /mnt/x | head -5"],
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared",
+        "showReuseMessage": true,
+        "clear": false
+      }
+    },
+    {
+      "label": "🧹 Git: Remove Co-Authored-By Attributions",
+      "type": "shell",
+      "command": "wsl",
+      "args": [
+        "bash",
+        "-c",
+        "mount | grep -q /mnt/x || (sudo mkdir -p /mnt/x && sudo mount -t drvfs 'X:' /mnt/x) && cd /mnt/x/Storage/Documents/air-ops-vscode/AirOps-Coord-Tool && bash .vscode/git-cleanup-attributions.sh"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared",
+        "showReuseMessage": true,
+        "clear": false
+      }
+    }
+  ]
+}
