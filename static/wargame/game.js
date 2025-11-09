@@ -1744,12 +1744,25 @@
     });
   }
 
-  function openRampBossPaperwork({ plane_id, onDone }){
+  async function openRampBossPaperwork({ plane_id, onDone }){
+    // Fetch plane status to get loaded manifest
+    let manifestHTML = '';
+    try {
+      const statusData = await window.WGNet.wgPlaneStatus(plane_id);
+      const manifest = (statusData && statusData.pin && statusData.pin.loaded_manifest) || [];
+      if (manifest.length > 0) {
+        const items = manifest.map(ln => `${ln.qty || 1}× ${ln.display_name || ln.name || 'item'} (${ln.size || 'M'})`).join(', ');
+        manifestHTML = `<div class="wg-note" style="margin-top:0.5rem; padding:0.5rem; background:rgba(11,92,255,0.1); border-left:3px solid #0b5cff;"><strong>Loaded Cargo:</strong> ${esc(items)}</div>`;
+      }
+    } catch(e) {
+      console.warn("Could not fetch manifest for paperwork:", e);
+    }
+
     const titleBar = `
       <div class="wg-titlebar wg-flex">
         <div>Flight Paperwork Review</div>
         <div class="wg-note">Review manifest and complete paperwork below.</div>
-      </div>`;
+      </div>${manifestHTML}`;
     const iframe = `<iframe class="wg-iframe" src="/ramp_boss" title="Ramp Boss Paperwork"></iframe>`;
     const bodyHTML = `${titleBar}${iframe}`;
     window.openModal({
