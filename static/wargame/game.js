@@ -2145,13 +2145,25 @@
       renderManifestTable(_state.el, required);
       // Render shortages/excess summary
       renderValidate(_state.el, _state.lastStatus.diff || null);
-      // Enable/disable buttons
+      // Update button based on status
       const ready = String(_state.lastStatus.status||'').toLowerCase() === 'ready';
       const loaded = String(_state.lastStatus.status||'').toLowerCase() === 'loaded';
       const loadBtn = $('#wgpp-load', _state.el);
-      const paperBtn = $('#wgpp-paperwork', _state.el);
-      if (loadBtn) loadBtn.disabled = !ready;
-      if (paperBtn) paperBtn.disabled = !loaded;
+      if (loadBtn) {
+        if (loaded) {
+          // Cargo already loaded, show "Open Paperwork" button
+          loadBtn.textContent = 'Open Paperwork';
+          loadBtn.disabled = false;
+          loadBtn.className = 'btn'; // Remove primary styling
+          loadBtn.onclick = ()=>paperworkDone().catch(e=>showFriendlyError(e,{action:'paperwork'}));
+        } else {
+          // Cargo not yet loaded, show "Load Cargo" button
+          loadBtn.textContent = 'Load Cargo';
+          loadBtn.disabled = !ready;
+          loadBtn.className = 'btn btn-primary';
+          loadBtn.onclick = ()=>loadPlane().catch(e=>showFriendlyError(e,{action:'load'}));
+        }
+      }
     }catch(e){ console.warn("plane/status failed", e); }
   }
 
@@ -2173,18 +2185,18 @@
     const j = await r.json().catch(()=>({}));
     if (!r.ok){ throw j; }
     await checkStatus();
-    // Show paperwork URL (if provided)
-    if (j && j.paperwork_url){
-      try {
-        if (window.WGOverlay && typeof window.WGOverlay.openRampBossPaperwork === 'function'){
-          window.WGOverlay.openRampBossPaperwork({ url:j.paperwork_url, planeId: plane_id });
-        } else {
-          window.openModal && window.openModal({
-            title: "Paperwork",
-            bodyHTML: `<p><a href="${esc(j.paperwork_url)}" target="_blank" rel="noopener">Open paperwork</a></p>`
-          });
+    // Auto-open paperwork modal after successful load
+    if (window.WG_UI && typeof window.WG_UI.openRampBossPaperwork === 'function'){
+      window.WG_UI.openRampBossPaperwork({
+        plane_id,
+        onDone: async () => {
+          // Clear manifest area and refresh request list
+          renderManifestTable(_state.el, []);
+          const {requests, origin} = await fetchRequests().catch(()=>({requests:[], origin:'—'}));
+          renderRequestsTable(_state.el, requests, origin);
+          await checkStatus();
         }
-      } catch(_){}
+      });
     }
   }
 
@@ -2228,11 +2240,10 @@
   // Provide a single entrypoint used by the scene when near a plane
   function initWargamePanel(rootEl){
     // Hook buttons if template provides them
+    // Note: Load button's onclick is dynamically set in checkStatus() based on status
     const btnLoad = $('#wgpp-load', rootEl);
-    const btnPaper = $('#wgpp-paperwork', rootEl);
     const btnRefresh = $('#wgpp-refresh', rootEl);
     if (btnLoad)    btnLoad.onclick    = ()=>loadPlane().catch(e=>showFriendlyError(e,{action:'load'}));
-    if (btnPaper)   btnPaper.onclick   = ()=>paperworkDone().catch(e=>showFriendlyError(e,{action:'paperwork'}));
     if (btnRefresh) btnRefresh.onclick = ()=>checkStatus();
   }
 
