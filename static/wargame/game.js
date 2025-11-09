@@ -2048,63 +2048,82 @@
     // Build a map of all items from manifest
     const itemMap = new Map();
 
+    // Check if cargo is already loaded
+    const loaded = String(_state.lastStatus && _state.lastStatus.status||'').toLowerCase() === 'loaded';
+
     // Get required manifest to show all items
     const required = (_state.lastStatus && _state.lastStatus.pin && _state.lastStatus.pin.required) || [];
-    required.forEach(ln => {
-      const key = `${ln.display_name||ln.name||'item'}_${ln.size||'M'}`;
-      itemMap.set(key, {
-        item: ln.display_name || ln.name || 'item',
-        required: Number(ln.qty || 0),
-        have: Number(ln.qty || 0), // assume matched initially
-        status: '✓ OK',
-        alert: false
-      });
-    });
 
-    // Update with shortages (required > on cart)
-    if (diff && diff.shortages){
-      diff.shortages.forEach(x => {
-        const key = `${x.display_name||'item'}_${x.size||'M'}`;
-        const required = Number(x.required || 0);
-        const have = Number(x.have || 0);
-        let status = '';
-        if (have === 0) {
-          status = '⚠️ Missing';
-        } else {
-          status = `⚠️ Short (need ${required - have} more)`;
-        }
+    // If cargo is loaded, show all items with "On Plane" status
+    if (loaded) {
+      required.forEach(ln => {
+        const key = `${ln.display_name||ln.name||'item'}_${ln.size||'M'}`;
         itemMap.set(key, {
-          item: x.display_name || 'item',
-          required,
-          have,
-          status,
-          alert: have === 0
+          item: ln.display_name || ln.name || 'item',
+          required: Number(ln.qty || 0),
+          have: Number(ln.qty || 0),
+          status: '✈️ On Plane',
+          alert: false
         });
       });
-    }
-
-    // Update with excess (on cart > required, including unauthorized)
-    if (diff && diff.excess){
-      diff.excess.forEach(x => {
-        const key = `${x.display_name||'item'}_${x.size||'M'}`;
-        const required = Number(x.required || 0);
-        const have = Number(x.have || 0);
-        let status = '';
-        let alert = false;
-        if (required === 0) {
-          status = '❌ UNAUTHORIZED';
-          alert = true;
-        } else {
-          status = `ℹ️ Extra (+${have - required})`;
-        }
+    } else {
+      // Otherwise, show validation status
+      required.forEach(ln => {
+        const key = `${ln.display_name||ln.name||'item'}_${ln.size||'M'}`;
         itemMap.set(key, {
-          item: x.display_name || 'item',
-          required,
-          have,
-          status,
-          alert
+          item: ln.display_name || ln.name || 'item',
+          required: Number(ln.qty || 0),
+          have: Number(ln.qty || 0), // assume matched initially
+          status: '✓ OK',
+          alert: false
         });
       });
+
+      // Update with shortages (required > on cart)
+      if (diff && diff.shortages){
+        diff.shortages.forEach(x => {
+          const key = `${x.display_name||'item'}_${x.size||'M'}`;
+          const required = Number(x.required || 0);
+          const have = Number(x.have || 0);
+          let status = '';
+          if (have === 0) {
+            status = '⚠️ Missing';
+          } else {
+            status = `⚠️ Short (need ${required - have} more)`;
+          }
+          itemMap.set(key, {
+            item: x.display_name || 'item',
+            required,
+            have,
+            status,
+            alert: have === 0
+          });
+        });
+      }
+
+      // Update with excess (on cart > required, including unauthorized)
+      if (diff && diff.excess){
+        diff.excess.forEach(x => {
+          const key = `${x.display_name||'item'}_${x.size||'M'}`;
+          const required = Number(x.required || 0);
+          const have = Number(x.have || 0);
+          let status = '';
+          let alert = false;
+          if (required === 0) {
+            status = '❌ UNAUTHORIZED';
+            alert = true;
+          } else {
+            status = `ℹ️ Extra (+${have - required})`;
+          }
+          itemMap.set(key, {
+            item: x.display_name || 'item',
+            required,
+            have,
+            status,
+            alert
+          });
+        });
+      }
     }
 
     const rows = Array.from(itemMap.values());

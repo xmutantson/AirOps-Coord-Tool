@@ -1009,7 +1009,7 @@ body.wargame .wg-flex, #wg-overlay-root .wg-flex { display:flex; }
   background:rgba(0,0,0,.55); z-index:99998;
 }
 #wg-modal .card {
-  width:min(920px,92vw); max-height:86vh; overflow:auto;
+  width:min(1400px,96vw); max-height:90vh; overflow:auto;
   background:#0f1115; color:#e6eefc; border:1px solid #2b3440; border-radius:12px;
   box-shadow:0 10px 30px rgba(0,0,0,.5);
 }
@@ -1031,7 +1031,7 @@ body.wargame .wg-flex, #wg-overlay-root .wg-flex { display:flex; }
 #wg-overlay-root .wg-grid  { display:grid; grid-template-columns: 1fr 1fr; gap:1rem; padding:1rem; overflow:auto; }
 #wg-overlay-root .wg-col h3{ margin:.25rem 0 .5rem; color:#cbd9ee; }
 #wg-overlay-root .wg-actions{ display:flex; gap:.5rem; justify-content:flex-end; margin-top:1rem; }
-#wg-overlay-root .wg-iframe { width:100%; height:60vh; border:1px solid #232833; border-radius:6px; background:#0b0e13; }
+#wg-overlay-root .wg-iframe { width:100%; height:75vh; border:1px solid #232833; border-radius:6px; background:#0b0e13; }
 
 /* ───────────────────────────────────────────────────────────────
    Wargame Overlay — bounded modal container under #wg-overlay-root
