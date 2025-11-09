@@ -2039,11 +2039,27 @@
     const tbody = $('#wgpp-val-body', el);
     if (!tbody) return;
     tbody.innerHTML = "";
-    const rows = [];
 
-    // Process shortages (required > on cart)
+    // Build a map of all items from manifest
+    const itemMap = new Map();
+
+    // Get required manifest to show all items
+    const required = (_state.lastStatus && _state.lastStatus.pin && _state.lastStatus.pin.required) || [];
+    required.forEach(ln => {
+      const key = `${ln.display_name||ln.name||'item'}_${ln.size||'M'}`;
+      itemMap.set(key, {
+        item: ln.display_name || ln.name || 'item',
+        required: Number(ln.qty || 0),
+        have: Number(ln.qty || 0), // assume matched initially
+        status: '✓ OK',
+        alert: false
+      });
+    });
+
+    // Update with shortages (required > on cart)
     if (diff && diff.shortages){
       diff.shortages.forEach(x => {
+        const key = `${x.display_name||'item'}_${x.size||'M'}`;
         const required = Number(x.required || 0);
         const have = Number(x.have || 0);
         let status = '';
@@ -2052,7 +2068,7 @@
         } else {
           status = `⚠️ Short (need ${required - have} more)`;
         }
-        rows.push({
+        itemMap.set(key, {
           item: x.display_name || 'item',
           required,
           have,
@@ -2062,9 +2078,10 @@
       });
     }
 
-    // Process excess (on cart > required, including unauthorized)
+    // Update with excess (on cart > required, including unauthorized)
     if (diff && diff.excess){
       diff.excess.forEach(x => {
+        const key = `${x.display_name||'item'}_${x.size||'M'}`;
         const required = Number(x.required || 0);
         const have = Number(x.have || 0);
         let status = '';
@@ -2075,7 +2092,7 @@
         } else {
           status = `ℹ️ Extra (+${have - required})`;
         }
-        rows.push({
+        itemMap.set(key, {
           item: x.display_name || 'item',
           required,
           have,
@@ -2085,8 +2102,10 @@
       });
     }
 
+    const rows = Array.from(itemMap.values());
+
     if (!rows.length){
-      tbody.innerHTML = `<tr><td colspan="4" class="wg-muted" style="padding:.6rem">✓ All cargo matches manifest exactly.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="4" class="wg-muted" style="padding:.6rem">Pin a request to see cargo validation.</td></tr>`;
       return;
     }
 
