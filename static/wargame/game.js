@@ -1938,14 +1938,27 @@
   }
 
   async function openRampBossPaperwork({ plane_id, onDone }){
-    // Fetch plane status to get loaded manifest
+    // Fetch plane status to get loaded manifest and destination
     let manifestHTML = '';
     try {
       const statusData = await window.WGNet.wgPlaneStatus(plane_id);
       const manifest = (statusData && statusData.pin && statusData.pin.loaded_manifest) || [];
-      if (manifest.length > 0) {
+      const destination = (statusData && statusData.pin && statusData.pin.destination) || '';
+
+      if (manifest.length > 0 || destination) {
         const items = manifest.map(ln => `${ln.qty || 1}× ${ln.display_name || ln.name || 'item'} (${ln.unit_lb || 0}lb)`).join(', ');
-        manifestHTML = `<div class="wg-note" style="margin-top:0.5rem; padding:0.5rem; background:rgba(11,92,255,0.1); border-left:3px solid #0b5cff;"><strong>Loaded Cargo:</strong> ${esc(items)}</div>`;
+        let infoText = '';
+        if (destination) {
+          infoText = `<strong>Destination:</strong> ${esc(destination)}`;
+          if (manifest.length > 0) {
+            infoText += ` &nbsp;|&nbsp; <strong>Loaded Cargo:</strong> ${esc(items)}`;
+          }
+        } else if (manifest.length > 0) {
+          infoText = `<strong>Loaded Cargo:</strong> ${esc(items)}`;
+        }
+        if (infoText) {
+          manifestHTML = `<div class="wg-note" style="margin-top:0.5rem; padding:0.5rem; background:rgba(11,92,255,0.1); border-left:3px solid #0b5cff;">${infoText}</div>`;
+        }
       }
     } catch(e) {
       console.warn("Could not fetch manifest for paperwork:", e);
