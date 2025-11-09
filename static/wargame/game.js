@@ -345,6 +345,18 @@
       try { return LOCKED_CART_UID ? String(LOCKED_CART_UID) : null; } catch(_){ return null; }
     };
 
+    // Expose cart refresh so external code (like plane panel) can trigger visual updates
+    window.__WG_refreshCartVisuals = async function(){
+      try {
+        if (!window.WGNet || typeof window.WGNet.getState !== 'function') return;
+        const state = await window.WGNet.getState(0);
+        const carts = (state && state.carts) || [];
+        if (carts.length) seedCartLoadsFromServer(carts);
+      } catch(e) {
+        console.warn("Failed to refresh cart visuals:", e);
+      }
+    };
+
     function openConfirm(html,onOk,onCancel){ if(!modalEl||!modalMsgEl||!modalOK||!modalCancel){ if(confirm(html.replace(/<[^>]+>/g,''))){ onOk&&onOk(); } else { onCancel&&onCancel(); } return; } modalMsgEl.innerHTML=html; modalBodyEl.innerHTML=''; const close=()=>{ modalEl.style.display='none'; modalOK.onclick=null; modalCancel.onclick=null; }; modalOK.onclick=()=>{ close(); onOk&&onOk(); }; modalCancel.onclick=()=>{ close(); onCancel&&onCancel(); }; modalEl.style.display='flex'; }
     function openSelect(html, options, def, onOk, onCancel){
       options=options||[]; if(!modalEl||!modalMsgEl||!modalBodyEl||!modalOK||!modalCancel){ const v=prompt(html.replace(/<[^>]+>/g,''), def||((options[0]||{}).value||'medium')); if(v){ onOk&&onOk(v); } else { onCancel&&onCancel(); } return; }
@@ -2203,6 +2215,10 @@
     });
     const j = await r.json().catch(()=>({}));
     if (!r.ok){ throw j; }
+    // Refresh cart visuals to despawn loaded boxes
+    if (typeof window.__WG_refreshCartVisuals === 'function'){
+      await window.__WG_refreshCartVisuals().catch(()=>{});
+    }
     await checkStatus();
     // Auto-open paperwork modal after successful load
     if (window.WG_UI && typeof window.WG_UI.openRampBossPaperwork === 'function'){
