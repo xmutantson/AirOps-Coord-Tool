@@ -2358,12 +2358,21 @@ def wargame_claim():
                     add_n = int(held.get("qty") or 1)
                     if add_n <= 0:
                         return jsonify({"ok": False, "error": "bad_qty"}), 400
-                    # Merge into cart.lines (one entry per type), plus numeric manifest.
+                    # Add individual line entries (one per box) instead of merging
                     try:
                         dn = (held.get("display_name") or "").strip()
                         ulb = float(held.get("unit_lb") or 0.0)
                         if dn:
-                            _merge_line(cart.setdefault("lines", []), dn, ulb, size, add_n, None)
+                            # Create individual line entries for each box
+                            lines = cart.setdefault("lines", [])
+                            for _ in range(add_n):
+                                lines.append({
+                                    "display_name": dn,
+                                    "unit_lb": ulb,
+                                    "size": (size or "M").upper(),
+                                    "qty": 1,
+                                    "sources": [],
+                                })
                     except Exception:
                         pass
                     if not _manifest_add(cart.setdefault("contents", {}), item_key, size, +add_n):
