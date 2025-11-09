@@ -1190,6 +1190,45 @@
           console.error("Carrier deposit failed:", e);
           cancelPending(pend);
           applyCarrierDelta(entry, { add:{}, remove:{ [heldSize]:q } });
+
+          // Handle metadata mismatch - sync with server and retry
+          if (e && e.code === 'held_mismatch') {
+            try {
+              await bootstrapFromServer();
+              const playerState = window.WG_PLAYER_STATE;
+              if (playerState && playerState.held) {
+                const h = playerState.held;
+                const retryPend = newPendingToken();
+                applyCarrierDelta(entry, { add:{ [heldSize]:q }, remove:{} });
+                await window.WGNet.postClaim({
+                  action:'carrier_add',
+                  carrier_type:entry.type,
+                  carrier_uid:entry.uid,
+                  item_key: h.item_key || itemKey,
+                  size: h.size || sizeBin,
+                  qty: h.qty || q,
+                  display_name: h.display_name || heldDisplayName || '',
+                  unit_lb: h.unit_lb || heldUnitLb || 0
+                });
+                toggleCarry(false);
+                heldItemKey = null;
+                alert("Successfully deposited item after syncing with server.");
+                return;
+              } else {
+                toggleCarry(false);
+                heldItemKey = null;
+                alert("Server says you're not holding anything. Client state has been reset.");
+                return;
+              }
+            } catch (retryErr) {
+              console.error("Retry after held_mismatch failed:", retryErr);
+              setHeldBoxTexture(heldSize);
+              toggleCarry(true);
+              alert("Failed to sync and retry. Please try again or refresh the page.");
+              return;
+            }
+          }
+
           // If server says we're not holding anything, clear client state instead of restoring it
           if (e && (e.code === 'not_holding' || e.message === 'not_holding')) {
             toggleCarry(false);
@@ -1474,6 +1513,51 @@
               window.applyCarrierDelta(carrierEntry, { add:{}, remove: rem });
             }
           }catch(_){}
+
+          // Handle metadata mismatch - sync with server and retry
+          if (e && e.code === 'held_mismatch') {
+            alert("Item metadata doesn't match server. Syncing with server and retrying...");
+            try {
+              await window.bootstrapFromServer();
+              const playerState = window.WG_PLAYER_STATE;
+              if (playerState && playerState.held) {
+                const h = playerState.held;
+                const retryPayload = {
+                  action: 'carrier_add',
+                  carrier_type: 'truck',
+                  carrier_uid: truck_id,
+                  item_key: h.item_key || 'box',
+                  size: h.size || sizeLabel,
+                  qty: h.qty || qty || 1,
+                  display_name: h.display_name || display_name || '',
+                  unit_lb: h.unit_lb || unit_lb || 0
+                };
+                if (carrierEntry && window.applyCarrierDelta) {
+                  const human = (BIN_TO_HUMAN[h.size || sizeLabel] || 'medium');
+                  const addQty = {}; addQty[human] = Math.max(1, parseInt(h.qty || qty || 1, 10));
+                  window.applyCarrierDelta(carrierEntry, { add: addQty, remove: {} });
+                }
+                if (window.postClaimSerial) {
+                  await window.postClaimSerial(retryPayload);
+                } else {
+                  await window.WGNet.postClaim(retryPayload);
+                }
+                onDone && onDone();
+                alert("Successfully loaded cargo after syncing with server.");
+                return;
+              } else {
+                alert("Server says you're not holding anything. Clearing client state.");
+                onDone && onDone();
+                return;
+              }
+            } catch (retryErr) {
+              console.error("Retry after held_mismatch failed:", retryErr);
+              alert("Failed to sync and retry. Please refresh the page.");
+              onDone && onDone();
+              return;
+            }
+          }
+
           const errMsg = e && e.message ? e.message : "error";
           const errCode = e && e.code ? ` (${e.code})` : '';
           alert("Load failed: " + errMsg + errCode);
@@ -1766,6 +1850,44 @@
           const errMsg = e && e.message ? e.message : "error";
           const errCode = e && e.code ? ` (${e.code})` : '';
           const errData = e && e.data ? `\nDetails: ${JSON.stringify(e.data)}` : '';
+
+          // Handle metadata mismatch - fetch server state and retry with correct metadata
+          if (e && e.code === 'held_mismatch') {
+            alert("Item metadata doesn't match server. Syncing with server and retrying...");
+            try {
+              await window.bootstrapFromServer();
+              const playerState = window.WG_PLAYER_STATE;
+              if (playerState && playerState.held) {
+                const h = playerState.held;
+                const retryPayload = {
+                  action: 'stockpile_add',
+                  item_key: h.item_key || 'box',
+                  size: h.size || 'M',
+                  qty: h.qty || qty || 1,
+                  display_name: h.display_name || display_name || '',
+                  unit_lb: h.unit_lb || unit_lb || 0
+                };
+                if (window.postClaimSerial) {
+                  await window.postClaimSerial(retryPayload);
+                } else {
+                  await window.WGNet.claimDropToStockpile(retryPayload);
+                }
+                onDone && onDone();
+                alert("Successfully dropped item after syncing with server.");
+                return;
+              } else {
+                alert("Server says you're not holding anything. Clearing client state.");
+                onDone && onDone();
+                return;
+              }
+            } catch (retryErr) {
+              console.error("Retry after held_mismatch failed:", retryErr);
+              alert("Failed to sync and retry. Please refresh the page.");
+              onDone && onDone();
+              return;
+            }
+          }
+
           alert("Drop failed: "+errMsg+errCode+errData);
           // If server says we're not holding anything, clear client state
           if (e && e.code === 'not_holding') {
