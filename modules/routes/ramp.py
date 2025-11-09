@@ -18,6 +18,13 @@ except Exception:
     def _cargo_reconciler_tick():
         return None
 
+# Wargame STATE synchronization — soft import (to keep DB and in-memory state consistent)
+try:
+    from modules.routes.wargame_api import STATE as _WARGAME_STATE, LOCK as _WARGAME_LOCK
+except Exception:
+    _WARGAME_STATE = None
+    _WARGAME_LOCK = None
+
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
 from modules.utils.common import parse_adv_manifest, guess_category_id_for_name, new_manifest_session_id, sanitize_name, \
     get_pilot_ack_for_flight, set_pilot_ack_for_flight
@@ -526,6 +533,12 @@ def ramp_boss():
                           INSERT INTO wargame_metrics(event_type, delta_seconds, recorded_at, key)
                           VALUES ('ramp', ?, ?, ?)
                         """, (delta, now_iso, f"rampreq:{rid}"))
+                    # Also remove from wargame STATE so it doesn't reappear (STATE overrides DB)
+                    if _WARGAME_STATE is not None and _WARGAME_LOCK is not None:
+                        with _WARGAME_LOCK:
+                            queues = _WARGAME_STATE.get("adapters", {}).get("queues", {})
+                            reqs = queues.get("requests", [])
+                            queues["requests"] = [r for r in reqs if int(r.get("id") or 0) != int(rid)]
             except Exception:
                 pass
         row['action'] = action
