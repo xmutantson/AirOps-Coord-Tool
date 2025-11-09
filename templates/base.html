@@ -50,18 +50,18 @@
         '<button id="csrf-ok" style="padding:10px 18px;border:none;border-radius:8px;background:#0b5cff;color:#fff;font-weight:600;cursor:pointer;">OK</button>' +
         '</div>';
 
-      // Block interaction underneath overlay
-      ['click','mousedown','mouseup','touchstart','touchend','keydown'].forEach(ev =>
-        overlay.addEventListener(ev, function (e) { e.stopPropagation(); }, { capture: true })
-      );
-
       document.body.appendChild(overlay);
 
       function hardReload() {
         try { window.__NAVIGATING_AWAY = true; } catch(_) {}
-        try { window.location.reload(); } catch (_) { window.location.href = window.location.href; }
+        try { window.location.reload(true); } catch (_) { window.location.href = window.location.href; }
       }
       overlay.querySelector('#csrf-ok').addEventListener('click', hardReload, { once: true });
+
+      // Block interaction with page underneath overlay (but not the OK button)
+      overlay.addEventListener('click', function (e) {
+        if (e.target === overlay) { e.preventDefault(); e.stopPropagation(); }
+      }, { capture: true });
       window.addEventListener('keydown', function (ev) {
         if (ev.key === 'Enter') hardReload();
         ev.preventDefault(); ev.stopPropagation();

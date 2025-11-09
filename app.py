@@ -474,6 +474,7 @@ app.config.update(
     SESSION_COOKIE_SAMESITE='Lax',
     MAX_CONTENT_LENGTH=20 * 1024 * 1024,
     DB_FILE=DB_FILE,
+    WTF_CSRF_TIME_LIMIT=10800,  # 3 hours in seconds
 )
 
 CSRFProtect(app)
