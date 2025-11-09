@@ -1465,6 +1465,7 @@
           }
           onDone && onDone();
         }catch(e){
+          console.error("Truck load failed:", e);
           // Roll back optimistic add on failure
           try{
             if (carrierEntry && window.applyCarrierDelta){
@@ -1473,7 +1474,13 @@
               window.applyCarrierDelta(carrierEntry, { add:{}, remove: rem });
             }
           }catch(_){}
-          alert("Load failed: " + (e && e.message ? e.message : "error"));
+          const errMsg = e && e.message ? e.message : "error";
+          const errCode = e && e.code ? ` (${e.code})` : '';
+          alert("Load failed: " + errMsg + errCode);
+          // If server says we're not holding anything, clear client state
+          if (e && (e.code === 'not_holding' || e.message === 'not_holding')) {
+            onDone && onDone(); // Clear carry state
+          }
         }
       },
       onCancel: ()=>{}
