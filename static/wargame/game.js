@@ -1747,7 +1747,11 @@
           }
           onDone && onDone();
         }catch(e){
-          alert("Drop failed: "+(e&&e.message?e.message:"error"));
+          console.error("Stockpile drop failed:", e);
+          const errMsg = e && e.message ? e.message : "error";
+          const errCode = e && e.code ? ` (${e.code})` : '';
+          const errData = e && e.data ? `\nDetails: ${JSON.stringify(e.data)}` : '';
+          alert("Drop failed: "+errMsg+errCode+errData);
         }
       },
       onCancel: ()=>{}
