@@ -1948,13 +1948,13 @@
       if (manifest.length > 0 || destination) {
         const items = manifest.map(ln => `${ln.qty || 1}× ${ln.display_name || ln.name || 'item'} (${ln.unit_lb || 0}lb)`).join(', ');
         let infoText = '';
-        if (destination) {
-          infoText = `<strong>Destination:</strong> ${esc(destination)}`;
-          if (manifest.length > 0) {
-            infoText += ` &nbsp;|&nbsp; <strong>Loaded Cargo:</strong> ${esc(items)}`;
-          }
-        } else if (manifest.length > 0) {
+        if (manifest.length > 0) {
           infoText = `<strong>Loaded Cargo:</strong> ${esc(items)}`;
+          if (destination) {
+            infoText += ` &nbsp;|&nbsp; <strong>Destination:</strong> ${esc(destination)}`;
+          }
+        } else if (destination) {
+          infoText = `<strong>Destination:</strong> ${esc(destination)}`;
         }
         if (infoText) {
           manifestHTML = `<div class="wg-note" style="margin-top:0.5rem; padding:0.5rem; background:rgba(11,92,255,0.1); border-left:3px solid #0b5cff;">${infoText}</div>`;
@@ -1972,7 +1972,7 @@
     const iframe = `<iframe class="wg-iframe" src="/ramp_boss" title="Ramp Boss Paperwork"></iframe>`;
     const bodyHTML = `${titleBar}${iframe}`;
     window.openModal({
-      title: "Flight Paperwork",
+      title: "",
       bodyHTML,
       okLabel: "Mark Paperwork Complete",
       onOK: async ()=>{
