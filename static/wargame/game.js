@@ -2444,11 +2444,10 @@
       window.WG_UI.openRampBossPaperwork({
         plane_id,
         onDone: async () => {
-          // Clear manifest area and refresh request list
-          renderManifestTable(_state.el, []);
+          // Refresh panel to show updated state after paperwork completion
+          await checkStatus();
           const {requests, origin} = await fetchRequests().catch(()=>({requests:[], origin:'—'}));
           renderRequestsTable(_state.el, requests, origin);
-          await checkStatus();
         }
       });
     }
@@ -2462,11 +2461,10 @@
       window.WG_UI.openRampBossPaperwork({
         plane_id,
         onDone: async () => {
-          // Clear manifest area and refresh request list
-          renderManifestTable(_state.el, []);
+          // Refresh panel to show updated state after paperwork completion
+          await checkStatus();
           const {requests, origin} = await fetchRequests().catch(()=>({requests:[], origin:'—'}));
           renderRequestsTable(_state.el, requests, origin);
-          await checkStatus();
         }
       });
     } else {
