@@ -1674,12 +1674,25 @@
                 display_name: ln.display_name || '',
                 unit_lb: ln.unit_lb || 0,
               };
+              let response;
               if (window.postClaimSerial) {
-                await window.postClaimSerial(payload);
+                response = await window.postClaimSerial(payload);
               } else {
-                await window.WGNet.postClaim(payload);
+                response = await window.WGNet.postClaim(payload);
               }
-              onTaken && onTaken({ qty: want, size: (BIN_TO_HUMAN[ln.size]||'medium'), display_name: ln.display_name||'', unit_lb: ln.unit_lb||0 });
+              // Use server-normalized values from response to ensure client-server sync
+              const held = response && response.player && response.player.held;
+              if (held) {
+                onTaken && onTaken({
+                  qty: held.qty || want,
+                  size: held.size || 'M',  // Server-normalized size (S/M/L/XL)
+                  display_name: held.display_name || '',
+                  unit_lb: held.unit_lb || 0
+                });
+              } else {
+                // Fallback to original values if response doesn't have held data
+                onTaken && onTaken({ qty: want, size: (BIN_TO_HUMAN[ln.size]||'medium'), display_name: ln.display_name||'', unit_lb: ln.unit_lb||0 });
+              }
               // Close modal after a successful take
               document.getElementById('wg-modal-cancel')?.click();
             } catch (e) {
@@ -1790,8 +1803,33 @@
                 display_name: ln.display_name || '',
                 unit_lb: ln.unit_lb || 0
               };
-              if (window.postClaimSerial) await window.postClaimSerial(payload); else await window.WGNet.postClaim(payload);
-              onTaken && onTaken({ qty: want, size: ln.size, display_name: ln.display_name||'', unit_lb: ln.unit_lb||0 });
+              let response;
+              if (window.postClaimSerial) {
+                response = await window.postClaimSerial(payload);
+              } else {
+                response = await window.WGNet.postClaim(payload);
+              }
+              // Use server-normalized values from response to ensure client-server sync
+              const held = response && response.player && response.player.held;
+              if (held) {
+                // Update client state with server-normalized values
+                window.setHeldMeta && window.setHeldMeta({
+                  qty: held.qty || want,
+                  display_name: held.display_name || '',
+                  unit_lb: held.unit_lb || 0,
+                  item_key: held.item_key || 'box',
+                  size: held.size || 'M'
+                });
+                onTaken && onTaken({
+                  qty: held.qty || want,
+                  size: held.size || 'M',
+                  display_name: held.display_name || '',
+                  unit_lb: held.unit_lb || 0
+                });
+              } else {
+                // Fallback to original values if response doesn't have held data
+                onTaken && onTaken({ qty: want, size: ln.size, display_name: ln.display_name||'', unit_lb: ln.unit_lb||0 });
+              }
               document.getElementById('wg-modal-cancel')?.click();
             }catch(e){
               // revert optimistic on error
