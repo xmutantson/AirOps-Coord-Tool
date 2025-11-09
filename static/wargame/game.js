@@ -274,7 +274,7 @@
       if (modalEl && root && modalEl.parentElement !== root) root.appendChild(modalEl);
     }
     // Minimal modal controller used by WG_UI
-    function openModal({ title, bodyHTML, okLabel="OK", onOK, onCancel }){
+    function openModal({ title, bodyHTML, okLabel="OK", onOK, onCancel, hideCancel=false }){
       // If modal wasn't found initially, try to wire it again
       if(!modalEl){ wireModal(); }
       // If still not found after retry, fall back to confirm dialog
@@ -282,6 +282,10 @@
       modalMsgEl && (modalMsgEl.innerHTML = title || "");
       modalBodyEl && (modalBodyEl.innerHTML = bodyHTML || "");
       if (modalOK) modalOK.textContent = okLabel || "OK";
+      // Show/hide cancel button based on hideCancel parameter
+      if (modalCancel) {
+        modalCancel.style.display = hideCancel ? 'none' : '';
+      }
       let escHandler=null, overlayHandler=null;
       const close=()=>{
         modalEl.style.display='none';
@@ -291,6 +295,7 @@
         if (escHandler)  document.removeEventListener('keydown', escHandler);
         if (overlayHandler) modalEl.removeEventListener('click', overlayHandler);
         if (modalOK) modalOK.textContent="OK";
+        if (modalCancel) modalCancel.style.display='';
       };
       if (modalOK)     modalOK.onclick     = ()=>{ close(); onOK && onOK(); };
       if (modalCancel) modalCancel.onclick = ()=>{ close(); onCancel && onCancel(); };
@@ -1376,7 +1381,7 @@
       }
 
       const bodyHTML = renderBody();
-      window.openModal({ title, bodyHTML, okLabel:"Close", onOK:()=>{}, onCancel:()=>{} });
+      window.openModal({ title, bodyHTML, okLabel:"Close", onOK:()=>{}, onCancel:()=>{}, hideCancel: true });
       setTimeout(hookButtons, 0);
     }catch(e){
       alert("Failed to open Stockpile: "+(e&&e.message?e.message:"error"));
@@ -1577,7 +1582,7 @@
       }
 
       const bodyHTML = renderBody();
-      window.openModal({ title, bodyHTML, okLabel:"Close", onOK:()=>{}, onCancel:()=>{} });
+      window.openModal({ title, bodyHTML, okLabel:"Close", onOK:()=>{}, onCancel:()=>{}, hideCancel: true });
       setTimeout(hookButtons, 0);
     } catch (e) {
       alert("Failed to open Truck Cargo: " + (e && e.message ? e.message : "error"));
@@ -1686,7 +1691,7 @@
       }
 
       const bodyHTML = renderBody();
-      window.openModal({ title, bodyHTML, okLabel:"Close", onOK:()=>{}, onCancel:()=>{} });
+      window.openModal({ title, bodyHTML, okLabel:"Close", onOK:()=>{}, onCancel:()=>{}, hideCancel: true });
       setTimeout(hookButtons, 0);
     }catch(e){
       alert("Failed to open Cart Cargo: "+(e&&e.message?e.message:"error"));
