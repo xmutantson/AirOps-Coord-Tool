@@ -2403,6 +2403,7 @@
       // Update button based on status
       const ready = String(_state.lastStatus.status||'').toLowerCase() === 'ready';
       const loaded = String(_state.lastStatus.status||'').toLowerCase() === 'loaded';
+      const idle = String(_state.lastStatus.status||'').toLowerCase() === 'idle';
       const loadBtn = $('#wgpp-load', _state.el);
       if (loadBtn) {
         if (loaded) {
@@ -2418,6 +2419,11 @@
           loadBtn.className = 'btn btn-primary';
           loadBtn.onclick = ()=>loadPlane().catch(e=>showFriendlyError(e,{action:'load'}));
         }
+      }
+      // Hide unpin button when nothing is pinned (idle status)
+      const unpinBtn = $('#wgpp-unpin', _state.el);
+      if (unpinBtn) {
+        unpinBtn.style.display = idle ? 'none' : '';
       }
     }catch(e){ console.warn("plane/status failed", e); }
   }
