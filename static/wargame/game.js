@@ -1964,9 +1964,10 @@
       console.warn("Could not fetch manifest for paperwork:", e);
     }
 
+    const destText = destination ? ` &nbsp;→&nbsp; ${esc(destination)}` : '';
     const titleBar = `
       <div class="wg-titlebar wg-flex">
-        <div>Flight Paperwork Review</div>
+        <div>Flight Paperwork Review${destText}</div>
         <div class="wg-note">Review manifest and complete paperwork below.</div>
       </div>${manifestHTML}`;
     const iframe = `<iframe class="wg-iframe" src="/ramp_boss" title="Ramp Boss Paperwork"></iframe>`;
