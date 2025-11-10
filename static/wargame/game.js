@@ -1940,10 +1940,11 @@
   async function openRampBossPaperwork({ plane_id, onDone }){
     // Fetch plane status to get loaded manifest and destination
     let manifestHTML = '';
+    let destination = '';
     try {
       const statusData = await window.WGNet.wgPlaneStatus(plane_id);
       const manifest = (statusData && statusData.pin && statusData.pin.loaded_manifest) || [];
-      const destination = (statusData && statusData.pin && statusData.pin.destination) || '';
+      destination = (statusData && statusData.pin && statusData.pin.destination) || '';
 
       if (manifest.length > 0 || destination) {
         const items = manifest.map(ln => `${ln.qty || 1}× ${ln.display_name || ln.name || 'item'} (${ln.unit_lb || 0}lb)`).join(', ');
