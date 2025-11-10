@@ -1944,7 +1944,7 @@
     try {
       const statusData = await window.WGNet.wgPlaneStatus(plane_id);
       const manifest = (statusData && statusData.pin && statusData.pin.loaded_manifest) || [];
-      destination = (statusData && statusData.pin && statusData.pin.destination) || '';
+      destination = (statusData && statusData.destination) || '';
 
       if (manifest.length > 0 || destination) {
         const items = manifest.map(ln => `${ln.qty || 1}× ${ln.display_name || ln.name || 'item'} (${ln.unit_lb || 0}lb)`).join(', ');

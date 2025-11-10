@@ -2759,7 +2759,34 @@ def api_plane_status():
         elif pin.get("status") == "ready":
             # if cart changed and no longer exact, fall back to pinned
             pin["status"] = "pinned"
-        return jsonify({"pin": pin, "diff": diff, "status": pin.get("status")})
+
+        # Look up destination from ramp request if flight_ref contains request_id
+        destination = None
+        flight_ref = pin.get("flight_ref") or {}
+        if isinstance(flight_ref, dict) and "request_id" in flight_ref:
+            rid = flight_ref.get("request_id")
+            if rid is not None:
+                try:
+                    # Try in-memory STATE first
+                    reqs = list(STATE["adapters"].get("queues", {}).get("requests", []))
+                    for r in reqs:
+                        if int(r.get("id") or 0) == int(rid):
+                            destination = r.get("destination")
+                            break
+                    # DB fallback if not found in STATE
+                    if not destination:
+                        with _connect_sqlite() as c:
+                            cur = c.execute(
+                                "SELECT destination FROM wargame_ramp_requests WHERE id = ?",
+                                (int(rid),)
+                            )
+                            row = cur.fetchone()
+                            if row:
+                                destination = row["destination"]
+                except Exception:
+                    pass
+
+        return jsonify({"pin": pin, "diff": diff, "status": pin.get("status"), "destination": destination})
 
 # 4) POST /api/wargame/plane/load
 @bp.post("/api/wargame/plane/load")
