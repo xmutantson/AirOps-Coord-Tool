@@ -47,7 +47,22 @@ Thumbs.db
 
 # ---- Project-specific ----
 flask_secret.txt
-# legacy helper script you don't want tracked
+graph.json
+
+#outside databases
+airports.csv
+
+#offlined vendor libraries
+static/vendor/phaser/phaser.min.js
+static/vendor/leaflet/leaflet-src.js
+static/vendor/leaflet/leaflet-src.esm.js
+static/vendor/leaflet/leaflet-src.js.map
+static/vendor/leaflet/leaflet-src.esm.js.map
+static/vendor/leaflet/leaflet.js
+static/vendor/leaflet/leaflet.js.map
+static/js/zxing.min.js
+
+# legacy helper script
 winlink.py
 # Docker installation script (downloaded once, not needed in repo)
 get-docker.sh

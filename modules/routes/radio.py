@@ -24,8 +24,6 @@ from modules.utils.common import _start_radio_tx_once, maybe_extract_flight_code
 from modules.utils.common import canonical_airport_code
 from modules.utils.comms import insert_comm
 from modules.services.jobs import _parse_aoct_flight_reply
-from modules.routes.ramp import try_satisfy_ramp_request
-from modules.routes.wargame_api import _plane_pin_clear_by_flight_ref
 
 # --- IMPORTANT ---
 # The star import above brings in a DB-only fallback wargame_task_finish that returns None
@@ -1397,16 +1395,9 @@ def mark_sent(fid=None, flight_id=None):
 
     # finalize SLA — reaching here means this call performed the 0→1 transition
     try:
-        row = dict_rows("SELECT * FROM flights WHERE id=?", (fid,))
+        row = dict_rows("SELECT direction FROM flights WHERE id=?", (fid,))
         if row and (row[0]['direction'] == 'outbound'):
             wargame_finish_radio_outbound(fid)
-            # Check if this outbound satisfies any pending ramp requests
-            try_satisfy_ramp_request(row[0])
-            # Mark plane panel as complete if this flight was loaded from a plane
-            try:
-                _plane_pin_clear_by_flight_ref(f"flight:{fid}")
-            except Exception:
-                pass
         else:
             # inbound: this is the landing confirmation being sent
             wargame_task_finish('radio','landing', key=f"flight:{fid}")

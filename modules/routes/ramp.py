@@ -25,6 +25,13 @@ except Exception:
     _WARGAME_STATE = None
     _WARGAME_LOCK = None
 
+# Plane pin clearing helper — soft import (to mark plane panel as complete)
+try:
+    from modules.routes.wargame_api import _plane_pin_clear_by_flight_ref
+except Exception:
+    def _plane_pin_clear_by_flight_ref(flight_ref: str) -> bool:
+        return False
+
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
 
 
@@ -1180,6 +1187,16 @@ def send_queued_flight(qid):
 
         # delete the draft record
         c.execute("DELETE FROM queued_flights WHERE id=?", (qid,))
+
+    # Check if this outbound satisfies any pending ramp requests
+    row = dict_rows("SELECT * FROM flights WHERE id=?", (fid,))
+    if row:
+        try_satisfy_ramp_request(row[0])
+        # Mark plane panel as complete if this flight was loaded from a plane
+        try:
+            _plane_pin_clear_by_flight_ref(f"flight:{fid}")
+        except Exception:
+            pass
 
     # Prefer flight_code in success message; fall back to 'TBD' if absent
     try:
