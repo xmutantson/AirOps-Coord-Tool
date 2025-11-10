@@ -1997,7 +1997,10 @@
           alert("Paperwork completion failed: "+(e&&e.message?e.message:"error"));
         }
       },
-      onCancel: ()=>{}
+      onCancel: ()=>{
+        // Refresh requests list when modal is closed without completing
+        onDone && onDone();
+      }
     });
   }
 
