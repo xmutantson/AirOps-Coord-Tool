@@ -1068,6 +1068,19 @@ def _plane_pin_clear(plane_id: str) -> None:
             "paperwork": {"url": None, "html_path": None, "pdf_path": None},
         }
 
+def _plane_pin_clear_by_flight_ref(flight_ref: str) -> bool:
+    """
+    Find and clear any plane that has the given flight_ref.
+    Returns True if a plane was found and cleared, False otherwise.
+    """
+    with LOCK:
+        pins = STATE.setdefault("plane_pins", {})
+        for plane_id, pin in pins.items():
+            if pin.get("flight_ref") == flight_ref:
+                _plane_pin_clear(plane_id)
+                return True
+        return False
+
 def _cart_aggregate_lines(cart: dict) -> Dict[str, int]:
     """
     Aggregate a cart's lines into { key(name|unit|size) -> qty }.
