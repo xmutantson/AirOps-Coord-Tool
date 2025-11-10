@@ -2420,11 +2420,6 @@
           loadBtn.onclick = ()=>loadPlane().catch(e=>showFriendlyError(e,{action:'load'}));
         }
       }
-      // Hide unpin button when nothing is pinned (idle status)
-      const unpinBtn = $('#wgpp-unpin', _state.el);
-      if (unpinBtn) {
-        unpinBtn.style.display = idle ? 'none' : '';
-      }
     }catch(e){ console.warn("plane/status failed", e); }
   }
 
@@ -2456,9 +2451,9 @@
         plane_id,
         onDone: async () => {
           // Refresh panel to show updated state after paperwork completion
-          await checkStatus();
           const {requests, origin} = await fetchRequests().catch(()=>({requests:[], origin:'—'}));
           renderRequestsTable(_state.el, requests, origin);
+          await checkStatus();
         }
       });
     }
@@ -2473,9 +2468,9 @@
         plane_id,
         onDone: async () => {
           // Refresh panel to show updated state after paperwork completion
-          await checkStatus();
           const {requests, origin} = await fetchRequests().catch(()=>({requests:[], origin:'—'}));
           renderRequestsTable(_state.el, requests, origin);
+          await checkStatus();
         }
       });
     } else {
