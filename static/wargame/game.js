@@ -2209,14 +2209,21 @@
 
   // Table: Request list (destination, item_count, requested_weight, Pin)
   function renderRequestsTable(el, requests, origin){
+    console.log('[PlanePanel] renderRequestsTable called with el:', el, 'requests:', requests?.length, 'origin:', origin);
     const tbody = $('#wgpp-requests-body', el) || $('#wgpp-flights-body', el); // fallback to old id if template not updated
-    if (!tbody) return;
+    console.log('[PlanePanel] Found tbody element:', tbody);
+    if (!tbody) {
+      console.error('[PlanePanel] No tbody element found! Cannot render requests table.');
+      return;
+    }
     tbody.innerHTML = "";
     if (!requests.length){
+      console.log('[PlanePanel] No requests to display');
       tbody.innerHTML = `<tr><td colspan="4" class="wg-muted" style="padding:.6rem">No open requests.</td></tr>`;
       return;
     }
     origin = origin || '—';
+    console.log('[PlanePanel] Rendering', requests.length, 'requests');
     for (const r of requests){
       const dest   = r.destination || r.airfield_to || r.to || '—';
       const id     = r.id ?? r.request_id ?? r.req_id;
@@ -2233,6 +2240,7 @@
       };
       tbody.appendChild(tr);
     }
+    console.log('[PlanePanel] Finished rendering requests table. tbody.children.length:', tbody.children.length);
   }
 
   function renderCarts(el, carts){
@@ -2450,10 +2458,16 @@
       window.WG_UI.openRampBossPaperwork({
         plane_id,
         onDone: async () => {
+          console.log('[PlanePanel] onDone callback triggered after paperwork');
+          console.log('[PlanePanel] _state.el:', _state.el);
+          console.log('[PlanePanel] _state.open:', _state.open);
           // Refresh panel to show updated state after paperwork completion
-          const {requests, origin} = await fetchRequests().catch(()=>({requests:[], origin:'—'}));
+          const {requests, origin} = await fetchRequests().catch((e)=>{console.error('[PlanePanel] fetchRequests error:', e); return {requests:[], origin:'—'};});
+          console.log('[PlanePanel] Fetched requests:', requests.length, 'origin:', origin);
           renderRequestsTable(_state.el, requests, origin);
+          console.log('[PlanePanel] After renderRequestsTable, calling checkStatus...');
           await checkStatus();
+          console.log('[PlanePanel] checkStatus complete');
         }
       });
     }
@@ -2467,10 +2481,16 @@
       window.WG_UI.openRampBossPaperwork({
         plane_id,
         onDone: async () => {
+          console.log('[PlanePanel] paperworkDone onDone callback triggered');
+          console.log('[PlanePanel] _state.el:', _state.el);
+          console.log('[PlanePanel] _state.open:', _state.open);
           // Refresh panel to show updated state after paperwork completion
-          const {requests, origin} = await fetchRequests().catch(()=>({requests:[], origin:'—'}));
+          const {requests, origin} = await fetchRequests().catch((e)=>{console.error('[PlanePanel] fetchRequests error:', e); return {requests:[], origin:'—'};});
+          console.log('[PlanePanel] Fetched requests:', requests.length, 'origin:', origin);
           renderRequestsTable(_state.el, requests, origin);
+          console.log('[PlanePanel] After renderRequestsTable, calling checkStatus...');
           await checkStatus();
+          console.log('[PlanePanel] checkStatus complete');
         }
       });
     } else {
