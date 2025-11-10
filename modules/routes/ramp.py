@@ -26,6 +26,67 @@ except Exception:
     _WARGAME_LOCK = None
 
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
+
+
+def try_satisfy_ramp_request(flight_row: dict) -> None:
+    """
+    Check if an outbound flight satisfies a pending ramp request.
+    If so, mark the request as satisfied in both DB and STATE.
+
+    Criteria: destination match, weight >= requested, direction=outbound
+    """
+    if flight_row.get('direction') != 'outbound':
+        return
+
+    try:
+        # Compute numeric weight (prefer REAL column if present)
+        wt = flight_row.get('cargo_weight_real')
+        if wt is None:
+            cw = (flight_row.get('cargo_weight') or '').lower()
+            if cw.endswith('lbs'): cw = cw[:-3]
+            if cw.endswith('lb'):  cw = cw[:-2]
+            wt = float(cw.strip() or 0)
+
+        # Find oldest open request with same destination and <= weight
+        req = dict_rows("""
+          SELECT id, requested_weight, created_at
+            FROM wargame_ramp_requests
+           WHERE satisfied_at IS NULL
+             AND destination = ?
+           ORDER BY created_at ASC
+           LIMIT 1
+        """, (flight_row['airfield_landing'],))
+
+        if req and wt >= float(req[0]['requested_weight'] or 0):
+            rid     = req[0]['id']
+            now_iso = datetime.utcnow().isoformat()
+            tail    = flight_row['tail_number']
+
+            with sqlite3.connect(DB_FILE) as c:
+                c.execute("""
+                  UPDATE wargame_ramp_requests
+                     SET satisfied_at=?, assigned_tail=?
+                   WHERE id=?
+                """, (now_iso, tail, rid))
+
+                # Record the *actual* SLA latency
+                created_dt = datetime.fromisoformat(req[0]['created_at'])
+                delta = (datetime.utcnow() - created_dt).total_seconds()
+                c.execute("""
+                  INSERT INTO wargame_metrics(event_type, delta_seconds, recorded_at, key)
+                  VALUES ('ramp', ?, ?, ?)
+                """, (delta, now_iso, f"rampreq:{rid}"))
+
+            # Also remove from wargame STATE so it doesn't reappear (STATE overrides DB)
+            if _WARGAME_STATE is not None and _WARGAME_LOCK is not None:
+                with _WARGAME_LOCK:
+                    queues = _WARGAME_STATE.get("adapters", {}).get("queues", {})
+                    reqs = queues.get("requests", [])
+                    queues["requests"] = [r for r in reqs if int(r.get("id") or 0) != int(rid)]
+    except Exception:
+        pass
+
+
 from modules.utils.common import parse_adv_manifest, guess_category_id_for_name, new_manifest_session_id, sanitize_name, \
     get_pilot_ack_for_flight, set_pilot_ack_for_flight
 from app import publish_inventory_event
@@ -498,49 +559,7 @@ def ramp_boss():
         # fetch it back in full
         row = dict_rows("SELECT * FROM flights WHERE id=?", (fid,))[0]
         # If this outbound satisfies a Ramp Request, mark it satisfied
-        if row.get('direction') == 'outbound':
-            try:
-                # compute numeric weight (prefer REAL column if present)
-                wt = row.get('cargo_weight_real')
-                if wt is None:
-                    cw = (row.get('cargo_weight') or '').lower()
-                    if cw.endswith('lbs'): cw = cw[:-3]
-                    if cw.endswith('lb'):  cw = cw[:-2]
-                    wt = float(cw.strip() or 0)
-                # find oldest open request with same destination and <= weight
-                req = dict_rows("""
-                  SELECT id, requested_weight, created_at
-                    FROM wargame_ramp_requests
-                   WHERE satisfied_at IS NULL
-                     AND destination = ?
-                   ORDER BY created_at ASC
-                   LIMIT 1
-                """, (row['airfield_landing'],))
-                if req and wt >= float(req[0]['requested_weight'] or 0):
-                    rid     = req[0]['id']
-                    now_iso = datetime.utcnow().isoformat()
-                    tail    = row['tail_number']
-                    with sqlite3.connect(DB_FILE) as c:
-                        c.execute("""
-                          UPDATE wargame_ramp_requests
-                             SET satisfied_at=?, assigned_tail=?
-                           WHERE id=?
-                        """, (now_iso, tail, rid))
-                        # record the *actual* SLA latency
-                        created_dt = datetime.fromisoformat(req[0]['created_at'])
-                        delta = (datetime.utcnow() - created_dt).total_seconds()
-                        c.execute("""
-                          INSERT INTO wargame_metrics(event_type, delta_seconds, recorded_at, key)
-                          VALUES ('ramp', ?, ?, ?)
-                        """, (delta, now_iso, f"rampreq:{rid}"))
-                    # Also remove from wargame STATE so it doesn't reappear (STATE overrides DB)
-                    if _WARGAME_STATE is not None and _WARGAME_LOCK is not None:
-                        with _WARGAME_LOCK:
-                            queues = _WARGAME_STATE.get("adapters", {}).get("queues", {})
-                            reqs = queues.get("requests", [])
-                            queues["requests"] = [r for r in reqs if int(r.get("id") or 0) != int(rid)]
-            except Exception:
-                pass
+        try_satisfy_ramp_request(row)
         row['action'] = action
 
         # if this was XHR (our AJAX), return JSON instead of redirect:
