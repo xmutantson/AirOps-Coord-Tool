@@ -1,5 +1,12 @@
 # ... existing code ...
 
+# Import required modules and functions
+from flask import Blueprint, request, jsonify
+from app import LOCK, STATE
+from modules.routes.wargame_api import _plane_pin_clear, _canon_plane_id_or_none, _ensure_session, _plane_pin_get, _append_claim, _make_claim
+
+# ... existing code ...
+
 def _plane_pin_clear_by_flight_ref(flight_ref: str) -> bool:
     """
     Find and clear any plane that has the given flight_ref.
