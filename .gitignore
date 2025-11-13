@@ -36,6 +36,9 @@ Thumbs.db
 .idea/
 # .vscode/ — tracked for build scripts, but user-specific settings can be ignored:
 .vscode/settings.json
+.aider* 
+aid.cmd
+aid.ps1
 
 # ---- Backups & scratch ----
 *.bak
