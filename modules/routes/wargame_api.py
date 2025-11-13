@@ -615,6 +615,7 @@ STATE = {
     # session_id -> ordered list of claim dicts
     "claims": {},
     "plane_pins": {},   # NEW: plane_id → pin state (see helpers below)
+    "deliveries": {"next_delivery_num": 1, "completed": {}},  # Tracks incoming deliveries: delivery_num → {flight_id, tail, timestamp, ...}
 }
 
 # --- Helpers -----------------------------------------------------------------
@@ -1066,6 +1067,49 @@ def _plane_pin_clear(plane_id: str) -> None:
             "cart_id": None,
             "loaded_manifest": [],
             "paperwork": {"url": None, "html_path": None, "pdf_path": None},
+        }
+
+def _get_cart_for_plane(plane_id: str) -> str:
+    """
+    Return the cart ID associated with this plane.
+    plane:0 → cart:0 (north)
+    plane:1 → cart:1 (south)
+    """
+    try:
+        pid = int(str(plane_id).replace("plane:", "").replace("#", ""))
+        if pid == 0:
+            return "cart:0"
+        elif pid == 1:
+            return "cart:1"
+        else:
+            return "cart:0"  # default fallback
+    except Exception:
+        return "cart:0"
+
+def _generate_delivery_number() -> str:
+    """
+    Generate next delivery tracking number (D-0001, D-0002, etc.)
+    Thread-safe via LOCK.
+    """
+    with LOCK:
+        deliveries = STATE.setdefault("deliveries", {"next_delivery_num": 1, "completed": {}})
+        num = deliveries.get("next_delivery_num", 1)
+        deliveries["next_delivery_num"] = num + 1
+        return f"D-{num:04d}"
+
+def _record_delivery(delivery_num: str, flight_id: int, tail: str, origin: str, cargo_weight: float, cargo_type: str) -> None:
+    """
+    Record a completed delivery in STATE.
+    """
+    with LOCK:
+        deliveries = STATE.setdefault("deliveries", {"next_delivery_num": 1, "completed": {}})
+        deliveries["completed"][delivery_num] = {
+            "flight_id": flight_id,
+            "tail": tail,
+            "origin": origin,
+            "cargo_weight": cargo_weight,
+            "cargo_type": cargo_type,
+            "timestamp": _utc_iso(),
         }
 
 def _plane_pin_clear_by_flight_ref(flight_ref: str) -> bool:
@@ -2882,6 +2926,195 @@ def api_plane_paperwork_complete():
         # return plane to idle and clear selection
         _plane_pin_clear(plane_id)
         return jsonify({"ok": True, "pin": _plane_pin_get(plane_id)})
+
+# 5b) POST /api/wargame/plane/pin_arrival - Pin an incoming flight to plane 1
+@bp.post("/api/wargame/plane/pin_arrival")
+def api_plane_pin_arrival():
+    """
+    Pin an incoming flight to a plane (typically plane 1 for arrivals).
+    Similar to pin_request but for inbound flights.
+    """
+    data = request.get_json(force=True) or {}
+    plane_id   = _canon_plane_id_or_none(data.get("plane_id"))
+    if not plane_id:
+        return jsonify({"error": "bad_plane_id"}), 400
+    flight_id = int(data.get("flight_id") or 0)
+    if not flight_id:
+        return jsonify({"error": "bad_flight_id"}), 400
+    session_id = int(data.get("session_id") or 1)
+    player_id  = int(data.get("player_id") or 0)
+
+    # Fetch flight details from database
+    with _connect_sqlite() as c:
+        cur = c.execute(
+            "SELECT id, tail_number, airfield_takeoff, cargo_type, cargo_weight, remarks FROM flights WHERE id = ?",
+            (flight_id,)
+        )
+        flight = cur.fetchone()
+        if not flight:
+            return jsonify({"error": "flight_not_found"}), 404
+
+    # Parse manifest from remarks (advanced manifest format)
+    remarks = flight["remarks"] or ""
+    required = []
+    try:
+        manifest = parse_adv_manifest(remarks)
+        if manifest:
+            required = manifest
+    except Exception:
+        pass
+
+    # If no advanced manifest, create a generic entry based on cargo_type and weight
+    if not required:
+        cargo_type = flight["cargo_type"] or "Mixed"
+        cargo_weight = float(flight["cargo_weight"] or 0)
+        if cargo_weight > 0:
+            # Estimate box size based on weight
+            if cargo_weight <= 50:
+                size = "M"
+            elif cargo_weight <= 100:
+                size = "L"
+            else:
+                size = "XL"
+            required = [{
+                "display_name": cargo_type,
+                "unit_lb": cargo_weight,
+                "size": size,
+                "qty": 1
+            }]
+
+    with LOCK:
+        _ensure_session(session_id)
+        pin = _plane_pin_get(plane_id)
+
+        # Update pin state
+        pin["flight_ref"] = {"flight_id": flight_id}
+        pin["pinned_by"] = player_id
+        pin["pinned_at"] = _utc_iso()
+        pin["status"] = "arrival_pinned"
+        pin["required"] = required
+        pin["cart_id"] = _get_cart_for_plane(plane_id)
+
+        # Telemetry
+        try:
+            _append_claim(session_id, _make_claim(
+                "arrival_pinned",
+                plane_id=plane_id,
+                player_id=player_id,
+                flight_ref=pin["flight_ref"]
+            ))
+        except Exception:
+            pass
+
+    return jsonify({"ok": True, "pin": _plane_pin_get(plane_id)})
+
+# 5c) POST /api/wargame/plane/arrival_complete - Complete arrival paperwork and unload to cart
+@bp.post("/api/wargame/plane/arrival_complete")
+def api_plane_arrival_complete():
+    """
+    Mark an arrival as complete:
+    - Generate delivery number
+    - Load cargo onto cart 1 (or appropriate cart for plane)
+    - Mark flight as complete
+    - Clear plane pin
+    """
+    data = request.get_json(force=True) or {}
+    plane_id   = _canon_plane_id_or_none(data.get("plane_id"))
+    if not plane_id:
+        return jsonify({"error": "bad_plane_id"}), 400
+    session_id = int(data.get("session_id") or 1)
+    player_id  = int(data.get("player_id") or 0)
+
+    with LOCK:
+        _ensure_session(session_id)
+        pin = _plane_pin_get(plane_id)
+
+        if pin.get("status") != "arrival_pinned":
+            return jsonify({"error": "not_pinned_arrival"}), 400
+
+        flight_ref = pin.get("flight_ref") or {}
+        flight_id = flight_ref.get("flight_id")
+        if not flight_id:
+            return jsonify({"error": "no_flight_ref"}), 400
+
+        # Fetch flight details
+        with _connect_sqlite() as c:
+            cur = c.execute(
+                "SELECT id, tail_number, airfield_takeoff, cargo_type, cargo_weight, remarks FROM flights WHERE id = ?",
+                (flight_id,)
+            )
+            flight = cur.fetchone()
+            if not flight:
+                return jsonify({"error": "flight_not_found"}), 404
+
+        # Generate delivery number
+        delivery_num = _generate_delivery_number()
+
+        # Record delivery
+        _record_delivery(
+            delivery_num,
+            flight_id,
+            flight["tail_number"] or "Unknown",
+            flight["airfield_takeoff"] or "Unknown",
+            float(flight["cargo_weight"] or 0),
+            flight["cargo_type"] or "Mixed"
+        )
+
+        # Load cargo onto the appropriate cart
+        cart_id = _get_cart_for_plane(plane_id)
+        carts = STATE["carts"].get(session_id, [])
+        cart = next((c for c in carts if c.get("id") == cart_id), None)
+
+        if cart:
+            # Add items from the manifest to the cart
+            manifest = pin.get("required", [])
+            for item in manifest:
+                display_name = item.get("display_name", "")
+                unit_lb = float(item.get("unit_lb", 0))
+                size = item.get("size", "M")
+                qty = int(item.get("qty", 0))
+
+                if display_name and qty > 0:
+                    # Add to cart contents
+                    contents = cart.setdefault("contents", {})
+                    # Use simplified contents structure: {category: {size: count}}
+                    # For incoming cargo, use "box" as category
+                    box_bins = contents.setdefault("box", {})
+                    box_bins[size] = box_bins.get(size, 0) + qty
+
+        # Mark flight as complete in database
+        with _connect_sqlite() as c:
+            c.execute("UPDATE flights SET complete = 1 WHERE id = ?", (flight_id,))
+            c.commit()
+
+            # Also mark wargame task as complete
+            tasks_table = _guess_tasks_table(c)
+            c.execute(
+                f"UPDATE {tasks_table} SET complete = 1 WHERE role = 'ramp' AND kind = 'inbound' AND key = ?",
+                (f"flight:{flight_id}",)
+            )
+            c.commit()
+
+        # Telemetry
+        try:
+            _append_claim(session_id, _make_claim(
+                "arrival_complete",
+                plane_id=plane_id,
+                player_id=player_id,
+                flight_ref=pin["flight_ref"],
+                delivery_num=delivery_num
+            ))
+        except Exception:
+            pass
+
+        # Clear plane pin
+        _plane_pin_clear(plane_id)
+
+        return jsonify({
+            "ok": True,
+            "delivery_num": delivery_num,
+            "pin": _plane_pin_get(plane_id)
+        })
 
 # 6) POST /api/wargame/plane/unselect  (restored from v1)
 @bp.post("/api/wargame/plane/unselect")

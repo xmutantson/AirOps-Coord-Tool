@@ -2004,7 +2004,96 @@
     });
   }
 
-  window.WG_UI = { openTruckCargo, openCartCargo, openStockpileLogging, openStockpileInventory, openTruckShippingLogging, openRampBossPaperwork };
+  async function openArrivalPaperwork({ plane_id, flight_id, onDone }){
+    // Fetch flight details to show in the paperwork modal
+    let manifestHTML = '';
+    let tail = '';
+    let origin = '';
+    let cargo = '';
+    let deliveryNum = 'Processing...';
+
+    try {
+      const r = await fetch(`/api/wargame/flight/${encodeURIComponent(flight_id)}`, { credentials:'same-origin' });
+      const j = await r.json().catch(()=>({}));
+      if (j && j.flight) {
+        const flight = j.flight;
+        tail = flight.tail_number || 'Unknown';
+        origin = flight.airfield_takeoff || 'Unknown';
+        cargo = `${flight.cargo_weight || 0} lb ${flight.cargo_type || 'Mixed'}`;
+
+        // Try to parse advanced manifest from remarks
+        const remarks = flight.remarks || '';
+        let manifest = [];
+        try {
+          // Attempt to parse as JSON advanced manifest
+          const parsed = JSON.parse(remarks);
+          if (Array.isArray(parsed)) {
+            manifest = parsed;
+          }
+        } catch(e) {
+          // Not JSON, ignore
+        }
+
+        if (manifest.length > 0) {
+          const items = manifest.map(ln => `${ln.qty || 1}× ${ln.display_name || ln.name || 'item'} (${ln.unit_lb || 0}lb)`).join(', ');
+          manifestHTML = `<div class="wg-note" style="margin-top:0.5rem; padding:0.5rem; background:rgba(11,92,255,0.1); border-left:3px solid #0b5cff;"><strong>Cargo Manifest:</strong> ${esc(items)}</div>`;
+        } else {
+          manifestHTML = `<div class="wg-note" style="margin-top:0.5rem; padding:0.5rem; background:rgba(11,92,255,0.1); border-left:3px solid #0b5cff;"><strong>Cargo:</strong> ${esc(cargo)}</div>`;
+        }
+      }
+    } catch(e) {
+      console.warn("Could not fetch flight details for arrival paperwork:", e);
+    }
+
+    const titleBar = `
+      <div class="wg-titlebar wg-flex">
+        <div>Arrival Paperwork Review</div>
+        <div class="wg-note">Review arrival details and complete paperwork below.</div>
+      </div>
+      <div class="wg-note" style="margin-top:0.5rem; padding:0.5rem; background:rgba(50,50,50,0.3); border-left:3px solid #666;">
+        <strong>Tail #:</strong> ${esc(tail)} &nbsp;|&nbsp; <strong>Origin:</strong> ${esc(origin)}
+      </div>${manifestHTML}`;
+    const iframe = `<iframe class="wg-iframe" src="/wargame/ramp" title="Arrival Paperwork"></iframe>`;
+    const bodyHTML = `${titleBar}${iframe}`;
+
+    window.openModal({
+      title: "",
+      bodyHTML,
+      okLabel: "Mark Arrival Complete",
+      onOK: async ()=>{
+        try{
+          const payload = {
+            plane_id,
+            session_id: (window.WG_SESSION_ID ?? 1),
+            player_id: (window.WG_PLAYER_ID ?? null)
+          };
+          const r = await fetch('/api/wargame/plane/arrival_complete', {
+            method:'POST',
+            credentials:'same-origin',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify(payload)
+          });
+          const j = await r.json().catch(()=>({}));
+          if (!r.ok){ throw j; }
+
+          // Show delivery number in success message
+          if (j.delivery_num) {
+            alert(`Arrival complete! Delivery #${j.delivery_num}`);
+          }
+
+          onDone && onDone();
+        }catch(e){
+          alert("Arrival completion failed: "+(e&&e.message?e.message:"error"));
+        }
+      },
+      onCancel: ()=>{
+        // Refresh incoming flights list when modal is closed without completing
+        onDone && onDone();
+      }
+    });
+  }
+
+  window.WG_UI = { openTruckCargo, openCartCargo, openStockpileLogging, openStockpileInventory, openTruckShippingLogging, openRampBossPaperwork, openArrivalPaperwork };
 })();
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2147,6 +2236,31 @@
       origin: j.origin || '—'
     };
   }
+  async function fetchIncomingFlights(){
+    const r = await fetch('/api/wargame/inbound_flights', { credentials:'same-origin' });
+    const j = await r.json().catch(()=>({}));
+    return Array.isArray(j.flights) ? j.flights : [];
+  }
+  async function pinArrival(flightId){
+    const plane_id = _state.plane_id;
+    if (plane_id == null){ _noSelectionModal(); return; }
+    const payload = {
+      plane_id,
+      flight_id: flightId,
+      session_id: (window.WG_SESSION_ID ?? 1),
+      player_id:  (window.WG_PLAYER_ID ?? null)
+    };
+    const r = await fetch('/api/wargame/plane/pin_arrival', {
+      method:'POST', credentials:'same-origin',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    if (!r.ok){
+      const err = await r.json().catch(()=>({message:`HTTP ${r.status}`}));
+      throw err;
+    }
+    await checkStatus();
+  }
   async function pinRequest(reqId){
     const plane_id = _state.plane_id;
     if (plane_id == null){ _noSelectionModal(); return; }
@@ -2241,6 +2355,61 @@
       tbody.appendChild(tr);
     }
     console.log('[PlanePanel] Finished rendering requests table. tbody.children.length:', tbody.children.length);
+  }
+
+  // Table: Incoming flights list (tail, origin, cargo, Process Arrival)
+  function renderIncomingFlightsTable(el, flights){
+    console.log('[PlanePanel] renderIncomingFlightsTable called with el:', el, 'flights:', flights?.length);
+    const tbody = $('#wgpp-requests-body', el) || $('#wgpp-flights-body', el);
+    console.log('[PlanePanel] Found tbody element:', tbody);
+    if (!tbody) {
+      console.error('[PlanePanel] No tbody element found! Cannot render incoming flights table.');
+      return;
+    }
+    tbody.innerHTML = "";
+    if (!flights.length){
+      console.log('[PlanePanel] No incoming flights to display');
+      tbody.innerHTML = `<tr><td colspan="4" class="wg-muted" style="padding:.6rem">No incoming flights.</td></tr>`;
+      return;
+    }
+    console.log('[PlanePanel] Rendering', flights.length, 'incoming flights');
+    for (const f of flights){
+      const tail   = f.tail_number || '—';
+      const origin = f.airfield_takeoff || '—';
+      const cargo  = `${f.cargo_weight || 0} lb ${f.cargo_type || 'Mixed'}`;
+      const id     = f.id;
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="wg-mono">${esc(id)}</td>
+        <td>${esc(tail)}</td>
+        <td>${esc(origin)}</td>
+        <td style="text-align:right;">
+          <button data-id="${esc(id)}" class="btn btn-primary">Process Arrival</button>
+        </td>`;
+      $('button', tr).onclick = async ()=>{
+        try {
+          await pinArrival(id);
+          // Auto-open arrival paperwork modal
+          if (window.WG_UI && typeof window.WG_UI.openArrivalPaperwork === 'function'){
+            window.WG_UI.openArrivalPaperwork({
+              plane_id: _state.plane_id,
+              flight_id: id,
+              onDone: async () => {
+                console.log('[PlanePanel] Arrival paperwork completed');
+                // Refresh incoming flights list
+                const incomingFlights = await fetchIncomingFlights().catch(()=>[]);
+                renderIncomingFlightsTable(el, incomingFlights);
+                await checkStatus();
+              }
+            });
+          }
+        } catch(e){
+          showFriendlyError(e, { action:'process_arrival' });
+        }
+      };
+      tbody.appendChild(tr);
+    }
+    console.log('[PlanePanel] Finished rendering incoming flights table. tbody.children.length:', tbody.children.length);
   }
 
   function renderCarts(el, carts){
@@ -2461,6 +2630,12 @@
           console.log('[PlanePanel] onDone callback triggered after paperwork');
           console.log('[PlanePanel] _state.el:', _state.el);
           console.log('[PlanePanel] _state.open:', _state.open);
+          // Ensure requests column is visible (old code may have hidden it)
+          const requestsCol = $('#wgpp-requests-col', _state.el);
+          if (requestsCol) {
+            requestsCol.style.display = '';
+            console.log('[PlanePanel] Unhid requests column');
+          }
           // Refresh panel to show updated state after paperwork completion
           const {requests, origin} = await fetchRequests().catch((e)=>{console.error('[PlanePanel] fetchRequests error:', e); return {requests:[], origin:'—'};});
           console.log('[PlanePanel] Fetched requests:', requests.length, 'origin:', origin);
@@ -2484,6 +2659,12 @@
           console.log('[PlanePanel] paperworkDone onDone callback triggered');
           console.log('[PlanePanel] _state.el:', _state.el);
           console.log('[PlanePanel] _state.open:', _state.open);
+          // Ensure requests column is visible (old code may have hidden it)
+          const requestsCol = $('#wgpp-requests-col', _state.el);
+          if (requestsCol) {
+            requestsCol.style.display = '';
+            console.log('[PlanePanel] Unhid requests column');
+          }
           // Refresh panel to show updated state after paperwork completion
           const {requests, origin} = await fetchRequests().catch((e)=>{console.error('[PlanePanel] fetchRequests error:', e); return {requests:[], origin:'—'};});
           console.log('[PlanePanel] Fetched requests:', requests.length, 'origin:', origin);
@@ -2545,9 +2726,25 @@
       _state = { open:true, plane_id: plane_id, pinnedRequestId:null, selectedCart:null, lastStatus:null, el, _statusTimer:null };
       initWargamePanel(el);
 
-      // Populate left column with requests
-      const {requests, origin} = await fetchRequests();
-      renderRequestsTable(el, requests, origin);
+      // Populate left column based on plane_id
+      // Plane 0 = Outbound requests, Plane 1 = Incoming flights
+      if (plane_id === 1 || plane_id === "1" || plane_id === "plane:1") {
+        // Plane 1: Show incoming flights (arrivals)
+        const incomingFlights = await fetchIncomingFlights().catch(()=>[]);
+        $('#wgpp-requests-title', el).textContent = 'Incoming Flights';
+        // Update table header for arrivals
+        const colA = $('#wgpp-col-a', el);
+        const colB = $('#wgpp-col-b', el);
+        const colC = $('#wgpp-col-c', el);
+        if (colA) colA.textContent = 'Flight #';
+        if (colB) colB.textContent = 'Tail #';
+        if (colC) colC.textContent = 'Origin';
+        renderIncomingFlightsTable(el, incomingFlights);
+      } else {
+        // Plane 0 (or any other): Show outbound requests
+        const {requests, origin} = await fetchRequests();
+        renderRequestsTable(el, requests, origin);
+      }
 
       // Remove/hide the cart selector section from the template if present.
       // We support a few likely structures; safe no-ops if not found.
