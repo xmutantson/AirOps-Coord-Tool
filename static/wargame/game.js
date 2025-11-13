@@ -2461,6 +2461,12 @@
           console.log('[PlanePanel] onDone callback triggered after paperwork');
           console.log('[PlanePanel] _state.el:', _state.el);
           console.log('[PlanePanel] _state.open:', _state.open);
+          // Ensure requests column is visible (old code may have hidden it)
+          const requestsCol = $('#wgpp-requests-col', _state.el);
+          if (requestsCol) {
+            requestsCol.style.display = '';
+            console.log('[PlanePanel] Unhid requests column');
+          }
           // Refresh panel to show updated state after paperwork completion
           const {requests, origin} = await fetchRequests().catch((e)=>{console.error('[PlanePanel] fetchRequests error:', e); return {requests:[], origin:'—'};});
           console.log('[PlanePanel] Fetched requests:', requests.length, 'origin:', origin);
@@ -2484,6 +2490,12 @@
           console.log('[PlanePanel] paperworkDone onDone callback triggered');
           console.log('[PlanePanel] _state.el:', _state.el);
           console.log('[PlanePanel] _state.open:', _state.open);
+          // Ensure requests column is visible (old code may have hidden it)
+          const requestsCol = $('#wgpp-requests-col', _state.el);
+          if (requestsCol) {
+            requestsCol.style.display = '';
+            console.log('[PlanePanel] Unhid requests column');
+          }
           // Refresh panel to show updated state after paperwork completion
           const {requests, origin} = await fetchRequests().catch((e)=>{console.error('[PlanePanel] fetchRequests error:', e); return {requests:[], origin:'—'};});
           console.log('[PlanePanel] Fetched requests:', requests.length, 'origin:', origin);
