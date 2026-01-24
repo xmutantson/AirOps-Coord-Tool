@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep:*)",
+      "Bash(wc:*)",
+      "Bash(find:*)",
+      "Bash(docker --version:*)",
+      "Bash(cmd.exe /c \"docker --version\")",
+      "Bash(wsl -d Ubuntu-22.04 -- which docker:*)",
+      "Bash(wsl -d Ubuntu-22.04 -- docker:*)",
+      "Bash(wsl -d Ubuntu-22.04 -- bash -c \"cd /mnt/x/Storage/Documents/air-ops-vscode/AirOps-Coord-Tool && bash .vscode/docker-build.sh\")",
+      "Bash(wsl:*)",
+      "Bash(powershell -c \"Get-Content ''C:\\\\Users\\\\kamer\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\x--Storage-Documents-air-ops-vscode-AirOps-Coord-Tool\\\\tasks\\\\b971a0a.output'' | Select-Object -Last 30\")",
+      "Bash(powershell -c:*)",
+      "Bash(curl:*)",
+      "Bash(ping:*)",
+      "Bash(findstr:*)",
+      "Bash(CSRF_TOKEN=\"ImIzOTcyNjdkODI0YTdiOWZkNjI5NWEzODA0YjM5MzQ3Zjc0MDc1OGUi.aW221A.ABWwmpPWbuBAhdbwt2BRbOhKHLo\")",
+      "Bash(for i in 1 2 3 4 5)",
+      "Bash(do curl -w \"%{time_total}s \\(TTFB: %{time_starttransfer}s\\)\\\\n\" -b /tmp/cookies.txt http://ops.lan/training -s -o /dev/null)",
+      "Bash(done)",
+      "Bash(for i in 1 2 3)",
+      "Bash(do curl -w \"%{time_total}s \" -b /tmp/cookies.txt http://ops.lan/training -s -o /dev/null)",
+      "Bash(do curl -w \"%{time_total}s \" -b /tmp/cookies.txt http://ops.lan/ -s -o /dev/null)",
+      "Bash(do curl -w \"%{time_total}s \" -b /tmp/cookies.txt http://ops.lan/weather -s -o /dev/null)"
+    ]
+  }
+}

@@ -152,9 +152,16 @@ def _ensure_metar_table() -> None:
     """)
 _ensure_metar_table()
 
+def _extract_icao_from_line(ln: str) -> str:
+    """Extract ICAO code from a METAR/SPECI/TAF line."""
+    # METAR KATL 262052Z ... or TAF KATL 2620/2724 ...
+    m = re.match(r"^(?:METAR|SPECI|TAF(?:\s+(?:AMD|COR))?)\s+([A-Z0-9]{3,4})\b", ln.strip(), re.IGNORECASE)
+    return m.group(1).upper() if m else ""
+
 def _try_decode_metar_taf(raw_text: str) -> str:
     """
-    Best-effort plain-English summary.
+    Best-effort plain-English summary, separated by airport.
+      • For each airport: header "=== KXXX ===" followed by METAR and TAF translations
       • METAR: "Valid DD HH:MMZ — METAR: <summary>"
       • TAF:   one bullet per forecast line using AVWX's per-line summaries, each
                prefixed by the correct time label (Valid / From / TEMPO / BECMG / PROBxx).
@@ -168,8 +175,9 @@ def _try_decode_metar_taf(raw_text: str) -> str:
     text = extracted or raw_text
     lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
 
-    metar_lines: list[str] = []
-    taf_blocks: list[str] = []
+    # Collect METAR lines and TAF blocks with their ICAO codes
+    metar_by_icao: dict[str, list[str]] = {}
+    taf_by_icao: dict[str, list[str]] = {}
     i = 0
     while i < len(lines):
         s = lines[i].strip()
@@ -177,7 +185,8 @@ def _try_decode_metar_taf(raw_text: str) -> str:
             i += 1
             continue
         if s.startswith(("METAR", "SPECI")):
-            metar_lines.append(s)
+            icao = _extract_icao_from_line(s) or "UNKNOWN"
+            metar_by_icao.setdefault(icao, []).append(s)
             i += 1
             continue
         if s.startswith("TAF"):
@@ -186,10 +195,20 @@ def _try_decode_metar_taf(raw_text: str) -> str:
             while j < len(lines) and lines[j].strip():
                 cur.append(lines[j].rstrip())
                 j += 1
-            taf_blocks.append("\n".join(cur))
+            block = "\n".join(cur)
+            icao = _extract_icao_from_line(s) or "UNKNOWN"
+            taf_by_icao.setdefault(icao, []).append(block)
             i = j
             continue
         i += 1
+
+    # Get all unique ICAO codes in order of first appearance
+    all_icaos: list[str] = []
+    seen_icaos: set[str] = set()
+    for icao in list(metar_by_icao.keys()) + list(taf_by_icao.keys()):
+        if icao not in seen_icaos:
+            seen_icaos.add(icao)
+            all_icaos.append(icao)
 
     def _fmt_dt(dt) -> str | None:
         try:
@@ -225,105 +244,127 @@ def _try_decode_metar_taf(raw_text: str) -> str:
         return f"Valid {dd:02d} {hh:02d}:{mm:02d}Z — "
 
     out: list[str] = []
+    multiple_airports = len(all_icaos) > 1
 
     # ---------- Try AVWX for full decode ----------
     try:
         from avwx import Metar, Taf  # type: ignore
 
-        # METAR lines
-        for ln in metar_lines:
-            try:
-                m = Metar.from_report(ln)  # type: ignore[attr-defined]
-                summ = (
-                    getattr(m, "summary", None)
-                    or getattr(m, "speech", None)
-                    or ""
-                )
-                prefix = _metar_valid_prefix(ln)
-                if summ:
-                    out.append(f"{prefix}METAR: {summ}")
-            except Exception:
-                # ignore and fall back later if needed
-                pass
+        for icao in all_icaos:
+            airport_out: list[str] = []
 
-        # TAF blocks → per-forecast bullets using AVWX's per-line summaries
-        for block in taf_blocks:
-            try:
-                # Parse with AVWX; rely on its per-line `summary` list which aligns
-                # with `data.forecast` (times + type).
-                t = Taf.from_report(block)  # type: ignore[attr-defined]
-                summaries = t.summary or []
-                data = getattr(t, "data", None)
-                forecasts = list(getattr(data, "forecast", []) or [])
-                lines_out: list[str] = ["TAF:"]
+            # Add airport header if multiple airports
+            if multiple_airports:
+                airport_out.append(f"=== {icao} ===")
 
-                # Pair each forecast line with its summary (if any)
-                n = max(len(forecasts), len(summaries))
-                for idx in range(n):
-                    f = forecasts[idx] if idx < len(forecasts) else None
-                    seg_summ = summaries[idx].strip() if idx < len(summaries) else ""
+            # METAR lines for this airport
+            for ln in metar_by_icao.get(icao, []):
+                try:
+                    m = Metar.from_report(ln)  # type: ignore[attr-defined]
+                    summ = (
+                        getattr(m, "summary", None)
+                        or getattr(m, "speech", None)
+                        or ""
+                    )
+                    prefix = _metar_valid_prefix(ln)
+                    if summ:
+                        airport_out.append(f"{prefix}METAR: {summ}")
+                except Exception:
+                    # ignore and fall back later if needed
+                    pass
 
-                    # Forecast window & type/tag (BASE/FM/TEMPO/BECMG/PROBxx)
-                    st = getattr(f, "start_time", None)
-                    en = getattr(f, "end_time", None)
-                    tag = (getattr(f, "type", None) or "").upper() if f else ""
-                    # Convert AVWX Timestamp -> datetime for formatter
-                    st_dt = getattr(st, "dt", None) or getattr(st, "datetime", None)
-                    en_dt = getattr(en, "dt", None) or getattr(en, "datetime", None)
+            # TAF blocks for this airport
+            for block in taf_by_icao.get(icao, []):
+                try:
+                    # Parse with AVWX; rely on its per-line `summary` list which aligns
+                    # with `data.forecast` (times + type).
+                    t = Taf.from_report(block)  # type: ignore[attr-defined]
+                    summaries = t.summary or []
+                    data = getattr(t, "data", None)
+                    forecasts = list(getattr(data, "forecast", []) or [])
+                    lines_out: list[str] = ["TAF:"]
 
-                    # Label logic
-                    label = _fmt_range(st_dt, en_dt, tag or None)
-                    base_like = not tag or tag in ("", "BASE", "MAIN")
-                    # The first line is the header validity window → prefix with "Valid"
-                    if idx == 0 and base_like and label and "–" in label:
-                        label = f"Valid {label}"
-                    elif not label and seg_summ:
-                        # Fallback if no times came through for some reason
-                        label = "Segment"
+                    # Pair each forecast line with its summary (if any)
+                    n = max(len(forecasts), len(summaries))
+                    for idx in range(n):
+                        f = forecasts[idx] if idx < len(forecasts) else None
+                        seg_summ = summaries[idx].strip() if idx < len(summaries) else ""
 
-                    bullet = ("  • " + label) if label else "  •"
-                    if seg_summ:
-                        bullet += f" — {seg_summ}"
-                    lines_out.append(bullet.rstrip())
+                        # Forecast window & type/tag (BASE/FM/TEMPO/BECMG/PROBxx)
+                        st = getattr(f, "start_time", None)
+                        en = getattr(f, "end_time", None)
+                        tag = (getattr(f, "type", None) or "").upper() if f else ""
+                        # Convert AVWX Timestamp -> datetime for formatter
+                        st_dt = getattr(st, "dt", None) or getattr(st, "datetime", None)
+                        en_dt = getattr(en, "dt", None) or getattr(en, "datetime", None)
 
-                out.append("\n".join(lines_out).rstrip())
+                        # Label logic
+                        label = _fmt_range(st_dt, en_dt, tag or None)
+                        base_like = not tag or tag in ("", "BASE", "MAIN")
+                        # The first line is the header validity window → prefix with "Valid"
+                        if idx == 0 and base_like and label and "–" in label:
+                            label = f"Valid {label}"
+                        elif not label and seg_summ:
+                            # Fallback if no times came through for some reason
+                            label = "Segment"
 
-            except Exception:
-                # As a last resort, keep at least the header validity window if present
-                txt = (block or "").replace("\r\n", "\n").replace("\r", "\n")
-                m = re.search(r"\b(\d{2})(\d{2})/(\d{2})(\d{2})\b", txt)
-                lines_out = ["TAF:"]
-                if m:
-                    d1,h1,d2,h2 = map(int, m.groups())
-                    lines_out.append(f"  • Valid {d1:02d} {h1:02d}Z–{d2:02d} {h2:02d}Z")
-                out.append("\n".join(lines_out))
+                        bullet = ("  • " + label) if label else "  •"
+                        if seg_summ:
+                            bullet += f" — {seg_summ}"
+                        lines_out.append(bullet.rstrip())
+
+                    airport_out.append("\n".join(lines_out).rstrip())
+
+                except Exception:
+                    # As a last resort, keep at least the header validity window if present
+                    txt = (block or "").replace("\r\n", "\n").replace("\r", "\n")
+                    m = re.search(r"\b(\d{2})(\d{2})/(\d{2})(\d{2})\b", txt)
+                    lines_out = ["TAF:"]
+                    if m:
+                        d1,h1,d2,h2 = map(int, m.groups())
+                        lines_out.append(f"  • Valid {d1:02d} {h1:02d}Z–{d2:02d} {h2:02d}Z")
+                    airport_out.append("\n".join(lines_out))
+
+            if airport_out:
+                out.append("\n".join(airport_out))
 
     except Exception:
         # Library unavailable → METAR fallback (python-metar) + bare timing for TAF
-        try:
-            from metar import Metar as _Metar  # type: ignore
-            for ln in metar_lines:
-                try:
-                    obs = _Metar.Metar(ln)
-                    prefix = _metar_valid_prefix(ln)
-                    out.append(prefix + "METAR: " + obs.string())
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        for block in taf_blocks:
-            txt = (block or "").replace("\r\n", "\n").replace("\r", "\n")
-            lines_out = ["TAF:"]
-            m = re.search(r"\b(\d{2})(\d{2})/(\d{2})(\d{2})\b", txt)
-            if m:
-                d1,h1,d2,h2 = map(int, m.groups())
-                lines_out.append(f"  • Valid {d1:02d} {h1:02d}Z–{d2:02d} {h2:02d}Z")
-            for fm in re.findall(r"\bFM(\d{2})(\d{2})(\d{2})\b", txt):
-                d,h,mi = map(int, fm)
-                lines_out.append(f"  • From {d:02d} {h:02d}:{mi:02d}Z")
-            out.append("\n".join(lines_out))
+        for icao in all_icaos:
+            airport_out: list[str] = []
 
-    return "\n".join([s for s in out if s]).strip()
+            # Add airport header if multiple airports
+            if multiple_airports:
+                airport_out.append(f"=== {icao} ===")
+
+            try:
+                from metar import Metar as _Metar  # type: ignore
+                for ln in metar_by_icao.get(icao, []):
+                    try:
+                        obs = _Metar.Metar(ln)
+                        prefix = _metar_valid_prefix(ln)
+                        airport_out.append(prefix + "METAR: " + obs.string())
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            for block in taf_by_icao.get(icao, []):
+                txt = (block or "").replace("\r\n", "\n").replace("\r", "\n")
+                lines_out = ["TAF:"]
+                m = re.search(r"\b(\d{2})(\d{2})/(\d{2})(\d{2})\b", txt)
+                if m:
+                    d1,h1,d2,h2 = map(int, m.groups())
+                    lines_out.append(f"  • Valid {d1:02d} {h1:02d}Z–{d2:02d} {h2:02d}Z")
+                for fm in re.findall(r"\bFM(\d{2})(\d{2})(\d{2})\b", txt):
+                    d,h,mi = map(int, fm)
+                    lines_out.append(f"  • From {d:02d} {h:02d}:{mi:02d}Z")
+                airport_out.append("\n".join(lines_out))
+
+            if airport_out:
+                out.append("\n".join(airport_out))
+
+    return "\n\n".join([s for s in out if s]).strip()
 
 def _sanitize_ids(raw: List[str] | str) -> List[str]:
     """Normalize ICAO list; accept 3–4 alnum; de-dupe, preserve order."""
@@ -1005,3 +1046,6 @@ def metar_taf_list():
             except Exception:
                 it["plain"] = ""
     return jsonify({"ok": True, "items": items})
+
+# NOTE: Winlink polling status is already available at /radio/winlink/poller_status
+# (see modules/routes/radio.py). The weather page timer uses that existing endpoint.

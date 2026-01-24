@@ -1,5 +1,14 @@
 {
   "version": "2.0.0",
+  "_comment": [
+    "DOCKER SETUP NOTES FOR AI ASSISTANTS:",
+    "Docker is NOT installed on Windows - it runs inside WSL (Ubuntu-22.04).",
+    "To run Docker builds manually:",
+    "  1. wsl -d Ubuntu-22.04 -- sudo service docker start",
+    "  2. wsl -d Ubuntu-22.04 -- bash -c \"cd /mnt/x/Storage/Documents/air-ops-vscode/AirOps-Coord-Tool && bash .vscode/docker-build.sh\"",
+    "If X: drive is not mounted: wsl -d Ubuntu-22.04 -u root -- bash -c \"mkdir -p /mnt/x && mount -t drvfs 'X:' /mnt/x\"",
+    "Docker version: 28.5.2, Buildx: v0.29.1, Builder: 'multiplatform' (docker-container driver)"
+  ],
   "tasks": [
     {
       "label": "🚀 Build & Push (latest + date tag)",

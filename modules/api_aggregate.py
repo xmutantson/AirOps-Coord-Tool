@@ -16,6 +16,8 @@ from modules.utils.common import get_db_file, canonical_airport_code
 from modules.utils.common import (
     cr2_get_ramp_summary,
     cr2_get_airport_detail,
+    cr2_delete_group,
+    cr2_delete_airport,
     PRIORITY_LABELS,  # kept for parity with your diff (unused here but harmless)
     dict_rows,
 )
@@ -611,3 +613,29 @@ def inventory_requests_group(group_id: str):
             for r in sources
         ]
     })
+
+# ----------------------- Cargo Requests v2 DELETE endpoints -------------------
+@aggregate_bp.route("/ramp/v2/<string:airport>/<int:priority>/<path:need>", methods=["DELETE", "POST"])
+def ramp_v2_delete_group(airport: str, priority: int, need: str):
+    """
+    Delete a specific cargo request group.
+    DELETE /aggregate/ramp/v2/KBLI/1/water
+    POST with ?_method=DELETE also works for browsers.
+    """
+    # Allow POST with _method=DELETE for browsers that don't support DELETE
+    if request.method == "POST" and request.args.get("_method", "").upper() != "DELETE":
+        return jsonify({"ok": False, "error": "use DELETE method or ?_method=DELETE"}), 405
+    deleted = cr2_delete_group(airport, priority, need)
+    return jsonify({"ok": True, "deleted": deleted})
+
+@aggregate_bp.route("/ramp/v2/<string:airport>/all", methods=["DELETE", "POST"])
+def ramp_v2_delete_airport(airport: str):
+    """
+    Delete all cargo requests for an airport.
+    DELETE /aggregate/ramp/v2/KBLI/all
+    POST with ?_method=DELETE also works for browsers.
+    """
+    if request.method == "POST" and request.args.get("_method", "").upper() != "DELETE":
+        return jsonify({"ok": False, "error": "use DELETE method or ?_method=DELETE"}), 405
+    deleted = cr2_delete_airport(airport)
+    return jsonify({"ok": True, "deleted": deleted})

@@ -133,6 +133,34 @@
     return div;
   }
 
+  async function deleteGroup(airport, priorityCode, need) {
+    if (!confirm(`Delete request for "${need}" at ${airport}?`)) return;
+    try {
+      const url = `/aggregate/ramp/v2/${encodeURIComponent(airport)}/${priorityCode}/${encodeURIComponent(need)}`;
+      const r = await fetch(url, {method: 'DELETE', headers: {"X-Requested-With":"XMLHttpRequest"}});
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      // Trigger global refresh + badge update
+      if (window.__aggRefreshNow) window.__aggRefreshNow();
+      if (window.__updateReqBadge) window.__updateReqBadge();
+    } catch(e) {
+      alert('Delete failed: ' + e.message);
+    }
+  }
+
+  async function deleteAirport(airport) {
+    if (!confirm(`Delete ALL requests for ${airport}?`)) return;
+    try {
+      const url = `/aggregate/ramp/v2/${encodeURIComponent(airport)}/all`;
+      const r = await fetch(url, {method: 'DELETE', headers: {"X-Requested-With":"XMLHttpRequest"}});
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      // Trigger global refresh + badge update
+      if (window.__aggRefreshNow) window.__aggRefreshNow();
+      if (window.__updateReqBadge) window.__updateReqBadge();
+    } catch(e) {
+      alert('Delete failed: ' + e.message);
+    }
+  }
+
   function renderRows(airport, rows){
     // Active rows (outstanding>0) first by priority desc; fulfilled afterwards
     const active = (rows||[]).filter(isActive).sort((a,b)=> (b.priority_code||0)-(a.priority_code||0));
@@ -148,9 +176,10 @@
         return `<div class="src">#${s.id}${comm}${s.ref ? ' — '+s.ref : ''}</div>`;
       }).join('');
       const rowCls = isActive(r) ? '' : ' class="done"';
+      const delBtn = `<button type="button" class="btn-del-group" data-ap="${airport}" data-pri="${r.priority_code}" data-need="${r.need}" style="font-size:11px;padding:2px 6px;margin-left:4px;cursor:pointer;" title="Delete this request">✕</button>`;
       return `<tr${rowCls}>
         <td>${p}</td>
-        <td>${r.need}</td>
+        <td>${r.need}${delBtn}</td>
         <td>${qty}</td>
         <td>${airport}</td>
       </tr>
@@ -161,6 +190,15 @@
       <tbody>${tr || '<tr><td colspan="4">No open items.</td></tr>'}</tbody>
     </table>`;
   }
+
+  // Delegate click events for delete buttons
+  document.getElementById('agg-requests-airports')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.btn-del-group');
+    if (btn) {
+      e.stopPropagation();
+      deleteGroup(btn.dataset.ap, parseInt(btn.dataset.pri), btn.dataset.need);
+    }
+  });
 
   // Sort helpers (airports): outstanding>0 first, then EFFECTIVE max priority, then code
   function _keyFromCard(card){

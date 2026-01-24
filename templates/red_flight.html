@@ -23,13 +23,13 @@
   </div>
 
   <!-- Keep both in ONE grid cell so they can't wrap to a new row -->
-  <div>
+  <div style="grid-column: span 2;">
     <label style="display:block;">GPS (optional)</label>
-    <div style="display:flex; gap:.4rem; align-items:center; flex-wrap:nowrap; white-space:nowrap;">
+    <div style="display:flex; gap:.4rem; align-items:center; flex-wrap:nowrap;">
       <input id="rf-lat" name="lat" type="text" placeholder="Lat 47.6656"
-             style="min-width:120px; width:100%;">
+             style="flex:1; min-width:0;">
       <input id="rf-lon" name="lon" type="text" placeholder="Lon -122.3977"
-             style="min-width:140px; width:100%;">
+             style="flex:1; min-width:0;">
     </div>
   </div>
 

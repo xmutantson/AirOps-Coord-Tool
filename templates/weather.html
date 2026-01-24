@@ -16,6 +16,10 @@
               title="Start WinLink polling from the Radio page">requires WinLink polling</span>
       {% endif %}
     </label>
+    <span id="winlink-poll-wrap" class="muted" style="margin-left:.5rem; font-size:.85em; display:none;"
+          title="Time until next Winlink inbox check">
+      Next poll in <strong><span id="winlink-poll-secs">0</span></strong>s
+    </span>
     <label class="wx-inline">
       <input type="radio" name="wxMode" value="preview" {% if not wl_ok %}checked{% endif %}> manual compose
     </label>
@@ -403,7 +407,8 @@
   }
 
   // Extract all (ICAO, tmsUTC) pairs from METAR lines within a raw payload
-  function extractMetarTimes(raw){
+  // anchorDateStr: optional ISO8601 string (e.g., fetched_at_utc) to anchor month/year inference
+  function extractMetarTimes(raw, anchorDateStr){
     if (!raw) return [];
     const out = [];
     // e.g. "METAR KPSC 260553Z ..."
@@ -412,20 +417,28 @@
     while ((m = re.exec(raw)) !== null){
       const icao = m[1];
       const dd = parseInt(m[2],10), hh = parseInt(m[3],10), mm = parseInt(m[4],10);
-      const tms = anchorDayToUtc(dd, hh, mm);
+      const tms = anchorDayToUtc(dd, hh, mm, anchorDateStr);
       if (tms != null) out.push({icao, tms});
     }
     return out;
   }
 
-  // Convert DD,HH,MM (Zulu) to epoch ms anchored to current UTC month/year (with wrap near month edges)
-  function anchorDayToUtc(dd, hh, mm){
-    const now = new Date();
-    const y = now.getUTCFullYear(), mon = now.getUTCMonth(), today = now.getUTCDate();
+  // Convert DD,HH,MM (Zulu) to epoch ms anchored to a reference date's UTC month/year (with wrap near month edges)
+  // anchorDateStr: optional ISO8601 string to use as reference instead of "now"
+  function anchorDayToUtc(dd, hh, mm, anchorDateStr){
+    // Use the provided anchor date or fall back to now
+    let anchor;
+    if (anchorDateStr) {
+      anchor = new Date(anchorDateStr);
+      if (isNaN(anchor.getTime())) anchor = new Date();
+    } else {
+      anchor = new Date();
+    }
+    const y = anchor.getUTCFullYear(), mon = anchor.getUTCMonth(), anchorDay = anchor.getUTCDate();
     let y2 = y, mon2 = mon;
-    if ((dd - today) > 15){           // likely previous month
+    if ((dd - anchorDay) > 15){           // likely previous month
       if (mon2 === 0){ mon2 = 11; y2 = y - 1; } else { mon2 -= 1; }
-    } else if ((today - dd) > 15){    // likely next month
+    } else if ((anchorDay - dd) > 15){    // likely next month
       if (mon2 === 11){ mon2 = 0; y2 = y + 1; } else { mon2 += 1; }
     }
     // Guard DD in [1..31]
@@ -437,7 +450,8 @@
   function latestMapForRows(rows){
     const latest = new Map();
     (rows||[]).forEach(rec=>{
-      const pairs = extractMetarTimes(rec.raw_text||"");
+      // Use the record's fetch time as anchor for proper month/year inference
+      const pairs = extractMetarTimes(rec.raw_text||"", rec.fetched_at_utc);
       for (const {icao, tms} of pairs){
         const prev = latest.get(icao) || 0;
         if (tms > prev) latest.set(icao, tms);
@@ -448,7 +462,8 @@
 
   // A record is expired if EVERY METAR inside it is >60 min old OR older than the newest seen for that ICAO.
   function recordExpired(rec, latestMap){
-    const pairs = extractMetarTimes(rec.raw_text||"");
+    // Use the record's fetch time as anchor for proper month/year inference
+    const pairs = extractMetarTimes(rec.raw_text||"", rec.fetched_at_utc);
     if (!pairs.length) return false; // no METAR time → do not mark expired
     const nowMs = Date.now();
     let anyFresh = false;
@@ -705,6 +720,51 @@
       console.error('Upload error', err);
     }
   });
+
+  // -------------------- Winlink Poll Timer --------------------
+  // Same pattern as radio.html: /winlink/poller_status
+  const pollWrap = $('#winlink-poll-wrap');
+  const pollSecs = $('#winlink-poll-secs');
+  let pollSecondsRemaining = null;
+
+  function tick() {
+    if (!pollWrap || !pollSecs) return;
+    if (pollSecondsRemaining == null) {
+      pollWrap.style.display = 'none';
+      return;
+    }
+    if (pollSecondsRemaining > 0) {
+      pollSecondsRemaining -= 1;
+      pollSecs.textContent = String(pollSecondsRemaining);
+      pollWrap.style.display = 'inline';
+    } else {
+      // Poll likely just fired — resync to get the next window
+      syncPollStatus();
+    }
+  }
+
+  async function syncPollStatus() {
+    try {
+      const r = await fetch('/winlink/poller_status', { cache: 'no-store' });
+      if (!r.ok) return;
+      const j = await r.json();
+      if (j.running && typeof j.seconds === 'number') {
+        pollSecondsRemaining = j.seconds;
+        if (pollSecs) pollSecs.textContent = String(pollSecondsRemaining);
+        if (pollWrap) pollWrap.style.display = 'inline';
+      } else {
+        pollSecondsRemaining = null;
+        if (pollWrap) pollWrap.style.display = 'none';
+      }
+    } catch (_) {
+      pollSecondsRemaining = null;
+    }
+  }
+
+  // Same pattern as radio.html: sync every 10s, tick every 1s
+  syncPollStatus();
+  setInterval(tick, 1000);
+  setInterval(syncPollStatus, 10000);
 })();
 </script>
 

@@ -8,7 +8,7 @@ from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, e
 from app import DB_FILE, ONE_YEAR, scheduler
 from modules.services.winlink.core import _configure_pat_from_prefs_silent
 # --- Wargame helpers (import or safe fallbacks) ---
-from modules.services.jobs import configure_wargame_jobs, configure_internet_watch_job
+from modules.services.jobs import configure_wargame_jobs, configure_internet_watch_job, configure_netops_feeders
 try:
     from modules.services.wargame import (reset_wargame_state, set_wargame_epoch, seed_wargame_baseline_inventory, bump_wargame_role_epoch, get_wargame_epoch, initialize_airfield_callsigns)
 except Exception:
@@ -65,16 +65,32 @@ def admin():
             return _ret('preferences.preferences')
 
         # ── Internet detection override ─────────────────────────────
+        # Only process and flash when the value actually changed AND we're not
+        # in the middle of another explicit action (save_embedded, clear_embedded, etc.)
         if 'internet_force_online' in request.form:
-            val = (request.form.get('internet_force_online','no') or 'no').strip().lower()
-            set_preference('internet_force_online', 'yes' if val == 'yes' else 'no')
-            # Nudge the watchdog to apply the new policy promptly (safe if job not yet running)
-            try:
-                configure_internet_watch_job()
-            except Exception:
-                pass
-            flash("Internet detection override updated.", "info")
-            return _ret('admin.admin')
+            # Skip if this is part of another explicit action
+            is_other_action = (
+                'save_embedded' in request.form or
+                'clear_embedded' in request.form or
+                'change_password' in request.form or
+                'exit_admin' in request.form or
+                'invalidate_sessions' in request.form or
+                'toggle_wargame' in request.form or
+                'winlink_callsign_1' in request.form
+            )
+            if not is_other_action:
+                val = (request.form.get('internet_force_online','no') or 'no').strip().lower()
+                new_val = 'yes' if val == 'yes' else 'no'
+                current_val = get_preference('internet_force_online') or 'no'
+                if new_val != current_val:
+                    set_preference('internet_force_online', new_val)
+                    # Nudge the watchdog to apply the new policy promptly (safe if job not yet running)
+                    try:
+                        configure_internet_watch_job()
+                    except Exception:
+                        pass
+                    flash("Internet detection override updated.", "info")
+                return _ret('admin.admin')
 
         # ── Toggle Wargame Mode ────────────────────────────
         if 'toggle_wargame' in request.form:
@@ -86,6 +102,8 @@ def admin():
             set_preference('wargame_mode', 'yes' if on else 'no')
 
             # List of all tables we want to completely purge on activation/deactivation
+            # NOTE: Excludes winlink tables (outgoing_messages, winlink_messages,
+            # winlink_message_files) and personnel (staff, staff_shifts) per design.
             WARGAME_TABLES = [
               'flights',
               'incoming_messages',
@@ -96,7 +114,19 @@ def admin():
               'wargame_radio_schedule',
               'wargame_tasks',
               'inventory_entries',
-              'queued_flights'
+              'queued_flights',
+              'cargo_requests',
+              # V2 cargo system
+              'cargo_requests_v2',
+              'cargo_request_sources',
+              'cargo_request_links',
+              # Operational data
+              'communications',
+              'flight_locates',
+              'adsb_sightings',
+              'flight_cargo',
+              'remote_inventory',
+              'remote_inventory_rows',
             ]
 
             if on:
@@ -222,6 +252,49 @@ def admin():
             flash("WinLink settings saved.", "success")
             return _ret('admin.admin')
 
+        # ── NetOps test connection ────────────────────────────────────
+        if request.form.get('netops_action') == 'test':
+            import requests as http_requests
+            base    = (request.form.get('netops_url')     or get_preference('netops_url')     or '').strip()
+            station = (request.form.get('netops_station') or get_preference('netops_station') or '').strip().upper()
+            pwd     = (request.form.get('netops_password') or get_preference('netops_password') or '').strip()
+            if not (base and station and pwd):
+                flash("Please provide NetOps URL, Station ID, and Password before testing.", "error")
+                return _ret('admin.admin')
+            url = f"{base.rstrip('/')}/api/v1/login"
+            try:
+                r = http_requests.post(url, json={"station": station, "password": pwd}, timeout=10)
+                if r.ok:
+                    flash(f"NetOps login succeeded ({r.status_code}).", "success")
+                else:
+                    flash(f"NetOps login failed: {r.status_code} – {r.text[:120]}", "error")
+            except Exception as e:
+                flash(f"NetOps connection error: {e}", "error")
+            return _ret('admin.admin')
+
+        # ── NetOps save settings ──────────────────────────────────────
+        if 'netops_save' in request.form:
+            set_preference('netops_enabled', request.form.get('netops_enabled','no'))
+            set_preference('netops_url',     request.form.get('netops_url','').strip())
+            set_preference('netops_station', request.form.get('netops_station','').strip().upper())
+            # Only update password if a non-empty value was provided.
+            _pwd = (request.form.get('netops_password','') or '').strip()
+            if _pwd:
+                set_preference('netops_password', _pwd)
+            set_preference('netops_push_interval_sec', request.form.get('netops_push_interval_sec','60').strip())
+            set_preference('netops_window_hours', request.form.get('netops_window_hours','24').strip())
+            # optional origin coordinates
+            if request.form.get('origin_lat','').strip():
+                set_preference('origin_lat', request.form.get('origin_lat').strip())
+            if request.form.get('origin_lon','').strip():
+                set_preference('origin_lon', request.form.get('origin_lon').strip())
+            try:
+                configure_netops_feeders()
+            except Exception:
+                pass
+            flash("NetOps feeder settings saved.", "success")
+            return _ret('admin.admin')
+
         # ── Update Default Origin (still in both Admin & Preferences) ──
         if 'default_origin' in request.form:
             val = escape(request.form['default_origin'].strip().upper())
@@ -244,8 +317,10 @@ def admin():
     default_origin        = get_preference('default_origin') or ''
     show_debug_logs       = request.cookies.get('show_debug_logs','no')
     wargame_mode          = get_preference('wargame_mode') == 'yes'
-    embedded_url          = get_preference('embedded_url') or ''
-    embedded_name         = get_preference('embedded_name') or ''
+    # Pre-fill embedded settings with tar1090 defaults if not set
+    # Use 192.168.8.2 (typical Pi setup) instead of localhost so remote hosts can connect
+    embedded_url          = get_preference('embedded_url') or 'http://192.168.8.2/tar1090/'
+    embedded_name         = get_preference('embedded_name') or 'tar1090'
     embedded_mode         = get_preference('embedded_mode') or 'iframe'
     enable_1090_distances = get_preference('enable_1090_distances') == 'yes'
     internet_force_online = (get_preference('internet_force_online') or 'no')
@@ -256,6 +331,15 @@ def admin():
     winlink_password_2     = get_preference('winlink_password_2')  or ''
     winlink_callsign_3     = get_preference('winlink_callsign_3')  or ''
     winlink_password_3     = get_preference('winlink_password_3')  or ''
+
+    # NetOps feeder settings
+    netops_enabled           = get_preference('netops_enabled') or 'no'
+    netops_url               = get_preference('netops_url') or ''
+    netops_station           = get_preference('netops_station') or ''
+    netops_push_interval_sec = get_preference('netops_push_interval_sec') or '60'
+    netops_window_hours      = get_preference('netops_window_hours') or '24'
+    origin_lat               = get_preference('origin_lat') or ''
+    origin_lon               = get_preference('origin_lon') or ''
 
     return render_template(
       'admin.html',
@@ -273,7 +357,15 @@ def admin():
       winlink_callsign_2=winlink_callsign_2,
       winlink_password_2=winlink_password_2,
       winlink_callsign_3=winlink_callsign_3,
-      winlink_password_3=winlink_password_3
+      winlink_password_3=winlink_password_3,
+      # NetOps
+      netops_enabled=netops_enabled,
+      netops_url=netops_url,
+      netops_station=netops_station,
+      netops_push_interval_sec=netops_push_interval_sec,
+      netops_window_hours=netops_window_hours,
+      origin_lat=origin_lat,
+      origin_lon=origin_lon
     )
 
 @bp.post('/configure_pat')

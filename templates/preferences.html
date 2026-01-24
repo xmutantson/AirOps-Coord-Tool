@@ -109,7 +109,7 @@
     <hr>
 
     <!-- ── Remote Airports (AOCT) ─────────────────────────── -->
-    <h3>Remote Airports (AOCT)</h3>
+    <h3>Cargo Sharing</h3>
 
     <label for="auto_broadcast_interval_min">Auto-broadcast interval:</label>
     <select id="auto_broadcast_interval_min" name="auto_broadcast_interval_min" onchange="this.form.submit()">
@@ -252,58 +252,6 @@
     </div>
     <button type="submit" class="save-mappings-btn">💾 Save WinLink Mappings & CCs</button>
   </form>
-  <hr>
-
-  <!-- ── NetOps Feeder (Remote Push) ───────────────────────────── -->
-  <h3>NetOps Feeder</h3>
-  <form id="netops-form" method="POST" action="{{ url_for('preferences.preferences') }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label for="netops_enabled">Enable NetOps Feeder:</label>
-    <select id="netops_enabled" name="netops_enabled">
-      <option value="no"  {% if netops_enabled!='yes' %}selected{% endif %}>No</option>
-      <option value="yes" {% if netops_enabled=='yes' %}selected{% endif %}>Yes</option>
-    </select>
-
-    <label for="netops_url">NetOps URL:</label>
-    <input id="netops_url" name="netops_url" value="{{ netops_url }}" placeholder="http://example.org:5250">
-
-    <label for="netops_station">Station ID (Pelican Case):</label>
-    <input id="netops_station" name="netops_station" value="{{ netops_station }}" placeholder="KALW" oninput="this.value=this.value.toUpperCase()">
-
-    <label for="netops_password">Password:</label>
-    <input id="netops_password" type="password" name="netops_password" placeholder="••••••••" autocomplete="new-password">
-    <small>Leave blank to keep existing.</small>
-
-    <label for="netops_push_interval_sec">Push Interval (seconds):</label>
-    <input id="netops_push_interval_sec" name="netops_push_interval_sec"
-           type="number" inputmode="numeric" min="1" step="1"
-           value="{{ netops_push_interval_sec }}"
-           placeholder="e.g. 30">
-
-    <label for="netops_window_hours">Data Window (hours):</label>
-    <input id="netops_window_hours" name="netops_window_hours"
-           type="number" inputmode="numeric" min="1" step="1"
-           value="{{ netops_window_hours }}"
-           placeholder="e.g. 24">
-
-    <label for="origin-lat">Origin Coordinates (lat, lon):</label>
-    <div style="display:flex; gap:8px; align-items:center;">
-      <input id="origin-lat" name="origin_lat"
-             type="number" inputmode="decimal" step="any" min="-90"  max="90"
-             value="{{ origin_lat }}" placeholder="Latitude (−90 to 90)" style="flex:1;">
-      <input id="origin-lon" name="origin_lon"
-             type="number" inputmode="decimal" step="any" min="-180" max="180"
-             value="{{ origin_lon }}" placeholder="Longitude (−180 to 180)" style="flex:1;">
-    </div>
-    <button type="submit" style="margin-top:12px;">💾 Save NetOps Settings</button>
-    <button type="submit"
-            name="netops_action"
-            value="test"
-            style="margin-top:12px;margin-left:8px;">
-      🔌 Test Connection
-    </button>
-  </form>
-
   <hr>
 
   <!-- ── Unlock Admin Mode ───────────────────────────────── -->

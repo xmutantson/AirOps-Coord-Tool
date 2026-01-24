@@ -4,7 +4,6 @@ import sqlite3
 import os
 
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
-from modules.utils.http import http_post_json
 from app import DB_FILE
 from flask import Blueprint, current_app
 from flask import flash, make_response, redirect, render_template, request, session, url_for
@@ -27,68 +26,8 @@ def preferences():
 
     # ── update prefs ──────────────────────────────────────────────────────
     if request.method == 'POST':
-        # ── NetOps one-shot login test (no persistence) ─────────────────────────
-        if request.form.get('netops_action') == 'test':
-            base    = (request.form.get('netops_url')     or get_preference('netops_url')     or '').strip()
-            station = (request.form.get('netops_station') or get_preference('netops_station') or '').strip().upper()
-            pwd     = (request.form.get('netops_password') or get_preference('netops_password') or '').strip()
-            if not (base and station and pwd):
-                flash("Please provide NetOps URL, Station ID, and Password before testing.", "error")
-                return redirect(url_for('preferences.preferences'))
-            try:
-                code, body = http_post_json(f"{base.rstrip('/')}/api/login", {"station": station, "password": pwd})
-            except Exception as e:
-                flash(f"NetOps test failed: {e}", "error")
-                return redirect(url_for('preferences.preferences'))
-            ok = (code == 200 and isinstance(body, dict) and bool(body.get("token")))
-            if ok:
-                flash("NetOps login OK for this Station ID and password.", "success")
-            else:
-                msg = ""
-                if isinstance(body, dict):
-                    msg = body.get("message") or body.get("error") or ""
-                elif isinstance(body, str):
-                    msg = body[:200]
-                flash(f"NetOps login failed (HTTP {code}) {('- ' + msg) if msg else ''}", "error")
-            return redirect(url_for('preferences.preferences'))
-
         if 'distance_unit' in request.form:
             set_preference('distance_unit', request.form.get('distance_unit','nm'))
-
-        # ── NetOps Feeder settings (remote push) ───────────────────────
-        if ('netops_enabled' in request.form or
-            'netops_url' in request.form or
-            'netops_station' in request.form or
-            'netops_password' in request.form or
-            'netops_push_interval_sec' in request.form or
-            'netops_window_hours' in request.form or
-            'origin_lat' in request.form or
-            'origin_lon' in request.form):
-            set_preference('netops_enabled', request.form.get('netops_enabled','no'))
-            set_preference('netops_url',     request.form.get('netops_url','').strip())
-            set_preference('netops_station', request.form.get('netops_station','').strip().upper())
-            # Only update password if a non-empty value was provided.
-            if 'netops_password' in request.form:
-                _pwd = (request.form.get('netops_password','') or '').strip()
-                if _pwd:
-                    set_preference('netops_password', _pwd)
-                # else: keep existing password
-            if 'netops_push_interval_sec' in request.form:
-                set_preference('netops_push_interval_sec', request.form.get('netops_push_interval_sec','60').strip())
-            if 'netops_window_hours' in request.form:
-                set_preference('netops_window_hours', request.form.get('netops_window_hours','24').strip())
-            # optional origin coordinates (from geolocation button)
-            if request.form.get('origin_lat','').strip():
-                set_preference('origin_lat', request.form.get('origin_lat').strip())
-            if request.form.get('origin_lon','').strip():
-                set_preference('origin_lon', request.form.get('origin_lon').strip())
-            try:
-                # refresh feeders immediately when settings change
-                from modules.services.jobs import configure_netops_feeders
-                configure_netops_feeders()
-            except Exception:
-                pass
-            flash("NetOps feeder settings saved.", "success")
 
         # ── WinLink Airport→Callsign mappings & CC addrs ─────────
         if (
@@ -432,15 +371,6 @@ def preferences():
     aoct_cc_reply     = (get_preference('aoct_cc_reply') or 'no')
     aoct_cc_broadcast = (get_preference('aoct_cc_broadcast') or 'no')
 
-    # NetOps feeder settings
-    netops_enabled = (get_preference('netops_enabled') or 'no')
-    netops_url     = (get_preference('netops_url') or '')
-    netops_station = (get_preference('netops_station') or '')
-    netops_push_interval_sec = (get_preference('netops_push_interval_sec') or '60')
-    netops_window_hours = (get_preference('netops_window_hours') or '24')
-    origin_lat = (get_preference('origin_lat') or '')
-    origin_lon = (get_preference('origin_lon') or '')
-
     # Remote-Airport prefs
     auto_broadcast_interval_min = (get_preference('auto_broadcast_interval_min') or '0')
     auto_reply_enabled = (get_preference('auto_reply_enabled') or 'yes')
@@ -476,14 +406,6 @@ def preferences():
         aoct_cc_query=aoct_cc_query,
         aoct_cc_reply=aoct_cc_reply,
         aoct_cc_broadcast=aoct_cc_broadcast,
-        # NetOps
-        netops_enabled=netops_enabled,
-        netops_url=netops_url,
-        netops_station=netops_station,
-        netops_push_interval_sec=netops_push_interval_sec,
-        netops_window_hours=netops_window_hours,
-        origin_lat=origin_lat,
-        origin_lon=origin_lon,
         # Remote-Airport prefs
         auto_broadcast_interval_min=auto_broadcast_interval_min,
         auto_reply_enabled=auto_reply_enabled,

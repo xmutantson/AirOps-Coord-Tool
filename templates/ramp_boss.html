@@ -642,9 +642,10 @@
           const j = await r.json();
           const total = (j.airports||[]).reduce((acc, ap)=> acc + ((ap.groups||[]).length||0), 0);
           if (badge) badge.textContent = String(total);
-          if (window.__aggRefreshNow) window.__aggRefreshNow();
         }catch(_){}
       }
+      // Expose globally so aggregated panel can trigger badge update after deletions
+      window.__updateReqBadge = updateBadge;
       updateBadge();
       setInterval(updateBadge, 30000);
     })();

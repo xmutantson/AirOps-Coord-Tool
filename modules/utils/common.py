@@ -4027,6 +4027,42 @@ def cr2_compute_shipped_lb_map(airport: str) -> dict[str, float]:
         pass
     return out
 
+def cr2_delete_group(airport: str, priority_code: int, need: str) -> int:
+    """
+    Delete a v2 cargo request group by airport, priority, and need.
+    Returns the number of link rows deleted.
+    """
+    ap = canonical_airport_code(airport or "") or (airport or "").strip().upper()
+    need_s = sanitize_name(need or "")
+    if not ap or not need_s:
+        return 0
+    # Delete links first (referential integrity)
+    deleted = dict_rows("""
+      DELETE FROM cargo_request_links
+       WHERE airport_canon = ? AND priority_code = ? AND need_sanitized = ?
+       RETURNING 1
+    """, (ap, priority_code, need_s))
+    # Also delete from cargo_requests_v2
+    dict_rows("""
+      DELETE FROM cargo_requests_v2
+       WHERE airport_canon = ? AND priority_code = ? AND need_sanitized = ?
+    """, (ap, priority_code, need_s))
+    return len(deleted)
+
+def cr2_delete_airport(airport: str) -> int:
+    """
+    Delete all v2 cargo requests for an airport.
+    Returns the number of link rows deleted.
+    """
+    ap = canonical_airport_code(airport or "") or (airport or "").strip().upper()
+    if not ap:
+        return 0
+    deleted = dict_rows("""
+      DELETE FROM cargo_request_links WHERE airport_canon = ? RETURNING 1
+    """, (ap,))
+    dict_rows("DELETE FROM cargo_requests_v2 WHERE airport_canon = ?", (ap,))
+    return len(deleted)
+
 def cr_get_overview() -> list[dict]:
     """
     Overview for the RampBoss FAB badge and drawer list.
