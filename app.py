@@ -26,8 +26,9 @@ if not hasattr(flask, "Markup"):
 if not hasattr(werkzeug.urls, "url_encode"):
     werkzeug.urls.url_encode = werkzeug.urls.urlencode
 from flask_wtf.csrf import CSRFProtect, CSRFError
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
+# Rate limiting removed - all devices behind NAT share one IP bucket
+# from flask_limiter import Limiter
+# from flask_limiter.util import get_remote_address
 from zeroconf import Zeroconf
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.schedulers.base import STATE_RUNNING
@@ -478,7 +479,8 @@ app.config.update(
 )
 
 CSRFProtect(app)
-limiter = Limiter(app, key_func=get_remote_address, default_limits=["1000 per hour"])
+# Rate limiting removed - see field test postmortem
+# limiter = Limiter(app, key_func=get_remote_address, default_limits=["1000 per hour"])
 
 # ──────────────────────────────────────────────────────────────────────────────
 # CSRF failures → standardize responses for global client handler
@@ -735,16 +737,6 @@ locates_bp     = _get_bp("modules.routes.locates")   # /api/locates/*
 training_bp    = _get_bp("modules.routes.training")  # /training (PDF hub + help directory)
 wgclient_bp    = _get_bp("modules.routes.wgclient")  # /wargame/play host page
 
-# --- Rate-limit exemptions for high-frequency game networking -----------------
-try:
-    if wgapi_bp:
-        # Remove all default Flask-Limiter constraints from the wargame API
-        limiter.exempt(wgapi_bp)
-        logger.info("Limiter: exempted blueprint 'wgapi' (/wgapi/*) from rate limits")
-except Exception as e:
-    logger.warning("Limiter: could not exempt 'wgapi' blueprint: %s", e)
-# -----------------------------------------------------------------------------
-
 # Register blueprints with unique names to avoid collisions
 tiles_bp       = _get_bp("modules.services.tiles")   # /tiles/{z}/{x}/{y}.png
 # Weather (page + API)
@@ -786,25 +778,6 @@ if aggregate_api_bp:
     logger.info("Registered blueprint name=aggregate url_prefix=/aggregate")
 else:
     logger.warning("Skipping blueprint 'aggregate' (missing or failed import)")
-
-# --- Rate-limit exemptions for high-frequency Aggregate endpoints -------------
-# The ramp aggregated panel polls these JSON endpoints frequently. Exempt them
-# specifically (rather than the whole blueprint) to avoid tripping the limiter.
-try:
-    # Endpoint function names are scoped by the blueprint name ("aggregate.*").
-    f_summary = app.view_functions.get('aggregate.ramp_v2')
-    f_detail  = app.view_functions.get('aggregate.ramp_v2_airport_detail')
-
-    if f_summary:
-        limiter.exempt(f_summary)
-    if f_detail:
-        limiter.exempt(f_detail)
-
-    if f_summary or f_detail:
-        logger.info("Limiter: exempted /aggregate/ramp/v2* endpoints from rate limits")
-except Exception as e:
-    logger.warning("Limiter: could not exempt aggregate ramp endpoints: %s", e)
-# -----------------------------------------------------------------------------
 
 # Shutdown hook from services
 _jobs = _safe_import("modules.services.jobs")

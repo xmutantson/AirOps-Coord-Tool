@@ -41,7 +41,12 @@ except Exception:
 @bp.route('/_advance_data')
 def inventory_advance_data():
     """JSON stock snapshot for Advanced panel (re-polled every 15s)."""
-    # same build logic as in ramp_boss()
+    # Get ALL categories (for inbound mode - can add to any category)
+    all_cats = dict_rows("""
+      SELECT id, display_name FROM inventory_categories ORDER BY display_name
+    """)
+
+    # Get stocked items with availability
     rows = dict_rows("""
       SELECT e.category_id AS cid,
              c.display_name AS cname,
@@ -59,24 +64,32 @@ def inventory_advance_data():
         GROUP BY e.category_id, e.sanitized_name, e.weight_per_unit
         HAVING qty > 0
     """)
-    data = {"categories":[], "items":{}, "sizes":{}, "avail":{}}
+
+    # Build stocked categories list (for outbound - only pick from stock)
+    stocked_cat_ids = set()
+    data = {"categories":[], "stock_categories":[], "items":{}, "sizes":{}, "avail":{}}
+
     for r in rows:
         cid = str(r['cid'])
+        stocked_cat_ids.add(cid)
         # availability
         data["avail"].setdefault(cid, {})\
              .setdefault(r['sanitized_name'], {})[str(r['weight_per_unit'])] = r['qty']
-        # categories
-        if not any(c["id"]==cid for c in data["categories"]):
-            data["categories"].append({"id":cid,"display_name":r['cname']})
-        # items & sizes
+        # items & sizes (only for stocked items)
         data["items"].setdefault(cid, [])
         data["sizes"].setdefault(cid, {})
         if r['sanitized_name'] not in data["items"][cid]:
             data["items"][cid].append(r['sanitized_name'])
             data["sizes"][cid][r['sanitized_name']] = []
         data["sizes"][cid][r['sanitized_name']].append(str(r['weight_per_unit']))
-    # ─── maintain legacy key so Ramp-Boss JS keeps working ───
-    data["all_categories"] = data["categories"]
+
+    # all_categories = ALL categories (for inbound - can add new items to any)
+    data["all_categories"] = [{"id": str(c['id']), "display_name": c['display_name']} for c in all_cats]
+    # stock_categories = only categories with stock (for outbound)
+    data["stock_categories"] = [c for c in data["all_categories"] if str(c['id']) in stocked_cat_ids]
+    # categories = all_categories (legacy compatibility, frontend uses for inbound)
+    data["categories"] = data["all_categories"]
+
     return jsonify(data)
 
 @bp.route('/_advance_line', methods=['POST'])
@@ -88,30 +101,44 @@ def inventory_advance_line():
     if action == 'add':
         cleanup_pending()
         direction = request.form['direction']
-        cat_id    = int(request.form['category'])
+        cat_raw = request.form.get('category', '').strip()
+        if not cat_raw:
+            return jsonify(success=False, message="Category is required"), 400
+        cat_id = int(cat_raw)
 
         if direction == 'outbound':
             name = request.form['item']
             wpu  = float(request.form['size'])
             qty  = int(request.form['qty'])
 
-            # check stock availability
+            # check stock availability with detailed breakdown
             in_qty  = dict_rows(
               "SELECT COALESCE(SUM(quantity),0) AS v FROM inventory_entries "
               "WHERE category_id=? AND sanitized_name=? AND weight_per_unit=? "
               "  AND direction='in' AND pending=0",
               (cat_id,name,wpu)
             )[0]['v']
-            out_qty = dict_rows(
+            out_committed = dict_rows(
               "SELECT COALESCE(SUM(quantity),0) AS v FROM inventory_entries "
               "WHERE category_id=? AND sanitized_name=? AND weight_per_unit=? "
-              "  AND direction='out'",
+              "  AND direction='out' AND pending=0",
               (cat_id,name,wpu)
             )[0]['v']
+            out_pending = dict_rows(
+              "SELECT COALESCE(SUM(quantity),0) AS v FROM inventory_entries "
+              "WHERE category_id=? AND sanitized_name=? AND weight_per_unit=? "
+              "  AND direction='out' AND pending=1",
+              (cat_id,name,wpu)
+            )[0]['v']
+            out_qty = out_committed + out_pending
             avail = in_qty - out_qty
             if qty > avail:
-                return jsonify(success=False,
-                               message=f"Only {avail} available"), 400
+                # Build detailed error message (only show pending in other manifests, not shipped)
+                parts = [f"Only {avail} available"]
+                if out_pending > 0:
+                    parts.append(f"{out_pending} pending in other manifests")
+                msg = parts[0] + " (" + ", ".join(parts[1:]) + ")" if len(parts) > 1 else parts[0]
+                return jsonify(success=False, message=msg), 400
 
             raw       = name
             sanitized = name
@@ -382,10 +409,14 @@ def inventory_detail_table():
             e['wpu_lbs'] = 0.0
 
     mass_pref = request.cookies.get('mass_unit','lbs')
-    if mass_pref=='kg':
-        for e in entries:
-            e['weight_per_unit'] = round(e['weight_per_unit']/2.20462, 1)
-            e['total_weight']    = round(e['total_weight']/2.20462,    1)
+    for e in entries:
+        # Round to avoid floating point display errors (e.g., 2.0999999999999996)
+        if mass_pref == 'kg':
+            e['weight_per_unit'] = round(e['weight_per_unit']/2.20462, 2)
+            e['total_weight']    = round(e['total_weight']/2.20462, 2)
+        else:
+            e['weight_per_unit'] = round(e['weight_per_unit'], 2)
+            e['total_weight']    = round(e['total_weight'], 2)
 
     return render_template(
         'partials/_inventory_detail_table.html',

@@ -4654,13 +4654,17 @@ def aggregate_manifest_net(
       • Start with existing baseline rows:
           - flight_cargo.flight_id (when editing a sent flight), OR
           - flight_cargo.queued_id (when editing a queued draft)
-      • Add session inventory_entries (pending 0/1): OUT − IN
-    Output rows: [{category_id, sanitized_name, weight_per_unit, qty, total, direction:'out'}...]
+      • Add session inventory_entries (pending 0/1)
+      • For OUTBOUND: sum 'out' positively, 'in' negatively (taking from stock)
+      • For INBOUND: sum 'in' positively (adding to stock)
+    Output rows: [{category_id, sanitized_name, weight_per_unit, qty, total, direction}...]
     Only positive net qty are returned.
     """
     with sqlite3.connect(get_db_file()) as c:
         c.row_factory = sqlite3.Row
-        base = {}
+        base_out = {}  # for outbound (direction='out' entries)
+        base_in = {}   # for inbound (direction='in' entries)
+
         if flight_id is not None:
             for r in c.execute("""
                 SELECT category_id, sanitized_name, weight_per_unit, quantity
@@ -4668,7 +4672,7 @@ def aggregate_manifest_net(
                  WHERE flight_id=?
             """, (int(flight_id),)):
                 key = (int(r['category_id']), r['sanitized_name'].lower().strip(), float(r['weight_per_unit']))
-                base[key] = base.get(key, 0) + int(r['quantity'])
+                base_out[key] = base_out.get(key, 0) + int(r['quantity'])
         elif queued_id is not None:
             for r in c.execute("""
                 SELECT category_id, sanitized_name, weight_per_unit, quantity
@@ -4676,19 +4680,40 @@ def aggregate_manifest_net(
                  WHERE queued_id=?
             """, (int(queued_id),)):
                 key = (int(r['category_id']), r['sanitized_name'].lower().strip(), float(r['weight_per_unit']))
-                base[key] = base.get(key, 0) + int(r['quantity'])
+                base_out[key] = base_out.get(key, 0) + int(r['quantity'])
+
+        # Aggregate outbound entries (out - in cancellations)
         for r in c.execute("""
           SELECT category_id, sanitized_name, weight_per_unit,
                  SUM(CASE direction WHEN 'out' THEN quantity ELSE -quantity END) AS net_qty
             FROM inventory_entries
-           WHERE session_id=? AND pending IN (0,1)
+           WHERE session_id=? AND pending IN (0,1) AND direction='out'
+           GROUP BY category_id, sanitized_name, weight_per_unit
+          UNION ALL
+          SELECT category_id, sanitized_name, weight_per_unit,
+                 SUM(CASE direction WHEN 'out' THEN quantity ELSE -quantity END) AS net_qty
+            FROM inventory_entries
+           WHERE session_id=? AND pending IN (0,1) AND direction='in'
+                 AND category_id IN (SELECT DISTINCT category_id FROM inventory_entries WHERE session_id=? AND direction='out')
+           GROUP BY category_id, sanitized_name, weight_per_unit
+        """, (session_id, session_id, session_id)):
+            key = (int(r['category_id']), r['sanitized_name'].lower().strip(), float(r['weight_per_unit']))
+            base_out[key] = base_out.get(key, 0) + int(r['net_qty'] or 0)
+
+        # Aggregate inbound entries separately (positive for 'in')
+        for r in c.execute("""
+          SELECT category_id, sanitized_name, weight_per_unit,
+                 SUM(quantity) AS net_qty
+            FROM inventory_entries
+           WHERE session_id=? AND pending IN (0,1) AND direction='in'
            GROUP BY category_id, sanitized_name, weight_per_unit
         """, (session_id,)):
             key = (int(r['category_id']), r['sanitized_name'].lower().strip(), float(r['weight_per_unit']))
-            base[key] = base.get(key, 0) + int(r['net_qty'] or 0)
+            base_in[key] = base_in.get(key, 0) + int(r['net_qty'] or 0)
 
         out = []
-        for (cid, name, wpu), qty in base.items():
+        # Add outbound items
+        for (cid, name, wpu), qty in base_out.items():
             if qty and qty > 0:
                 out.append({
                     'category_id': cid,
@@ -4697,6 +4722,17 @@ def aggregate_manifest_net(
                     'qty': int(qty),
                     'total': float(wpu) * int(qty),
                     'direction': 'out'
+                })
+        # Add inbound items (only those not already in outbound with same key)
+        for (cid, name, wpu), qty in base_in.items():
+            if qty and qty > 0 and (cid, name, wpu) not in base_out:
+                out.append({
+                    'category_id': cid,
+                    'sanitized_name': name,
+                    'weight_per_unit': wpu,
+                    'qty': int(qty),
+                    'total': float(wpu) * int(qty),
+                    'direction': 'in'
                 })
         return sorted(out, key=lambda d: (d['sanitized_name'], d['weight_per_unit']))
 

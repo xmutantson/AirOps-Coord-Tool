@@ -515,14 +515,49 @@ document.addEventListener('DOMContentLoaded', () => {
     return; // no nav on login/setup pages → avoid binding listeners
   }
 
+  // Move dropdown to body so it escapes header's stacking context
+  // This fixes z-index issues where backdrop would cover the dropdown
+  document.body.appendChild(dropdown);
+
+  // Create backdrop for overlay effect
+  const backdrop = document.createElement('div');
+  backdrop.id = 'nav-backdrop';
+  document.body.appendChild(backdrop);
+
+  function positionDropdown() {
+    // Position dropdown relative to hamburger button
+    const rect = hamburger.getBoundingClientRect();
+    dropdown.style.top = (rect.bottom + 4) + 'px';
+    // Align right edge with hamburger, but don't go off-screen
+    const dropRect = dropdown.getBoundingClientRect();
+    const rightPos = window.innerWidth - rect.right;
+    dropdown.style.right = Math.max(4, rightPos) + 'px';
+  }
+
+  function showDropdown() {
+    dropdown.style.display = 'block';
+    positionDropdown();
+    backdrop.classList.add('visible');
+  }
+  function hideDropdown() {
+    dropdown.style.display = 'none';
+    backdrop.classList.remove('visible');
+  }
+
   // Show/hide dropdown
   hamburger.addEventListener('click', e => {
-    dropdown.style.display = dropdown.style.display === 'block' ? 'none' : 'block';
+    if (dropdown.style.display === 'block') hideDropdown();
+    else showDropdown();
     e.stopPropagation();
   });
+  backdrop.addEventListener('click', hideDropdown);
   document.addEventListener('click', e => {
     if (!dropdown.contains(e.target) && e.target !== hamburger)
-      dropdown.style.display = 'none';
+      hideDropdown();
+  });
+  // Reposition on resize/orientation change
+  window.addEventListener('resize', () => {
+    if (dropdown.style.display === 'block') positionDropdown();
   });
 
   // Load tab prefs from localStorage
@@ -682,6 +717,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const cancelEd = document.getElementById('help-cancel');
 
     function openHelp() {
+      // Close hamburger dropdown if open
+      const navDropdown = document.getElementById('nav-dropdown');
+      const navBackdrop = document.getElementById('nav-backdrop');
+      if (navDropdown) navDropdown.style.display = 'none';
+      if (navBackdrop) navBackdrop.classList.remove('visible');
+
       if (backdrop) backdrop.style.display = 'block';
       if (panel) {
         panel.style.display = 'block';

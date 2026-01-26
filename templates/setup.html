@@ -89,7 +89,7 @@
       <div class="cc-row" style="margin-top:.5rem;">
         <strong>Include CCs on AOCT messages:</strong>
       </div>
-      <div class="cc-row" style="display:grid;grid-template-columns: 240px 120px;gap:.5rem;align-items:center;">
+      <div class="cc-row" style="display:grid;grid-template-columns: minmax(150px,240px) minmax(70px,120px);gap:.5rem;align-items:center;">
         <label for="aoct_cc_query">• Cargo <em>Query</em> sends:</label>
         <select id="aoct_cc_query" name="aoct_cc_query">
           <option value="no"  {% if aoct_cc_query!='yes' %}selected{% endif %}>No</option>

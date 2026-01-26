@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import os
 import json
-import time
 import hashlib
 import sqlite3
 from datetime import datetime
@@ -27,8 +26,6 @@ from modules.utils.comms import insert_comm
 aggregate_bp = Blueprint("aggregate", __name__)
 
 # ----------------------- Config (env-driven) --------------------------------
-# Rate limit: requests per minute per IP (0 disables). Example: AGG_LIMIT_RPM=120
-_AGG_LIMIT_RPM = int(os.getenv("AGG_LIMIT_RPM", "0") or 0)
 # ADS-B default cap when no explicit tails are requested
 _AGG_ADSB_MAX = int(os.getenv("AGG_ADSB_MAX", "200") or 200)
 
@@ -49,33 +46,6 @@ _AGG_PREFS_ALLOW = {
               "wargame_mode,show_debug_logs,enable_1090_distances").split(",")
     if k.strip()
 }
-
-# In-memory, best-effort per-process limiter (simple + dependency-free).
-# For multi-process / multi-host deployments, put a reverse-proxy rate limit in front.
-_RL_HITS: Dict[str, List[float]] = {}
-_RL_WINDOW_S = 60.0
-
-
-def _check_rate_limit(ip: str) -> int | None:
-    if _AGG_LIMIT_RPM <= 0:
-        return None
-    now = time.time()
-    bucket = _RL_HITS.setdefault(ip, [])
-    # prune old
-    cutoff = now - _RL_WINDOW_S
-    i = 0
-    for t in bucket:
-        if t >= cutoff:
-            break
-        i += 1
-    if i:
-        del bucket[:i]
-    # check
-    if len(bucket) >= _AGG_LIMIT_RPM:
-        return int(max(1, cutoff + _RL_WINDOW_S - now))  # seconds until window clears
-    bucket.append(now)
-    return None
-
 
 # ----------------------- Read-only DB helpers -------------------------------
 def _ro_connect(timeout: int = 30) -> sqlite3.Connection:
@@ -366,15 +336,6 @@ def _fetch_queues(conn: sqlite3.Connection, *, limit: int) -> Dict[str, Any]:
 # ----------------------- The endpoint ---------------------------------------
 @aggregate_bp.route("/", methods=["GET"])
 def get_aggregate():
-    # Optional: basic per-IP rate limit (process-local)
-    ip = request.headers.get("X-Forwarded-For", request.remote_addr or "0.0.0.0").split(",")[0].strip()
-    retry_in = _check_rate_limit(ip)
-    if retry_in is not None:
-        resp = make_response(jsonify({"error": "rate_limited", "retry_after_s": retry_in}), 429)
-        resp.headers["Retry-After"] = str(retry_in)
-        resp.headers["Access-Control-Allow-Origin"] = "*"
-        return resp
-
     # Parse params
     sections = [s.strip().lower() for s in (request.args.get("sections") or _AGG_DEFAULT_SECTIONS).split(",") if s.strip()]
     if "all" in sections or "*" in sections:

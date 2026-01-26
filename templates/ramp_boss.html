@@ -494,13 +494,10 @@
       </style>
 
       <style>
-        /* Step 6: Inventory matchability borders (preview only; no fulfillment) */
-        #adv-lines .adv-chip.match-ok {
-          border: 2px solid #2e7d32 !important;  /* solid green: enough weight in stock */
-          border-radius: 16px;
-        }
+        /* Step 6: Inventory presence border (server enforces no overdraws) */
+        #adv-lines .adv-chip.match-ok,
         #adv-lines .adv-chip.match-partial {
-          border: 2px dashed #2e7d32 !important; /* dashed green: some presence but insufficient/unknown weight */
+          border: 2px solid #2e7d32 !important;  /* solid green: item exists in stock */
           border-radius: 16px;
         }
       </style>
@@ -1024,7 +1021,6 @@
         data.items.forEach((it, idx) => {
           const wrap = document.createElement('div');
           wrap.className = 'adv-chip';
-          wrap.style = 'border:1px solid #ccc; border-radius:16px; padding:.5rem .75rem;';
           wrap.dataset.idx = String(idx);
           wrap.dataset.sanitized = it.sanitized_name;
           wrap.dataset.raw = it.raw_name || it.sanitized_name;
@@ -1745,7 +1741,11 @@
           const fidQ = (j && (j.flight_id || j.id)) ? (j.flight_id || j.id) : null;
           if (fidQ){ enablePrintLabelsButton({ queuedId: fidQ }); showLabelsToast({ queuedId: fidQ }); }
           showToast('Flight added to queue','success');
+          // Preserve direction toggle across reset
+          const prevDir = dirRadios.find(r => r.checked)?.value || 'outbound';
           form.reset();
+          const dirToRestore = dirRadios.find(r => r.value === prevDir);
+          if (dirToRestore) dirToRestore.checked = true;
           applyDirUI();
           travelHInp.value = travelMInp.value = '';
           // Clear running total
@@ -1798,16 +1798,20 @@
 
       showToast('Flight sent','success');
 
-      // Enable persistent Print Labels button and toast
+      // Enable persistent Print Labels button (no toast - users don't need it)
       try {
         const fid = (f && (f.flight_id || f.id)) || (j && (j.flight_id || j.id));
-        if (fid){ enablePrintLabelsButton(fid); showLabelsToast(fid); }
+        if (fid){ enablePrintLabelsButton(fid); }
       } catch(_){}
 
-      // auto-clear success after 5s so it doesn’t stick around
+      // auto-clear success after 5s so it doesn't stick around
       setTimeout(() => { feedbackBox.innerHTML = ''; }, 5000);
 
+      // Preserve direction toggle across reset
+      const prevDir = dirRadios.find(r => r.checked)?.value || 'outbound';
       form.reset();
+      const dirToRestore = dirRadios.find(r => r.value === prevDir);
+      if (dirToRestore) dirToRestore.checked = true;
       applyDirUI();
 
       // reset running total
@@ -3193,8 +3197,9 @@
     try {
       const fresh = await fetch(inventoryUrl + "?_=" + Date.now(), { headers: xhrHeaders() }).then(r => r.json());
       // Keep BOTH names so whichever the UI asks for is present
-      inventoryAdvancedData.categories       = fresh.categories;   // new
-      inventoryAdvancedData.stock_categories = fresh.categories;   // unchanged
+      inventoryAdvancedData.categories       = fresh.categories;        // all categories (for inbound)
+      inventoryAdvancedData.all_categories   = fresh.all_categories;    // all categories (explicit)
+      inventoryAdvancedData.stock_categories = fresh.stock_categories;  // only stocked (for outbound)
       inventoryAdvancedData.items            = fresh.items;
       inventoryAdvancedData.sizes            = fresh.sizes;
       inventoryAdvancedData.avail            = fresh.avail;
@@ -3375,11 +3380,22 @@
     }catch(_){}
   }
 
-  function syncFromAdvToggle() {
+  async function syncFromAdvToggle() {
     const dir = advDirOut.checked ? 'outbound' : 'inbound';
     document.querySelector(`input[name="direction"][value="${dir}"]`).checked = true;
     applyDirUI();
     applyAdvDirUI(dir);
+    // Delete all pending chips properly (returns items to inventory) before switching
+    const chips = [...advLines.querySelectorAll('.adv-chip')];
+    for (const chip of chips) {
+      const name = chip.dataset.sanitized;
+      const wpu = chip.dataset.wpu;
+      if (name && wpu) {
+        try { await deleteByKey(name, Number(wpu)); } catch(_) {}
+      }
+    }
+    advLines.innerHTML = '';
+    rebuildTotalsAndRemarks();
     const useList = (dir === 'inbound')
       ? (inventoryAdvancedData.categories ||
          inventoryAdvancedData.all_categories ||
@@ -3434,6 +3450,16 @@
   // ← send each “Add” click up to the server with CSRF
   advAdd.addEventListener('click', async () => {
     const dirNow = advDirOut.checked ? 'outbound' : 'inbound';
+    // Validate required fields before submitting
+    if (!advCat.value) return showError('Please select a category');
+    if (!advQty.value) return showError('Please enter a quantity');
+    if (dirNow === 'outbound') {
+      if (!advItem.value) return showError('Please select an item');
+      if (!advSize.value) return showError('Please select a size');
+    } else {
+      if (!advName.value.trim()) return showError('Please enter an item name');
+      if (!advWeight.value) return showError('Please enter a weight');
+    }
     const params = new URLSearchParams({
       csrf_token:  csrfToken,
       action:      'add',
@@ -3799,7 +3825,7 @@
               t1 = Number(keep.dataset.total || 0),
               t2 = Number(chip.dataset.total || 0);
           var sumQ = q1 + q2,
-              sumT = t1 + t2;
+              sumT = Math.round((t1 + t2) * 100) / 100;  // avoid floating point errors
           keep.dataset.qty   = String(sumQ);
           keep.dataset.total = String(sumT);
           var qtyEl = keep.querySelector('.chip-qty');
