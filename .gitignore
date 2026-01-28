@@ -73,3 +73,6 @@ get-docker.sh
 # Optional: ignore dev-only helpers if you don't intend to track them
 tools/
 scripts/
+
+# Local documentation/printables
+docs/

@@ -624,6 +624,10 @@ def require_login():
     if request.blueprint == "aggregate":
         return
 
+    # --- captive portal detection: always exempt (OS-level connectivity checks) ---
+    if request.blueprint == "captive":
+        return
+
     # --- localhost-only open endpoints (by PATH) -----------------------
     if request.remote_addr in ("127.0.0.1", "::1"):
         if request.path in ("/_ping", "/__routes__", "/dashboard/plain"):

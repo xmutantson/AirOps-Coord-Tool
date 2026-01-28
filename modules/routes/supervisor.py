@@ -358,29 +358,69 @@ def supervisor_counts_partial():
 
 @bp.route('/_supervisor_recent_flights')
 def supervisor_recent_flights_partial():
-    """AJAX partial: table of recent active flights."""
+    """AJAX partial: table of recent active flights to/from default origin."""
     show_dist = bool(app.extensions.get('distances')) and app.extensions.get('recv_loc') is not None
     unit = request.cookies.get('distance_unit','nm')
     rows = []
-    raw_rows = dict_rows("""
-        SELECT
-          id,
-          tail_number,
-          airfield_takeoff,
-          airfield_landing,
-          COALESCE(takeoff_time,'----') AS departure,
-          COALESCE(eta,'----') AS arrival,
-          cargo_weight,
-          flight_code,
-          is_ramp_entry,
-          sent,
-          complete
-        FROM flights
-        WHERE complete = 0
-        ORDER BY id DESC
-        LIMIT 6
-    """)
+
+    # Get airport code format preference (ICAO4 vs IATA3)
+    cookie_pref = request.cookies.get('code_format')
+    airport_pref = cookie_pref or (
+        dict_rows("SELECT value FROM preferences WHERE name='code_format'")
+        or [{'value':'icao4'}]
+    )[0]['value']
+
+    # Get default origin and all its aliases for filtering
+    default_origin = get_preference('default_origin') or ''
+    origin_aliases = airport_aliases(default_origin) if default_origin else []
+
+    if origin_aliases:
+        # Filter to flights where takeoff OR landing matches any origin alias
+        placeholders = ",".join("?" for _ in origin_aliases)
+        raw_rows = dict_rows(f"""
+            SELECT
+              id,
+              tail_number,
+              airfield_takeoff,
+              airfield_landing,
+              COALESCE(takeoff_time,'----') AS departure,
+              COALESCE(eta,'----') AS arrival,
+              cargo_weight,
+              flight_code,
+              is_ramp_entry,
+              sent,
+              complete
+            FROM flights
+            WHERE complete = 0
+              AND (airfield_takeoff IN ({placeholders}) OR airfield_landing IN ({placeholders}))
+            ORDER BY id DESC
+            LIMIT 6
+        """, origin_aliases + origin_aliases)
+    else:
+        # No default origin set - show all in-flight
+        raw_rows = dict_rows("""
+            SELECT
+              id,
+              tail_number,
+              airfield_takeoff,
+              airfield_landing,
+              COALESCE(takeoff_time,'----') AS departure,
+              COALESCE(eta,'----') AS arrival,
+              cargo_weight,
+              flight_code,
+              is_ramp_entry,
+              sent,
+              complete
+            FROM flights
+            WHERE complete = 0
+            ORDER BY id DESC
+            LIMIT 6
+        """)
     for r in raw_rows:
+        # Format airport codes according to user preference
+        r['origin_view'] = fmt_airport(r.get('airfield_takeoff',''), airport_pref)
+        r['dest_view'] = fmt_airport(r.get('airfield_landing',''), airport_pref)
+
         # Add NM distance if enabled and available, using same logic as dashboard
         if show_dist:
             entry = app.extensions['distances'].get(r['tail_number'])

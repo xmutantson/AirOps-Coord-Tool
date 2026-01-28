@@ -1,0 +1,312 @@
+{% extends "base.html" %}
+{% block title %}Check In – Aircraft Ops{% endblock %}
+
+{% block content %}
+<div class="container" style="max-width:480px; margin:2rem auto; padding:1rem;">
+  <h2>Shift Check-In</h2>
+
+  <!-- Status message -->
+  <div id="checkin-status" style="display:none; padding:1rem; margin-bottom:1rem; border-radius:.5rem; text-align:center; font-weight:600;"></div>
+
+  <p class="muted" id="checkin-instructions">Welcome! Start with your name. If we already have you, we'll clock you right in.</p>
+
+  <!-- Stage 1: Name only -->
+  <form id="checkin-form-stage1" autocomplete="on">
+    <div id="checkin-stage1">
+      <label for="ci-name">Name</label>
+      <input id="ci-name" name="name" class="force-upper" placeholder="e.g. JANE DOE"
+             value="{{ (last_staff.name or '')|e }}" style="width:100%; padding:.6rem; font-size:1rem;">
+      <div class="actions" style="margin-top:1rem; display:flex; gap:.5rem;">
+        <button type="button" class="button secondary" id="checkin-skip">Skip</button>
+        <button type="submit" class="button primary" id="checkin-continue">Continue</button>
+      </div>
+    </div>
+  </form>
+
+  <!-- Stage 2: New person → collect details (separate form) -->
+  <form id="checkin-form-stage2" autocomplete="on" style="display:none;">
+    <div id="checkin-stage2">
+      <div class="muted" style="margin-bottom:.5rem;">Looks like you're new. Please add a few details:</div>
+
+      <label for="ci2-name">Name</label>
+      <input id="ci2-name" name="name" class="force-upper" placeholder="JANE DOE" style="width:100%; padding:.6rem;">
+
+      <label for="ci2-organization" style="margin-top:.75rem;">Organization</label>
+      <input id="ci2-organization" name="organization" placeholder="Red Cross / EOC / WWDART…" style="width:100%; padding:.6rem;">
+
+      <label for="ci2-emc" style="margin-top:.75rem;">EMC (optional)</label>
+      <input id="ci2-emc" name="emc" placeholder="EMC-1234" style="width:100%; padding:.6rem;">
+
+      <label for="ci2-email" style="margin-top:.75rem;">Email</label>
+      <input id="ci2-email" name="email" type="email" placeholder="name@example.org" style="width:100%; padding:.6rem;">
+
+      <label for="ci2-phone" style="margin-top:.75rem;">Cell Phone</label>
+      <input id="ci2-phone" name="phone" inputmode="tel" placeholder="(555) 555-5555" style="width:100%; padding:.6rem;">
+
+      <div style="margin:.75rem 0;">
+        <div style="font-weight:600; margin-bottom:.5rem;">Are you a Pilot or a Volunteer?</div>
+        <div style="display:flex; gap:.5rem;">
+          <label class="radio-card">
+            <input type="radio" name="affiliation" value="pilot">
+            <span class="radio-card-label">Pilot</span>
+          </label>
+          <label class="radio-card">
+            <input type="radio" name="affiliation" value="volunteer">
+            <span class="radio-card-label">Volunteer</span>
+          </label>
+        </div>
+      </div>
+      <style>
+        .radio-card {
+          flex:1; display:flex; align-items:center; justify-content:center;
+          padding:.75rem 1rem; border:2px solid var(--border, #ccc); border-radius:.5rem;
+          cursor:pointer; transition: all .15s ease;
+          background: var(--bg, #fff);
+        }
+        .radio-card input { position:absolute; opacity:0; pointer-events:none; }
+        .radio-card-label { font-weight:600; font-size:1rem; }
+        .radio-card:has(input:checked) {
+          border-color: var(--accent, #2563eb);
+          background: var(--accent-light, #dbeafe);
+        }
+        .radio-card:hover { border-color: var(--accent, #2563eb); }
+      </style>
+
+      <div class="actions" style="margin-top:1rem; display:flex; gap:.5rem;">
+        <button type="button" class="button secondary" id="checkin-back">Back</button>
+        <button type="submit" class="button primary" id="checkin-create">Create & Check In</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<script>
+(function(){
+  const CSRF = {{ csrf_token()|tojson }};
+  const form1     = document.getElementById('checkin-form-stage1');
+  const form2     = document.getElementById('checkin-form-stage2');
+  const btnSkip   = document.getElementById('checkin-skip');
+  const btnBack   = document.getElementById('checkin-back');
+  const statusDiv = document.getElementById('checkin-status');
+  const instructions = document.getElementById('checkin-instructions');
+
+  function showStatus(msg, type) {
+    statusDiv.textContent = msg;
+    statusDiv.style.display = 'block';
+    statusDiv.style.background = type === 'error' ? '#ffebee' : type === 'success' ? '#e8f5e9' : '#e3f2fd';
+    statusDiv.style.color = type === 'error' ? '#c62828' : type === 'success' ? '#2e7d32' : '#1565c0';
+  }
+  function hideStatus() { statusDiv.style.display = 'none'; }
+
+  function goToDashboard(){ window.location.href = '{{ url_for("core.dashboard") }}'; }
+
+  // Waiver choice modal (inline)
+  function openWaiverChoice(staffId, name){
+    const wrap = document.createElement('div');
+    wrap.className = 'modal';
+    wrap.id = 'waiver-choice';
+    wrap.style.display = 'flex';
+    wrap.innerHTML = `
+      <div class="backdrop" aria-hidden="true"></div>
+      <div class="card" role="dialog" aria-modal="true" aria-label="Choose Waiver" style="max-width:400px; margin:auto; padding:1.5rem;">
+        <h3 style="margin:0 0 .25rem 0;">Choose Waiver</h3>
+        <p class="muted" style="margin:0 0 .75rem 0;">for <strong>${name || 'new staffer'}</strong></p>
+        <div class="actions" style="justify-content:flex-start; gap:.5rem; display:flex; flex-wrap:wrap;">
+          <a class="button" target="_blank" rel="noopener" href="/docs/waiver/pilot?staff_id=${encodeURIComponent(staffId)}">Pilot</a>
+          <a class="button" target="_blank" rel="noopener" href="/docs/waiver/volunteer?staff_id=${encodeURIComponent(staffId)}">Volunteer</a>
+          <button type="button" class="button secondary" id="wc-close">Done</button>
+        </div>
+      </div>`;
+    document.body.appendChild(wrap);
+    wrap.querySelector('#wc-close')?.addEventListener('click', ()=> { wrap.remove(); goToDashboard(); });
+    wrap.querySelector('.backdrop')?.addEventListener('click', ()=> { wrap.remove(); goToDashboard(); });
+  }
+
+  // Stage 1: Name lookup
+  form1.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const nameVal = (document.getElementById('ci-name').value || '').trim();
+    if (!nameVal) { document.getElementById('ci-name').focus(); return; }
+
+    showStatus('Checking in, please wait...', 'info');
+    document.getElementById('checkin-continue').disabled = true;
+
+    try {
+      console.log('[checkin] Stage 1: looking up name:', nameVal);
+      const r = await fetch('{{ url_for("staff.staff_quick_checkin") }}', {
+        method: 'POST',
+        headers: { 'X-CSRFToken': CSRF },
+        body: new URLSearchParams({ name: nameVal }),
+        credentials: 'same-origin'
+      });
+
+      console.log('[checkin] Response status:', r.status);
+      if (!r.ok) throw new Error('Server returned ' + r.status);
+
+      const ctype = r.headers.get('content-type') || '';
+      let rawText = await r.text();
+      console.log('[checkin] Raw response:', rawText.substring(0, 200));
+
+      if (!ctype.includes('application/json')) {
+        const brace = rawText.indexOf('{');
+        if (brace > 0) rawText = rawText.slice(brace);
+      }
+
+      let payload = {};
+      try { payload = JSON.parse(rawText); } catch(parseErr) {
+        console.error('[checkin] JSON parse error:', parseErr);
+        throw new Error('Invalid server response');
+      }
+      console.log('[checkin] Parsed payload:', payload);
+
+      if (payload && payload.ok) {
+        if (payload.needs_profile) {
+          console.log('[checkin] New person - showing stage 2');
+          hideStatus();
+          form1.style.display = 'none';
+          form2.style.display = 'block';
+          document.getElementById('ci2-name').value = nameVal;
+          instructions.textContent = "New person! Please fill in your details:";
+          setTimeout(()=>document.getElementById('ci2-organization').focus(), 10);
+          return;
+        }
+        // Existing person - clocked in
+        const t = String(payload.toggled || '').toLowerCase();
+        const msg = (t === 'restarted') ? 'Shift restarted!' : 'Clocked in!';
+        showStatus(msg, 'success');
+        console.log('[checkin] Success:', msg);
+        if (payload.staff_id) {
+          setTimeout(() => openWaiverChoice(payload.staff_id, payload.name || nameVal), 3000);
+        } else {
+          setTimeout(goToDashboard, 3000);
+        }
+        return;
+      }
+
+      // ok is false
+      console.error('[checkin] Server returned ok:false', payload);
+      showStatus(payload.message || 'Could not check you in. Please try again.', 'error');
+      document.getElementById('checkin-continue').disabled = false;
+
+    } catch(err) {
+      console.error('[checkin] Error:', err);
+      showStatus('Check-in failed: ' + err.message, 'error');
+      document.getElementById('checkin-continue').disabled = false;
+    }
+  });
+
+  // Stage 2: Create new profile
+  form2.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(form2);
+    const nameVal = fd.get('name') || '';
+
+    if (!nameVal.trim()) {
+      document.getElementById('ci2-name').focus();
+      return;
+    }
+
+    showStatus('Creating profile, please wait...', 'info');
+    document.getElementById('checkin-create').disabled = true;
+
+    try {
+      console.log('[checkin] Stage 2: creating profile for:', nameVal);
+      fd.set('ajax', '1');
+
+      const resp = await fetch('{{ url_for("staff.staff_new") }}', {
+        method: 'POST',
+        headers: { 'X-CSRFToken': CSRF, 'X-Requested-With': 'XMLHttpRequest' },
+        body: fd,
+        credentials: 'same-origin'
+      });
+
+      console.log('[checkin] staff_new response:', resp.status);
+      const ctype = resp.headers.get('content-type') || '';
+
+      if (!resp.ok) throw new Error('Server returned ' + resp.status);
+
+      if (ctype.includes('application/json')) {
+        const data = await resp.json();
+        console.log('[checkin] staff_new data:', data);
+
+        if (data && data.ok && data.staff_id) {
+          // Now clock them in
+          showStatus('Profile created! Clocking in...', 'info');
+          try {
+            await fetch('{{ url_for("staff.staff_quick_checkin") }}', {
+              method:'POST',
+              headers:{ 'X-CSRFToken': CSRF },
+              body:new URLSearchParams({ name: nameVal }),
+              credentials:'same-origin'
+            });
+          } catch(e) { console.warn('[checkin] clock-in after create failed:', e); }
+
+          showStatus('Profile saved and clocked in!', 'success');
+          const aff = (fd.get('affiliation') || '').toString();
+          const sid = data.staff_id;
+          const nm  = data.name || nameVal;
+
+          setTimeout(() => {
+            if (aff === 'pilot') {
+              window.open(`/docs/waiver/pilot?staff_id=${encodeURIComponent(sid)}`, '_blank', 'noopener');
+            } else if (aff === 'volunteer') {
+              window.open(`/docs/waiver/volunteer?staff_id=${encodeURIComponent(sid)}`, '_blank', 'noopener');
+            }
+            openWaiverChoice(sid, nm);
+          }, 3000);
+          return;
+        }
+
+        // ok:false or no staff_id
+        console.error('[checkin] staff_new failed:', data);
+        showStatus(data.message || 'Could not create profile.', 'error');
+        document.getElementById('checkin-create').disabled = false;
+        return;
+      }
+
+      // Non-JSON response - probably a redirect, treat as success
+      console.log('[checkin] Non-JSON response, redirecting to dashboard');
+      showStatus('Profile saved!', 'success');
+      setTimeout(goToDashboard, 3000);
+
+    } catch(err) {
+      console.error('[checkin] Stage 2 error:', err);
+      showStatus('Could not save profile: ' + err.message, 'error');
+      document.getElementById('checkin-create').disabled = false;
+    }
+  });
+
+  // Back to Stage 1
+  btnBack?.addEventListener('click', () => {
+    hideStatus();
+    form2.style.display = 'none';
+    form1.style.display = 'block';
+    instructions.textContent = "Welcome! Start with your name. If we already have you, we'll clock you right in.";
+    document.getElementById('checkin-continue').disabled = false;
+    setTimeout(()=>document.getElementById('ci-name').focus(), 10);
+  });
+
+  // Skip
+  btnSkip?.addEventListener('click', async () => {
+    showStatus('Skipping...', 'info');
+    try {
+      const r = await fetch('{{ url_for("staff.staff_quick_checkin") }}', {
+        method:'POST',
+        headers: { 'X-CSRFToken': CSRF },
+        body: new URLSearchParams({skip:'1'}),
+        credentials: 'same-origin'
+      });
+      if (r.ok) {
+        showStatus('OK — we won\'t ask again for a while.', 'success');
+        setTimeout(goToDashboard, 3000);
+      }
+    } catch(_) {
+      showStatus('Skip failed', 'error');
+    }
+  });
+
+  // Auto-focus name field
+  setTimeout(()=>document.getElementById('ci-name')?.focus(), 100);
+})();
+</script>
+{% endblock %}

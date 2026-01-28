@@ -966,6 +966,9 @@ body.cw-active .ramp-form-container > :not(#cargo-tools-panel) { display: none !
    Responsive (mobile-first tweaks ≤ 600px)
    =============================================================== */
 @media (max-width: 600px) {
+  /* Global: extra bottom padding so content clears the footer */
+  main.container { padding-bottom: 5rem; }
+
   /* Ramp Boss: one-column stack */
   .ramp-form-container { max-width: 100%; margin: 0.5rem auto; padding: 0.5rem; }
   .ramp-form-container form { display: block; }
@@ -1454,13 +1457,22 @@ table.wg-radio-table tr.read { opacity: .8; }
   }
 }
 
-/* panel “cards” styling */
+/* panel "cards" styling */
 .supervisor-panel {
   background: #fff;
   border: 1px solid #ccc;
   padding: 1rem;
   border-radius: 4px;
   box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+/* Map panel needs a min-height so iframe doesn't collapse */
+#supervisor-map {
+  min-height: 350px;
+}
+@media (min-width: 801px) {
+  #supervisor-map {
+    min-height: 450px;
+  }
 }
 /* Ensure supervisor dashboard tables don't overflow their panels */
 .supervisor-panel table {

@@ -1,4 +1,4 @@
-<h3 style="text-align:center; margin-top:0; margin-bottom:1rem;">Priority Flights</h3>
+<h3 style="text-align:center; margin-top:0; margin-bottom:1rem;">Active Flights</h3>
 <table class="ops-flight-table">
   <thead>
     <tr>
@@ -34,9 +34,9 @@
         <td{% if f.distance_stale %} style="opacity:0.5"{% endif %}>{{ f.distance or '' }}</td>
       {% endif %}
       <td>
-        {{ f.airfield_takeoff or '???' }}
+        {{ f.origin_view or f.airfield_takeoff or '???' }}
         <span style="font-weight:bold;">→</span>
-        {{ f.airfield_landing or '???' }}
+        {{ f.dest_view or f.airfield_landing or '???' }}
       </td>
       <td>{{ f.departure or 'TBD' }}</td>
       <td>{{ f.arrival   or 'TBD' }}</td>

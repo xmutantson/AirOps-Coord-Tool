@@ -736,6 +736,7 @@ webeoc_bp      = _get_bp("modules.routes.webeoc")    # /webeoc/*
 locates_bp     = _get_bp("modules.routes.locates")   # /api/locates/*
 training_bp    = _get_bp("modules.routes.training")  # /training (PDF hub + help directory)
 wgclient_bp    = _get_bp("modules.routes.wgclient")  # /wargame/play host page
+captive_bp     = _get_bp("modules.routes.captive")   # captive portal detection responses
 
 # Register blueprints with unique names to avoid collisions
 tiles_bp       = _get_bp("modules.services.tiles")   # /tiles/{z}/{x}/{y}.png
@@ -770,6 +771,7 @@ _reg(webeoc_bp,      name="webeoc")
 _reg(comms_bp,       name="comms")
 _reg(aircraft_bp,    name="aircraft")   # /aircraft routes
 _reg(training_bp,    name="training")   # /training routes
+_reg(captive_bp,     name="captive")    # captive portal detection
 _reg(weather_page_bp, name="weather_page")  # /weather
 _reg(weather_api_bp,  name="weather_api")   # /api/weather/*
 if aggregate_api_bp:

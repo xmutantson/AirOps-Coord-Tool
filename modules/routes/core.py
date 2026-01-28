@@ -129,6 +129,24 @@ def dashboard():
         last_staff=last_staff
     )
 
+@bp.route('/checkin')
+def checkin_page():
+    """
+    Dedicated check-in page for mobile phones.
+    Shows the same form as the dashboard modal but as a full page.
+    """
+    # Prefill fields from prior cookies if present
+    last_staff = {
+        'name': request.cookies.get('last_staff_name',''),
+        'role': request.cookies.get('last_staff_role',''),
+        'ew':   request.cookies.get('last_staff_ew',''),
+    }
+    return render_template(
+        'checkin.html',
+        active='checkin',
+        last_staff=last_staff
+    )
+
 @bp.route('/dashboard/plain')
 def dashboard_plain():
     #  1) only allow calls from localhost
@@ -225,12 +243,15 @@ def dashboard_table_partial():
     if sort_seq:
         sql += " ORDER BY id DESC"
     else:
+        # Default grouping: unsent first, sent second
+        # Within each: in-flight first, then landed
         sql += """
           ORDER BY
             CASE
-              WHEN is_ramp_entry = 1 AND sent = 0 THEN 0
-              WHEN complete = 0                       THEN 1
-              ELSE 2
+              WHEN sent = 0 AND complete = 0 THEN 0   -- Unsent + In-Flight
+              WHEN sent = 0 AND complete = 1 THEN 1   -- Unsent + Landed
+              WHEN sent = 1 AND complete = 0 THEN 2   -- Sent + In-Flight
+              ELSE 3                                   -- Sent + Landed
             END,
             id DESC
         """

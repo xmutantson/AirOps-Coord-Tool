@@ -79,8 +79,18 @@
   <!-- panel/card (styled by #checkin-modal + .card in style.css) -->
   <div id="checkin-modal" class="card">
     <h3 id="checkin-title">Shift Check-In</h3>
-    <p class="muted">Welcome! Start with your name. If we already have you, we’ll clock you right in.</p>
-    <form id="checkin-form" autocomplete="on">
+
+    <!-- Stage 0: Ask if on phone -->
+    <div id="checkin-stage0">
+      <p class="muted">Are you on a phone?</p>
+      <div class="actions" style="justify-content:center; gap:1rem;">
+        <button type="button" class="button primary" id="checkin-yes-phone">Yes</button>
+        <button type="button" class="button secondary" id="checkin-no-phone">No</button>
+      </div>
+    </div>
+
+    <p class="muted" id="checkin-welcome" style="display:none;">Welcome! Start with your name. If we already have you, we'll clock you right in.</p>
+    <form id="checkin-form" autocomplete="on" style="display:none;">
       <!-- Stage 1: Name only -->
       <div id="checkin-stage1">
         <label for="ci-name">Name</label>
@@ -147,12 +157,25 @@
     const backdrop = document.getElementById('checkin-backdrop');
     const form     = document.getElementById('checkin-form');
     const btnSkip  = document.getElementById('checkin-skip');
+    const st0      = document.getElementById('checkin-stage0');
     const st1      = document.getElementById('checkin-stage1');
     const st2      = document.getElementById('checkin-stage2');
     const btnBack  = document.getElementById('checkin-back');
-    function openModal(){ backdrop.style.display = 'flex'; setTimeout(()=>document.getElementById('ci-name').focus(), 10); }
+    const welcome  = document.getElementById('checkin-welcome');
+    function openModal(){ backdrop.style.display = 'flex'; }
     function closeModal(){ backdrop.remove(); }
     openModal();
+
+    // Stage 0: Phone question handlers
+    document.getElementById('checkin-yes-phone').addEventListener('click', () => {
+      window.location.href = '{{ url_for("core.checkin_page") }}';
+    });
+    document.getElementById('checkin-no-phone').addEventListener('click', () => {
+      st0.style.display = 'none';
+      welcome.style.display = '';
+      form.style.display = '';
+      setTimeout(()=>document.getElementById('ci-name').focus(), 10);
+    });
 
     // Inline choice UI to open the appropriate waiver in a new tab
     function openWaiverChoice(staffId, name, chooseUrl){
