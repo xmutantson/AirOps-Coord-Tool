@@ -225,6 +225,7 @@ def api_apply_adv_manifest():
         return jsonify({'error':'no items'}), 400
     now = datetime.utcnow().isoformat()
     inserted = 0
+    skipped = []
     with sqlite3.connect(DB_FILE) as c:
         for it in items:
             try:
@@ -234,9 +235,11 @@ def api_apply_adv_manifest():
                 wpu  = float(it['size_lb'])
                 qty  = int(it['qty'])
                 tot  = float(wpu) * int(qty)
-            except Exception:
+            except Exception as e:
+                skipped.append({'item': it.get('raw_name') or it.get('sanitized_name', '?'), 'reason': f'parse error: {e}'})
                 continue
             if not cid or not name or qty <= 0 or wpu <= 0:
+                skipped.append({'item': raw or name or '?', 'reason': 'invalid values (missing category, name, or non-positive qty/weight)'})
                 continue
             c.execute("""
               INSERT INTO inventory_entries(
@@ -255,8 +258,8 @@ def api_apply_adv_manifest():
     except Exception:
         pass
     if inserted == 0:
-        return jsonify({'error': 'no valid items inserted'}), 400
-    return jsonify({'status':'ok', 'manifest_id': mid, 'inserted': inserted})
+        return jsonify({'error': 'no valid items inserted', 'skipped': skipped}), 400
+    return jsonify({'status':'ok', 'manifest_id': mid, 'inserted': inserted, 'skipped': skipped})
 
 @bp.route('/ramp_boss', methods=['GET', 'POST'])
 def ramp_boss():
@@ -1887,9 +1890,9 @@ def api_flight_ack(flight_id):
     """Returns: { name, method, signature_b64, signed_at } or {}"""
     try:
         data = get_pilot_ack_for_flight(flight_id) or {}
-    except Exception:
+    except Exception as e:
         current_app.logger.exception('Ack fetch failed')
-        return jsonify({}), 500
+        return jsonify({'error': 'Failed to fetch acknowledgment', 'details': str(e)}), 500
     return jsonify(data or {})
 
 # ──────────────────────────────────────────────────────────────────────────

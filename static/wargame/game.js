@@ -1198,7 +1198,7 @@
               const playerState = window.WG_PLAYER_STATE;
               if (playerState && playerState.held) {
                 const h = playerState.held;
-                const retryPend = newPendingToken();
+                const retryPend = addPending({ action:'carrier_add', size: h.size || heldSize, carrier_type: entry.type, carrier_uid: entry.uid });
                 applyCarrierDelta(entry, { add:{ [heldSize]:q }, remove:{} });
                 await window.WGNet.postClaim({
                   action:'carrier_add',
@@ -1525,7 +1525,7 @@
                 const retryPayload = {
                   action: 'carrier_add',
                   carrier_type: 'truck',
-                  carrier_uid: truck_id,
+                  carrier_uid: truckId,
                   item_key: h.item_key || 'box',
                   size: h.size || sizeLabel,
                   qty: h.qty || qty || 1,

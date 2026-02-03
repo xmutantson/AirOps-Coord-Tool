@@ -106,22 +106,6 @@ def locates_preview():
     if not tail:
         return jsonify({'ok': False, 'message': 'Tail is required.'}), 400
 
-    # Enforce: at most 3 visible locates
-    try:
-        with sqlite3.connect(DB_FILE) as c:
-            cur = c.execute("SELECT COUNT(*) FROM flight_locates")
-            cur_count = int(cur.fetchone()[0] or 0)
-    except Exception:
-        cur_count = 0
-    if cur_count >= 3:
-        return jsonify({
-            'ok': False,
-            'code': 'locate_limit',
-            'message': 'You already have 3 locate requests visible. Delete one before creating another.',
-            'limit': 3,
-            'count': cur_count
-        }), 409
-
     # Build subject/body exactly as the live path would
     origin = canonical_airport_code(get_preference('default_origin') or '')
     body   = build_aoct_flight_query_body(tail, origin or '')
@@ -132,13 +116,24 @@ def locates_preview():
     recipients = sorted(mapped_set)
 
     # Create the locate now so it appears in the recent list
+    # Use atomic INSERT with subquery to enforce 3-locate limit (prevents race condition)
     requested_by = (request.cookies.get('operator_call') or get_preference('winlink_callsign_1') or 'OPERATOR').upper()
     req_ts = iso8601_ceil_utc()
     with sqlite3.connect(DB_FILE) as c:
         c.execute("""
           INSERT INTO flight_locates(tail, requested_at_utc, requested_by)
-          VALUES (?,?,?)
+          SELECT ?, ?, ?
+          WHERE (SELECT COUNT(*) FROM flight_locates) < 3
         """, (tail, req_ts, requested_by))
+        if c.total_changes == 0:
+            cur_count = int(c.execute("SELECT COUNT(*) FROM flight_locates").fetchone()[0])
+            return jsonify({
+                'ok': False,
+                'code': 'locate_limit',
+                'message': 'You already have 3 locate requests visible. Delete one before creating another.',
+                'limit': 3,
+                'count': cur_count
+            }), 409
         locate_id = int(c.execute("SELECT last_insert_rowid()").fetchone()[0])
 
     return jsonify({
