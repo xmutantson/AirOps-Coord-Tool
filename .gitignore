@@ -65,8 +65,8 @@ static/vendor/leaflet/leaflet.js
 static/vendor/leaflet/leaflet.js.map
 static/js/zxing.min.js
 
-# legacy helper script
-winlink.py
+# legacy helper script (root only, not modules/routes/winlink.py)
+/winlink.py
 # Docker installation script (downloaded once, not needed in repo)
 get-docker.sh
 
