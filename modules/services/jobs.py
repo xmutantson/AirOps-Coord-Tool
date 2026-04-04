@@ -423,7 +423,8 @@ def _pat_read_message0():
     except Exception:
         return {}
     out = p.stdout or ""
-    mid = subject = sender = to_addr = ""
+    mid = subject = sender = ""
+    to_addrs = []
     body_lines = []
     in_detail = False
     in_body = False
@@ -440,7 +441,7 @@ def _pat_read_message0():
             # attachments header/footer area; ignore until body starts
             continue
         if s.startswith("To:"):
-            to_addr = s.split(":", 1)[1].strip()
+            to_addrs.append(s.split(":", 1)[1].strip())
             continue
         if s.startswith("From:"):
             sender = s.split(":", 1)[1].strip()
@@ -455,7 +456,7 @@ def _pat_read_message0():
             body_lines.append(line)
         elif (not in_body) and (s == "") and subject:
             in_body = True
-    return {"mid": mid, "subject": subject, "from": sender, "to": to_addr, "body": "\n".join(body_lines).rstrip()}
+    return {"mid": mid, "subject": subject, "from": sender, "to": ", ".join(to_addrs), "body": "\n".join(body_lines).rstrip()}
 
 # --- AOCT flight reply (key:value) parser ------------------------------------
 def _parse_aoct_flight_reply(body: str) -> dict:
@@ -1322,14 +1323,17 @@ def poll_winlink_job():
             body    = meta.get("body", "")
             # Determine actual recipient: prefer To: header over polling callsign
             # (PAT dumps auxiliary address mail into primary mailbox)
-            msg_to  = (meta.get("to") or "").strip().upper()
+            msg_to_raw = (meta.get("to") or "").strip()
+            msg_to_parts = [t.strip().upper() for t in msg_to_raw.split(",") if t.strip()]
             actual_cs = cs
-            if msg_to:
+            for part in msg_to_parts:
                 for chk_idx in (1, 2, 3):
                     chk = (get_preference(f'winlink_callsign_{chk_idx}') or '').strip().upper()
-                    if chk and chk == msg_to:
+                    if chk and chk == part:
                         actual_cs = get_preference(f'winlink_callsign_{chk_idx}') or cs
                         break
+                if actual_cs != cs:
+                    break
             # Heuristics used later for weather-product ingestion
             inquiry_id_hint = None
             declared_attachment = None
