@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AOCT — Easy Start Guide</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  @page { size: Letter landscape; margin: 0; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: #fff;
+    color: #111;
+    font: 700 28pt/1.3 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .page {
+    box-sizing: border-box;
+    width: 11in;
+    height: 8.5in;
+    margin: 0 auto;
+    padding: 0.4in 0.5in;
+    display: flex;
+    flex-direction: column;
+    outline: 3px solid #fbbf24;
+    page-break-after: always;
+  }
+  .page:last-child {
+    page-break-after: auto;
+  }
+
+  /* === PAGE 1: Getting Started === */
+
+  /* Header row */
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: stretch;
+    gap: 0.3in;
+    margin-bottom: 0.25in;
+    padding-bottom: 0.2in;
+    border-bottom: 4px solid #ddd;
+  }
+  .title-area {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+  .title {
+    font-size: 36pt;
+    font-weight: 900;
+    line-height: 1;
+    white-space: nowrap;
+  }
+  .subtitle {
+    font-size: 18pt;
+    color: #666;
+    font-weight: 600;
+    margin-top: 0.08in;
+  }
+
+  /* Info boxes in header */
+  .info-boxes {
+    display: flex;
+    gap: 0.15in;
+  }
+  .info-box {
+    border-radius: 14px;
+    padding: 0.12in 0.18in;
+    text-align: center;
+  }
+  .info-box.wifi {
+    background: #dcfce7;
+    border: 4px solid #22a559;
+  }
+  .info-box.wifi .label { color: #166534; }
+  .info-box.pass {
+    background: #dbeafe;
+    border: 4px solid #2563eb;
+  }
+  .info-box.pass .label { color: #1d4ed8; }
+  .info-box .label {
+    font-size: 12pt;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-weight: 800;
+    white-space: nowrap;
+  }
+  .info-box .value {
+    font-size: 18pt;
+    font-weight: 900;
+    margin-top: 0.05in;
+    white-space: nowrap;
+  }
+
+  /* Steps - single column */
+  .steps {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-evenly;
+  }
+  .step {
+    display: flex;
+    align-items: center;
+    gap: 0.3in;
+  }
+  .num {
+    flex-shrink: 0;
+    width: 0.7in;
+    height: 0.7in;
+    background: #22a559;
+    color: #fff;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 36pt;
+    font-weight: 900;
+  }
+  .step:nth-child(2) .num { background: #2563eb; }
+  .step:nth-child(3) .num { background: #7c3aed; }
+  .step:nth-child(4) .num { background: #ea580c; }
+  .text {
+    flex: 1;
+    font-size: 26pt;
+    line-height: 1.2;
+  }
+  .text strong { font-weight: 900; }
+  .highlight {
+    background: #fef3c7;
+    padding: 0.03in 0.12in;
+    border-radius: 8px;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 28pt;
+  }
+  .hint {
+    font-size: 18pt;
+    color: #666;
+    font-weight: 600;
+  }
+
+  /* Footer */
+  .footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-top: 4px solid #ddd;
+    padding-top: 0.12in;
+    margin-top: 0.15in;
+    font-size: 14pt;
+    color: #888;
+  }
+  .done-msg {
+    background: #fef3c7;
+    border: 3px solid #ea580c;
+    border-radius: 10px;
+    padding: 0.08in 0.2in;
+    color: #9a3412;
+    font-size: 16pt;
+    font-weight: 700;
+  }
+
+  /* === PAGE 2: Technical Reference === */
+
+  .page2 {
+    box-sizing: border-box;
+    width: 11in;
+    height: 8.5in;
+    margin: 0 auto;
+    padding: 0.5in;
+    display: grid;
+    grid-template-rows: auto auto 1fr;
+    gap: 0.25in;
+    outline: 3px solid #fbbf24;
+  }
+
+  /* Header row: title + global password banner */
+  .header2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.25in;
+    align-items: center;
+  }
+  .title2 {
+    font-weight: 800;
+    font-size: 48pt;
+    letter-spacing: 0.5px;
+  }
+  .subtle { color: #5c6b77; font-weight: 600; font-size: 16pt; }
+
+  .global-pass {
+    border: 6px solid #2d89ef;
+    border-radius: 18px;
+    padding: 0.2in 0.25in;
+    display: grid;
+    align-items: center;
+    justify-items: center;
+    text-align: center;
+  }
+  .global-pass .label {
+    font-size: 22pt;
+    font-weight: 800;
+    color: #2d89ef;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .global-pass .value {
+    font-weight: 900;
+    font-size: 36pt;
+    margin-top: 0.05in;
+  }
+
+  /* 2-column content grid */
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.25in;
+  }
+
+  .card {
+    border-radius: 18px;
+    padding: 0.25in;
+    display: grid;
+    gap: 0.12in;
+    border: 6px solid transparent;
+  }
+  .card h2 {
+    margin: 0;
+    font-size: 28pt;
+    line-height: 1.1;
+    font-weight: 900;
+  }
+  .card ul {
+    list-style: none;
+    margin: 0.06in 0 0 0;
+    padding: 0;
+    font-size: 16pt;
+    font-weight: 600;
+  }
+  .card li { margin: 0.06in 0; }
+  .card strong { font-weight: 800; }
+  .mono {
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 15pt;
+  }
+
+  .card.web { border-color: #e67e22; }
+  .card.net { border-color: #16a085; }
+
+  /* Docker/update strip */
+  .dock {
+    border: 6px solid #8e44ad;
+    border-radius: 18px;
+    padding: 0.25in;
+  }
+  .dock h2 { margin: 0 0 0.08in 0; font-size: 28pt; font-weight: 900; }
+  .dock pre {
+    margin: 0.06in 0 0 0;
+    background: #faf7ff;
+    border: 2px dashed #8e44ad66;
+    padding: 0.18in;
+    border-radius: 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 15pt;
+    font-weight: 600;
+  }
+  .foot {
+    text-align: right;
+    color: #5c6b77;
+    font-size: 12pt;
+    margin-top: 0.05in;
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     PAGE 1: Getting Started (Front)
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<main class="page">
+  <header class="header">
+    <div class="title-area">
+      <div class="title">Getting Started</div>
+      <div class="subtitle">Follow steps 1 → 2 → 3 → 4</div>
+    </div>
+    <div class="info-boxes">
+      <div class="info-box wifi">
+        <div class="label">Wi-Fi Network</div>
+        <div class="value">AirOpsCoordTool</div>
+      </div>
+      <div class="info-box pass">
+        <div class="label">Password (Wi-Fi &amp; App)</div>
+        <div class="value">Ahead!together</div>
+      </div>
+    </div>
+  </header>
+
+  <section class="steps">
+    <div class="step">
+      <div class="num">1</div>
+      <div class="text">
+        <strong>Connect to Wi-Fi:</strong> &nbsp;<span class="highlight">AirOpsCoordTool</span>&nbsp; or &nbsp;<span class="highlight">AirOpsCoordTool-2g</span>
+        <br><span class="hint">Settings → Wi-Fi → either network works</span>
+        <br><span class="hint">If asked "No internet - stay connected?" tap <strong>Yes</strong> or <strong>Keep</strong></span>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="num">2</div>
+      <div class="text">
+        <strong>Open your web browser</strong>
+        <br><span class="hint">Safari (iPhone) · Chrome (Android) · Edge (Windows)</span>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="num">3</div>
+      <div class="text">
+        <strong>Type:</strong> &nbsp;<span class="highlight">ops.lan/</span>&nbsp; then tap <strong>Go</strong>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="num">4</div>
+      <div class="text">
+        <strong>Type the password</strong>, then tap the blue button
+        <br><span class="hint">Follow on-screen instructions from here</span>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <div>Flip over for technical reference</div>
+    <div class="done-msg">Ask staff if you get stuck!</div>
+    <div>Print: US Letter · Landscape · Duplex</div>
+  </footer>
+</main>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     PAGE 2: Technical Reference (Back)
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<main class="page2">
+  <section class="header2">
+    <div>
+      <div class="title2">AOCT</div>
+      <div class="subtle">Air Ops Coordination Tool — Technical Reference</div>
+    </div>
+    <div class="global-pass">
+      <div class="label">Global Password</div>
+      <div class="value">Ahead!together</div>
+    </div>
+  </section>
+
+  <section class="grid">
+    <!-- Left: Web UI & Network -->
+    <div class="card web">
+      <h2>Web UI Addresses</h2>
+      <ul>
+        <li><strong>Web App:</strong> <span class="mono">http://ops.lan</span></li>
+        <li><strong>Fallback:</strong> <span class="mono">http://192.168.8.2:5150</span></li>
+        <li><strong>ADSB config:</strong> <span class="mono">192.168.8.2</span></li>
+      </ul>
+    </div>
+
+    <!-- Right: Wi‑Fi & SSH -->
+    <div class="card net">
+      <h2>Wi-Fi &amp; SSH</h2>
+      <ul>
+        <li><strong>Router (web):</strong> <span class="mono">http://192.168.8.1</span></li>
+        <li><strong>Router user:</strong> <span class="mono">root</span></li>
+        <li><strong>AOCT Server SSH:</strong> <span class="mono">ssh pi@192.168.8.2</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- Docker location & update -->
+  <section class="dock">
+    <h2>Docker Update Procedure — from SSH</h2>
+    <pre class="mono">cd ~/docker/aoct
+docker compose down &amp;&amp; \
+docker pull ghcr.io/xmutantson/aircraft_ops_tool:latest &amp;&amp; \
+docker compose up</pre>
+    <div class="foot">Print: US Letter · Landscape · Duplex (flip on long edge)</div>
+  </section>
+</main>
+
+</body>
+</html>
