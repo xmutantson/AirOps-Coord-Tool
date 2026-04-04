@@ -273,7 +273,7 @@ def _encode_payload(obj: Dict[str, Any]) -> Tuple[str, str]:
 
 # ---- TX loop (15-min fulls, ≤30s diffs) ----
 def tx_loop(fetch_rows_fn: Callable[[str, tuple], list]):
-    prev_snapshot: Dict[str, Any] = {}
+    prev_snapshot: Dict[str, Any] | None = None   # None = never sent
     session_sid: str | None = None
     last_full = 0.0
     last_diff = 0.0
@@ -304,9 +304,9 @@ def tx_loop(fetch_rows_fn: Callable[[str, tuple], list]):
                 prev_snapshot = cur
                 last_full = time.time()
                 last_diff = last_full
-                # continue to normal cadence checks after forced full
+                continue  # skip normal cadence — forced full already sent
 
-            need_full = (now - last_full) >= FULL_INTERVAL_SEC or not prev_snapshot
+            need_full = (now - last_full) >= FULL_INTERVAL_SEC or prev_snapshot is None
             need_diff = (now - last_diff) >= DIFF_INTERVAL_SEC and not need_full
 
             rows = _fetch_rows(fetch_rows_fn)
@@ -376,5 +376,5 @@ def tx_loop(fetch_rows_fn: Callable[[str, tuple], list]):
 
 def start_radio_tx(fetch_rows_fn: Callable[[str, tuple], list]):
     threading.Thread(target=tx_loop, args=(fetch_rows_fn,), daemon=True).start()
-    # start KISS RX listener to handle "AOT REQ FULL"
-    threading.Thread(target=_kiss_rx_loop, daemon=True).start()
+    # KISS RX listener disabled — was causing feedback loops via RF loopback
+    # threading.Thread(target=_kiss_rx_loop, daemon=True).start()
