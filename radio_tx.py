@@ -132,8 +132,10 @@ def _kiss_rx_loop():
                             parsed = _parse_ax25(ax)
                             if not parsed: continue
                             _dst, _src, info = parsed
-                            if info and "AOT" in info.upper():
-                                if "REQ" in info.upper() and "UPD" in info.upper():
+                            if info:
+                                # Only match exact client request, not our own outbound frames
+                                stripped = info.strip().upper()
+                                if stripped in ("AOT REQ FULL", "AOT REQ UPD"):
                                     _REQ_FULL_EVENT.set()
                     except socket.timeout:
                         continue
