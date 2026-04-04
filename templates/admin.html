@@ -92,6 +92,16 @@
     </select>
   </form>
 
+  <!-- ── WebEOC Activity Log Popup ────────────────────────── -->
+  <form method="POST" action="{{ url_for('admin.admin') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>WebEOC Activity Log Popup (on queue):</label>
+    <select name="toggle_webeoc_activity_popup" onchange="this.form.submit()">
+      <option value="off" {% if not webeoc_activity_popup %}selected{% endif %}>Off</option>
+      <option value="on"  {% if webeoc_activity_popup     %}selected{% endif %}>On</option>
+    </select>
+  </form>
+
   <!-- ── Change App Password ──────────────────────────── -->
   <hr>
   <form method="POST" action="{{ url_for('admin.admin') }}">
@@ -115,18 +125,40 @@
   <form method="POST" action="{{ url_for('admin.admin') }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <h3>WinLink CMS Settings</h3>
+    <p class="muted" style="margin-top:0">
+      Callsign 1 should be your <strong>station license</strong> (personal FCC callsign).
+      Callsigns 2 &amp; 3 can be tactical addresses (e.g., EOC-KING) for incident use.
+    </p>
     {% for i in [1,2,3] %}
     <div>
-      <label for="winlink_callsign_{{i}}">Callsign {{i}}</label>
+      <label for="winlink_callsign_{{i}}">Callsign {{i}}{% if i==1 %} (station license){% else %} (tactical / aux){% endif %}</label>
       <input type="text" id="winlink_callsign_{{i}}" name="winlink_callsign_{{i}}"
              value="{{ winlink_callsign_1 if i==1 else winlink_callsign_2 if i==2 else winlink_callsign_3 }}"
-             placeholder="CALLSIGN">
+             placeholder="{% if i==1 %}e.g. KG7VSN{% else %}e.g. EOC-KING{% endif %}">
 
       <label for="winlink_password_{{i}}">Password {{i}}</label>
       <input type="password" id="winlink_password_{{i}}" name="winlink_password_{{i}}"
              value="{{ winlink_password_1 if i==1 else winlink_password_2 if i==2 else winlink_password_3 }}">
     </div>
     {% endfor %}
+
+    <div style="margin-top:.75rem;">
+      <label for="winlink_send_as">Originate traffic as:</label>
+      <select id="winlink_send_as" name="winlink_send_as">
+        {% for i in [1,2,3] %}
+        {% set cs_val = winlink_callsign_1 if i==1 else winlink_callsign_2 if i==2 else winlink_callsign_3 %}
+        {% if cs_val %}
+        <option value="{{i}}" {% if winlink_send_as == i|string %}selected{% endif %}>
+          Callsign {{i}} — {{ cs_val }}
+        </option>
+        {% endif %}
+        {% endfor %}
+      </select>
+      <small class="muted" style="display:block; margin-top:.25rem;">
+        Outbound Winlink messages will be sent from this callsign. All configured callsigns are still polled for inbound mail.
+      </small>
+    </div>
+
     <button type="submit">Save WinLink Settings</button>
   </form>
 

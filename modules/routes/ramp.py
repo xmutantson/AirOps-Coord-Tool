@@ -632,12 +632,14 @@ def ramp_boss():
 
     # preference: enable/disable auto-scan for inbound arrivals
     scan_pref = get_preference('ramp_scan_adv_manifest') or 'yes'
+    webeoc_popup = get_preference('webeoc_activity_popup') == 'yes'
     return render_template(
       'ramp_boss.html',
       default_origin=default_origin,
       active='ramp_boss',
       advanced_data=advanced_data,
-      enable_adv_manifest_scan=(scan_pref == 'yes')
+      enable_adv_manifest_scan=(scan_pref == 'yes'),
+      webeoc_activity_popup=webeoc_popup
     )
 
 @bp.route('/queue_flight', methods=['POST'])
@@ -826,9 +828,47 @@ def queue_flight():
                 c.execute("UPDATE queued_flights SET cargo_type=? WHERE id=?",
                           (new_type, qid))
 
+    # ── WebEOC activity-log summary (opt-in via global preference) ──
+    webeoc = {}
+    if get_preference('webeoc_activity_popup') == 'yes':
+        row = dict_rows("SELECT * FROM queued_flights WHERE id=?", (qid,))
+        if row:
+            r = row[0]
+            mission = get_preference('mission_number') or ''
+            origin_code = get_preference('default_origin') or ''
+            title = (f"Air Ops \u2013 {r['tail_number']} queued {r['direction']} "
+                     f"{r.get('airfield_takeoff') or origin_code or '?'}"
+                     f"\u2192{r.get('airfield_landing') or '?'}")
+            lines = []
+            if mission:
+                lines.append(f"Mission/Incident: {mission}")
+            lines.append(f"Direction: {(r.get('direction') or '').capitalize()}")
+            lines.append(f"Tail #: {r['tail_number']}")
+            if r.get('pilot_name'):
+                lines.append(f"Pilot: {r['pilot_name']}")
+            if r.get('pax_count'):
+                lines.append(f"PAX: {r['pax_count']}")
+            lines.append(f"Origin: {r.get('airfield_takeoff') or origin_code or 'N/A'}")
+            lines.append(f"Destination: {r.get('airfield_landing') or 'TBD'}")
+            if r.get('travel_time'):
+                tt = r['travel_time']
+                lines.append(f"Est. Travel Time: {tt[:2]}h {tt[2:]}m"
+                             if len(tt) == 4 else f"Est. Travel Time: {tt}")
+            if r.get('cargo_type'):
+                lines.append(f"Cargo Type: {r['cargo_type']}")
+            if r.get('cargo_weight') and str(r['cargo_weight']) != '0':
+                lines.append(f"Cargo Weight: {r['cargo_weight']} lbs")
+            if r.get('remarks'):
+                lines.append(f"Remarks: {r['remarks']}")
+            lines.append(f"Queued: {r.get('created_at', '')}")
+            webeoc = {'title': title, 'body': '\n'.join(lines)}
+
     flash(f"Flight draft {qid} added to queue.", 'info')
     if request.headers.get('X-Requested-With')=='XMLHttpRequest':
-        return jsonify({'status':'queued','qid':qid})
+        resp = {'status':'queued','qid':qid}
+        if webeoc:
+            resp['webeoc'] = webeoc
+        return jsonify(resp)
     return redirect(url_for('ramp.queued_flights'))
 
 @bp.route('/queued_flights')

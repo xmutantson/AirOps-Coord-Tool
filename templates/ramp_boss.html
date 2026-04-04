@@ -1741,6 +1741,8 @@
           const fidQ = (j && (j.flight_id || j.id)) ? (j.flight_id || j.id) : null;
           if (fidQ){ enablePrintLabelsButton({ queuedId: fidQ }); showLabelsToast({ queuedId: fidQ }); }
           showToast('Flight added to queue','success');
+          // WebEOC activity log popup
+          if (j && j.webeoc && typeof showWebeocModal === 'function'){ showWebeocModal(j.webeoc); }
           // Preserve direction toggle across reset
           const prevDir = dirRadios.find(r => r.checked)?.value || 'outbound';
           form.reset();
@@ -4065,5 +4067,79 @@
     }, true);
   })();
   </script>
+
+{% if webeoc_activity_popup %}
+<!-- ── WebEOC Activity Log Modal ──────────────────────────── -->
+<div id="webeoc-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:5000;">
+  <div class="modal-card" style="max-width:700px; margin:6vh auto; background:#fff; border-radius:.6rem; box-shadow:0 16px 44px rgba(0,0,0,.25); overflow:hidden;">
+    <div style="padding:.75rem 1rem; border-bottom:1px solid #eee; font-weight:600;">
+      WebEOC Activity Log Entry
+    </div>
+    <div style="padding:1rem;">
+      <p class="muted" style="margin-top:0">
+        Copy the <strong>Title</strong> and <strong>Body</strong> below into the WebEOC activity log.
+      </p>
+      <div style="display:grid; grid-template-columns: 80px 1fr; gap:.6rem 1rem; align-items:center;">
+        <label style="font-weight:600;">Title</label>
+        <div style="display:flex; gap:.5rem; align-items:center;">
+          <input id="webeoc-title" readonly
+                 style="flex:1; padding:.55rem .6rem; border:1px solid #ccc; border-radius:.4rem; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;">
+          <button type="button" class="button" id="webeoc-copy-title"
+                  style="padding:.35rem .6rem; border:1px solid #ccc; background:#fafafa; border-radius:.35rem; cursor:pointer;">Copy</button>
+          <span id="webeoc-fb-title" class="copy-feedback">✓ Copied</span>
+        </div>
+
+        <label style="font-weight:600; align-self:start;">Body</label>
+        <div>
+          <textarea id="webeoc-body" readonly
+                    style="width:100%; min-height:14rem; padding:.65rem; border:1px solid #ccc; border-radius:.4rem; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace; white-space:pre;"></textarea>
+          <div style="display:flex; gap:.5rem; justify-content:flex-end; margin-top:.5rem;">
+            <button type="button" class="button" id="webeoc-copy-body"
+                    style="padding:.35rem .6rem; border:1px solid #ccc; background:#fafafa; border-radius:.35rem; cursor:pointer;">Copy</button>
+            <span id="webeoc-fb-body" class="copy-feedback">✓ Copied</span>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex; gap:.5rem; justify-content:flex-end; margin-top:1rem;">
+        <button type="button" class="button" id="webeoc-close"
+                style="padding:.45rem .8rem; border:1px solid #ccc; background:#fafafa; border-radius:.4rem; cursor:pointer;">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+function webeocCopy(text, fbId){
+  (navigator.clipboard?.writeText(text) || Promise.reject()).then(()=>{
+    const fb = document.getElementById(fbId);
+    if(fb){ fb.classList.add('visible'); setTimeout(()=>fb.classList.remove('visible'),1000); }
+  }).catch(()=>{
+    const ta = document.createElement('textarea');
+    ta.value=text; ta.style.position='fixed'; ta.style.opacity='0';
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    try{document.execCommand('copy');}catch(_){}
+    document.body.removeChild(ta);
+    const fb = document.getElementById(fbId);
+    if(fb){ fb.classList.add('visible'); setTimeout(()=>fb.classList.remove('visible'),1000); }
+  });
+}
+(function(){
+  const wModal = document.getElementById('webeoc-modal');
+  if(!wModal) return;
+  document.getElementById('webeoc-close').addEventListener('click', ()=> wModal.style.display='none');
+  wModal.addEventListener('click', e=>{ if(e.target===wModal) wModal.style.display='none'; });
+  document.getElementById('webeoc-copy-title').addEventListener('click', ()=>
+    webeocCopy(document.getElementById('webeoc-title').value, 'webeoc-fb-title'));
+  document.getElementById('webeoc-copy-body').addEventListener('click', ()=>
+    webeocCopy(document.getElementById('webeoc-body').value, 'webeoc-fb-body'));
+})();
+function showWebeocModal(data){
+  const m = document.getElementById('webeoc-modal');
+  if(!m || !data) return;
+  document.getElementById('webeoc-title').value = data.title || '';
+  document.getElementById('webeoc-body').value  = data.body  || '';
+  m.style.display = 'block';
+}
+</script>
+{% endif %}
 
 {% endblock %}

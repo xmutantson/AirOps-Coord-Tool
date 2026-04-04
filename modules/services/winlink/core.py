@@ -588,6 +588,19 @@ def _normalize_comm_metadata(md: Optional[Dict]) -> Optional[Dict]:
         out.setdefault(k, "")
     return out
 
+def get_send_as_callsign() -> str:
+    """Return the callsign configured for originating Winlink traffic.
+
+    Controlled by the ``winlink_send_as`` preference (1/2/3).
+    Falls back to callsign_1 if the chosen slot is empty.
+    """
+    idx = get_preference('winlink_send_as') or '1'
+    cs = (get_preference(f'winlink_callsign_{idx}') or '').strip()
+    if not cs:
+        cs = (get_preference('winlink_callsign_1') or '').strip()
+    return cs
+
+
 def send_winlink_message(to_addr: str, subject: str, body: str, metadata: Optional[Dict] = None) -> bool:
     """
     Minimal helper to send a text Winlink message via PAT.
@@ -596,7 +609,7 @@ def send_winlink_message(to_addr: str, subject: str, body: str, metadata: Option
     to_addr = (to_addr or "").strip()
     if not to_addr:
         return False
-    cs = get_preference('winlink_callsign_1') or ""
+    cs = get_send_as_callsign()
     if not cs:
         return False
     cmd = ["pat", "compose", "--from", cs, "-s", subject, to_addr]

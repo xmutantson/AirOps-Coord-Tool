@@ -92,6 +92,13 @@ def admin():
                     flash("Internet detection override updated.", "info")
                 return _ret('admin.admin')
 
+        # ── Toggle WebEOC Activity Log Popup ──────────────
+        if 'toggle_webeoc_activity_popup' in request.form:
+            val = 'yes' if request.form['toggle_webeoc_activity_popup'] == 'on' else 'no'
+            set_preference('webeoc_activity_popup', val)
+            flash('WebEOC activity-log popup ' + ('enabled' if val == 'yes' else 'disabled') + '.', 'info')
+            return _ret('admin.admin')
+
         # ── Toggle Wargame Mode ────────────────────────────
         if 'toggle_wargame' in request.form:
             on          = (request.form.get('toggle_wargame') == 'on')
@@ -249,6 +256,9 @@ def admin():
                         'winlink_callsign_2','winlink_password_2',
                         'winlink_callsign_3','winlink_password_3'):
                 set_preference(key, request.form.get(key,'').strip())
+            send_as = request.form.get('winlink_send_as', '1').strip()
+            if send_as in ('1', '2', '3'):
+                set_preference('winlink_send_as', send_as)
             flash("WinLink settings saved.", "success")
             return _ret('admin.admin')
 
@@ -331,6 +341,9 @@ def admin():
     winlink_password_2     = get_preference('winlink_password_2')  or ''
     winlink_callsign_3     = get_preference('winlink_callsign_3')  or ''
     winlink_password_3     = get_preference('winlink_password_3')  or ''
+    winlink_send_as        = get_preference('winlink_send_as')     or '1'
+
+    webeoc_activity_popup = get_preference('webeoc_activity_popup') == 'yes'
 
     # NetOps feeder settings
     netops_enabled           = get_preference('netops_enabled') or 'no'
@@ -358,6 +371,7 @@ def admin():
       winlink_password_2=winlink_password_2,
       winlink_callsign_3=winlink_callsign_3,
       winlink_password_3=winlink_password_3,
+      winlink_send_as=winlink_send_as,
       # NetOps
       netops_enabled=netops_enabled,
       netops_url=netops_url,
@@ -365,7 +379,8 @@ def admin():
       netops_push_interval_sec=netops_push_interval_sec,
       netops_window_hours=netops_window_hours,
       origin_lat=origin_lat,
-      origin_lon=origin_lon
+      origin_lon=origin_lon,
+      webeoc_activity_popup=webeoc_activity_popup
     )
 
 @bp.post('/configure_pat')

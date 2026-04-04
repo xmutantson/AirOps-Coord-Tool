@@ -26,6 +26,7 @@ from modules.services.winlink.core import (
     parse_aoct_cargo_query,
     maybe_auto_reply_flight_query,
     send_winlink_message,
+    get_send_as_callsign,
 )
 from modules.utils.common import *  # shared helpers (dict_rows, prefs, units, etc.)
 from modules.utils.common import _is_winlink_reflector_bounce
@@ -1176,7 +1177,7 @@ def auto_winlink_send_job():
         subject = generate_subject(f)
         op_call = "A-O-C-T"
         body    = generate_body(f, callsign=op_call, include_test=False)
-        cs      = get_preference('winlink_callsign_1') or ''
+        cs      = get_send_as_callsign()
 
         # build PAT compose cmd: flags (including CC) must come before the recipient
         cmd = ["pat", "compose", "--from", cs, "-s", subject]
