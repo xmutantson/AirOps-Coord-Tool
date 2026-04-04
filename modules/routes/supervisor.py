@@ -205,7 +205,7 @@ def locates_start():
         # so the UI never renders "undefined recipients".
         return jsonify({
             'ok': False,
-            'message': 'No mapped Winlink callsigns found (Admin → WinLink → Airport→Callsign mappings).',
+            'message': 'No mapped Winlink callsigns found (Preferences → Airport→Callsign Mappings).',
             'queued': total_cnt,
             'recipient_count': total_cnt,
             'mapped_count': len(mapped_set),
