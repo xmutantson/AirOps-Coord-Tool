@@ -193,13 +193,15 @@ def _configure_pat_from_prefs_silent():
         cfg['mycall']                = cs
         cfg['secure_login_password'] = pw
 
-        # build auxiliary addresses
+        # build auxiliary addresses — PAT expects ["CALL:PASS", ...] strings
         aux_list = []
         for idx in (2, 3):
             call = get_preference(f'winlink_callsign_{idx}') or ''
             pwd  = get_preference(f'winlink_password_{idx}') or ''
             if call and pwd:
-                aux_list.append({"address": call, "password": pwd})
+                aux_list.append(f"{call}:{pwd}")
+            elif call:
+                aux_list.append(call)
         cfg['auxiliary_addresses'] = aux_list
 
         with open(cfg_file, 'w') as f:
