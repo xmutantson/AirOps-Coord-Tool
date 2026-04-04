@@ -572,6 +572,41 @@ def ramp_boss():
         try_satisfy_ramp_request(row)
         row['action'] = action
 
+        # ── WebEOC activity-log summary for logged flights ──
+        if action != 'update_ignored' and get_preference('webeoc_activity_popup') == 'yes':
+            mission = get_preference('mission_number') or ''
+            origin_code = get_preference('default_origin') or ''
+            direction_label = (row.get('direction') or '').capitalize()
+            is_arrival = (row.get('direction') == 'inbound')
+            verb = 'arrived' if is_arrival else 'departed'
+            title = (f"Air Ops \u2013 {row['tail_number']} {verb} "
+                     f"{row.get('airfield_takeoff') or origin_code or '?'}"
+                     f"\u2192{row.get('airfield_landing') or '?'}")
+            lines = []
+            if mission:
+                lines.append(f"Mission/Incident: {mission}")
+            lines.append(f"Direction: {direction_label}")
+            lines.append(f"Tail #: {row['tail_number']}")
+            if row.get('pilot_name'):
+                lines.append(f"Pilot: {row['pilot_name']}")
+            if row.get('pax_count'):
+                lines.append(f"PAX: {row['pax_count']}")
+            lines.append(f"Origin: {row.get('airfield_takeoff') or origin_code or 'N/A'}")
+            lines.append(f"Destination: {row.get('airfield_landing') or 'TBD'}")
+            if is_arrival and row.get('eta'):
+                lines.append(f"Arrival Time: {row['eta']}")
+            elif row.get('takeoff_time'):
+                lines.append(f"Departure Time: {row['takeoff_time']}")
+            if row.get('eta') and not is_arrival:
+                lines.append(f"ETA: {row['eta']}")
+            if row.get('cargo_type'):
+                lines.append(f"Cargo Type: {row['cargo_type']}")
+            if row.get('cargo_weight') and str(row['cargo_weight']) != '0':
+                lines.append(f"Cargo Weight: {row['cargo_weight']} lbs")
+            if row.get('remarks'):
+                lines.append(f"Remarks: {row['remarks']}")
+            row['webeoc'] = {'title': title, 'body': '\n'.join(lines)}
+
         # if this was XHR (our AJAX), return JSON instead of redirect:
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
             return jsonify(row)

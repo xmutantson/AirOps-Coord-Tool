@@ -1799,6 +1799,8 @@
       `;
 
       showToast('Flight sent','success');
+      // WebEOC activity log popup
+      if (f && f.webeoc && typeof showWebeocModal === 'function'){ showWebeocModal(f.webeoc); }
 
       // Enable persistent Print Labels button (no toast - users don't need it)
       try {
