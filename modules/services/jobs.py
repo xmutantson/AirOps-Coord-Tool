@@ -423,7 +423,7 @@ def _pat_read_message0():
     except Exception:
         return {}
     out = p.stdout or ""
-    mid = subject = sender = ""
+    mid = subject = sender = to_addr = ""
     body_lines = []
     in_detail = False
     in_body = False
@@ -439,6 +439,9 @@ def _pat_read_message0():
         if (not in_body) and s.lower().startswith("attachments"):
             # attachments header/footer area; ignore until body starts
             continue
+        if s.startswith("To:"):
+            to_addr = s.split(":", 1)[1].strip()
+            continue
         if s.startswith("From:"):
             sender = s.split(":", 1)[1].strip()
             continue
@@ -452,7 +455,7 @@ def _pat_read_message0():
             body_lines.append(line)
         elif (not in_body) and (s == "") and subject:
             in_body = True
-    return {"mid": mid, "subject": subject, "from": sender, "body": "\n".join(body_lines).rstrip()}
+    return {"mid": mid, "subject": subject, "from": sender, "to": to_addr, "body": "\n".join(body_lines).rstrip()}
 
 # --- AOCT flight reply (key:value) parser ------------------------------------
 def _parse_aoct_flight_reply(body: str) -> dict:
@@ -1317,6 +1320,16 @@ def poll_winlink_job():
             subject = meta.get("subject", "")
             sender  = meta.get("from", "")
             body    = meta.get("body", "")
+            # Determine actual recipient: prefer To: header over polling callsign
+            # (PAT dumps auxiliary address mail into primary mailbox)
+            msg_to  = (meta.get("to") or "").strip().upper()
+            actual_cs = cs
+            if msg_to:
+                for chk_idx in (1, 2, 3):
+                    chk = (get_preference(f'winlink_callsign_{chk_idx}') or '').strip().upper()
+                    if chk and chk == msg_to:
+                        actual_cs = get_preference(f'winlink_callsign_{chk_idx}') or cs
+                        break
             # Heuristics used later for weather-product ingestion
             inquiry_id_hint = None
             declared_attachment = None
@@ -1347,7 +1360,7 @@ def poll_winlink_job():
                     "INSERT OR IGNORE INTO winlink_messages "
                     "(direction, callsign, sender, subject, body, timestamp, has_attachments) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    ("in", cs, sender, subject, body, ts_iso, 1)  # assume attachments possible; corrected after extract
+                    ("in", actual_cs, sender, subject, body, ts_iso, 1)  # assume attachments possible; corrected after extract
                 )
                 # idempotent fetch of the row id we just inserted (or existing one)
                 cur.execute("""
