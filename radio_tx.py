@@ -133,7 +133,10 @@ def _kiss_rx_loop():
                             if not parsed: continue
                             _dst, _src, info = parsed
                             if info:
-                                # Only match exact client request, not our own outbound frames
+                                # Ignore frames from our own callsign+SSID (RF loopback)
+                                if _src.upper() == MYCALL.upper():
+                                    continue
+                                # Only match exact client request
                                 stripped = info.strip().upper()
                                 if stripped in ("AOT REQ FULL", "AOT REQ UPD"):
                                     _REQ_FULL_EVENT.set()
