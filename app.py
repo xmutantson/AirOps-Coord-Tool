@@ -1125,25 +1125,6 @@ def _root():
         "Known routes include: " + ", ".join(sorted(rules))
     ), 200
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Core request hooks (thin delegators → keep app.py small)
-@app.before_request
-def _core_before_request():
-    # Skip duplicate work on WG fast-lane or when auth already ran
-    if _is_wg_fastlane_path(request.path) or getattr(g, "AUTH_CHECKED", False):
-        return
-    # 1) auth gate; may return a redirect/response
-    r = require_login()
-    if r:
-        return r
-    # 2) per-blueprint cleanup (inventory pending rows)
-    _cleanup_before_view()
-    # 3) one-time initializers that should start on first real request
-    _ensure_wargame_scheduler_once()
-    _start_radio_tx_once()
-    maybe_start_distances()
-    g.AUTH_CHECKED = True
-
 @app.after_request
 def _core_after_request(resp):
     # Tag fast-lane responses to aid diagnostics and any upstream caches
