@@ -325,6 +325,7 @@ def tx_loop(fetch_rows_fn: Callable[[str, tuple], list]):
                     msg = f"AOT {seq}/{total}|F|{session_sid}|{enc_flag}|{part}"
                     frames.append(_format_tnc2(MYCALL, DEST, PATH, msg))
 
+                print(f"[radio_tx] FULL sid={session_sid} rows={len(rows)} frames={len(frames)}", flush=True)
                 i = 0
                 while i < len(frames):
                     j = min(i + BURST_SIZE, len(frames))
@@ -365,7 +366,8 @@ def tx_loop(fetch_rows_fn: Callable[[str, tuple], list]):
                 last_diff = now
 
         except Exception as e:
-            print(f"[radio_tx] loop error: {e}")
+            import traceback
+            print(f"[radio_tx] loop error: {e}\n{traceback.format_exc()}", flush=True)
 
         # Sleep until the next smallest deadline (cap 5s for responsiveness)
         now = time.time()
