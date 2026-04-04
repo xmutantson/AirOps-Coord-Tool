@@ -627,6 +627,7 @@ def _is_wg_fastlane_path(path: str) -> bool:
 def _global_before_request():
     # run one-time initializers BEFORE we might return on auth
     _ensure_wargame_scheduler_once()
+    _start_radio_tx_once()
     _maybe_start_distances()
 
     # Fast-lane: skip heavy auth/DB work for Wargame JSON endpoints
