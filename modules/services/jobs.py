@@ -1321,19 +1321,10 @@ def poll_winlink_job():
             subject = meta.get("subject", "")
             sender  = meta.get("from", "")
             body    = meta.get("body", "")
-            # Determine actual recipient: prefer To: header over polling callsign
+            # Use full To: header as the stored callsign when available
             # (PAT dumps auxiliary address mail into primary mailbox)
             msg_to_raw = (meta.get("to") or "").strip()
-            msg_to_parts = [t.strip().upper() for t in msg_to_raw.split(",") if t.strip()]
-            actual_cs = cs
-            for part in msg_to_parts:
-                for chk_idx in (1, 2, 3):
-                    chk = (get_preference(f'winlink_callsign_{chk_idx}') or '').strip().upper()
-                    if chk and chk == part:
-                        actual_cs = get_preference(f'winlink_callsign_{chk_idx}') or cs
-                        break
-                if actual_cs != cs:
-                    break
+            actual_cs = msg_to_raw if msg_to_raw else cs
             # Heuristics used later for weather-product ingestion
             inquiry_id_hint = None
             declared_attachment = None
