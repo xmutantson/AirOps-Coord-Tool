@@ -1,6 +1,6 @@
 {# Partial: queued flights table. Expects `queued` list. #}
 {% if queued %}
-  <table class="full-bleed">
+  <table class="full-bleed" style="overflow:visible;">
     <thead>
       <tr>
         <th>ID / ✏️ / 🗑</th>
@@ -46,7 +46,7 @@
         <td style="text-align:center; white-space:nowrap;">
           <details style="display:inline-block; position:relative;">
             <summary style="cursor:pointer; list-style:none;" title="Print labels">📦</summary>
-            <div style="position:absolute; right:0; z-index:10; background:#fff; border:1px solid #ccc; border-radius:6px; padding:.5rem; box-shadow:0 4px 12px rgba(0,0,0,.15); white-space:nowrap; font-size:.85em;">
+            <div style="position:absolute; right:0; bottom:100%; z-index:9999; background:#fff; border:1px solid #ccc; border-radius:6px; padding:.5rem; box-shadow:0 4px 12px rgba(0,0,0,.15); white-space:nowrap; font-size:.85em; margin-bottom:4px;">
               <div style="font-weight:600; margin-bottom:.3rem;">Labels</div>
               <a href="/docs/labels/cargo?queued_id={{ q.id }}&scope=all"
                  target="_blank" rel="noopener" style="display:block; padding:.2rem 0;">Summary (Letter)</a>
