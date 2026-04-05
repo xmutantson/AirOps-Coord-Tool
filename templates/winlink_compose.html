@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Compose WinLink Message – Aircraft Ops{% endblock %}
+
+{% block content %}
+<div class="container" style="max-width:640px; margin:1.5rem auto; padding:1rem;">
+  <p>
+    <a href="{{ url_for('radio.radio') }}">&larr; Back to Radio</a>
+    &nbsp;|&nbsp;
+    <a href="{{ url_for('winlink.winlink_inbox') }}">Inbox</a>
+  </p>
+  <h2>Compose WinLink Message</h2>
+
+  {% if locked %}
+  {# ── Password Gate ──────────────────────────────────── #}
+  <p class="muted">Enter a Winlink password to access the compose form.</p>
+  {% if callsigns %}
+  <p class="muted">Configured callsigns: <strong>{{ callsigns|join(', ') }}</strong></p>
+  {% endif %}
+  <form method="POST" action="{{ url_for('winlink.winlink_compose') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="compose-pw">Winlink Password:</label>
+    <input id="compose-pw" type="password" name="compose_password" required
+           style="width:100%; padding:.6rem; font-size:1rem;" autofocus>
+    <button type="submit" style="margin-top:1rem;">Unlock Compose</button>
+  </form>
+
+  {% else %}
+  {# ── Compose Form ──────────────────────────────────── #}
+  <p class="muted">Sending as: <strong>{{ send_as }}</strong></p>
+  <form method="POST" action="{{ url_for('winlink.winlink_compose') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+    <label for="compose-to">To (callsign or SMTP address):</label>
+    <input id="compose-to" type="text" name="to" required
+           placeholder="e.g. W7WEK or SMTP:user@example.com"
+           oninput="this.value=this.value.toUpperCase()"
+           style="width:100%; padding:.6rem; font-size:1rem;">
+
+    <label for="compose-subject" style="margin-top:.75rem;">Subject:</label>
+    <input id="compose-subject" type="text" name="subject" required
+           placeholder="Message subject"
+           style="width:100%; padding:.6rem; font-size:1rem;">
+
+    <label for="compose-body" style="margin-top:.75rem;">Body:</label>
+    <textarea id="compose-body" name="body" rows="10"
+              placeholder="Message body..."
+              style="width:100%; padding:.6rem; font-size:1rem; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;"></textarea>
+
+    <div style="display:flex; gap:.5rem; margin-top:1rem;">
+      <button type="submit">Send Message</button>
+    </div>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

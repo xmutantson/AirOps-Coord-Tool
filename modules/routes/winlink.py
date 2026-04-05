@@ -24,7 +24,7 @@ from app import DB_FILE, scheduler
 from flask import Blueprint, current_app
 from flask import send_file, abort
 from datetime import datetime
-from flask import flash, jsonify, redirect, render_template, request, url_for, make_response
+from flask import flash, jsonify, redirect, render_template, request, session, url_for, make_response
 from modules.utils.cookies import cookie_truthy
 
 import csv as _csv
@@ -579,6 +579,47 @@ def winlink_inbox():
     if hp_arg is not None:
         resp.set_cookie('hide_parsable', 'yes' if hide_parsable else 'no', max_age=365*24*3600, samesite='Lax', path='/')
     return resp
+
+@bp.route('/compose', methods=['GET', 'POST'], endpoint='winlink_compose')
+def winlink_compose():
+    """Compose and send an arbitrary Winlink message. Requires Winlink password."""
+    # Auth gate: check session
+    if not session.get('winlink_compose_unlocked'):
+        if request.method == 'POST' and 'compose_password' in request.form:
+            entered = request.form.get('compose_password', '').strip()
+            valid = [get_preference(f'winlink_password_{i}') or '' for i in (1, 2, 3)]
+            if entered and entered in valid:
+                session['winlink_compose_unlocked'] = True
+            else:
+                flash('Invalid Winlink password.', 'error')
+                return redirect(url_for('winlink.winlink_compose'))
+        else:
+            # Show password gate
+            callsigns = [get_preference(f'winlink_callsign_{i}') or ''
+                         for i in (1, 2, 3) if get_preference(f'winlink_callsign_{i}')]
+            return render_template('winlink_compose.html',
+                                   active='radio', locked=True, callsigns=callsigns)
+
+    # Handle compose form submission
+    if request.method == 'POST' and 'to' in request.form:
+        to_addr = request.form.get('to', '').strip().upper()
+        subject = request.form.get('subject', '').strip()
+        body    = request.form.get('body', '').strip()
+        if not to_addr or not subject:
+            flash('To and Subject are required.', 'error')
+            return redirect(url_for('winlink.winlink_compose'))
+        ok = send_winlink_message(to_addr, subject, body)
+        if ok:
+            flash(f'Message queued to {to_addr} via PAT.', 'success')
+        else:
+            flash('Failed to send message via PAT.', 'error')
+        return redirect(url_for('winlink.winlink_compose'))
+
+    # GET: show compose form
+    send_as = get_send_as_callsign()
+    return render_template('winlink_compose.html',
+                           active='radio', locked=False, send_as=send_as)
+
 
 @bp.post('/start', endpoint='winlink_start')
 def winlink_start():
