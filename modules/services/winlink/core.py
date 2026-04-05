@@ -616,28 +616,7 @@ def send_winlink_message(to_addr: str, subject: str, body: str, metadata: Option
         return False
     cmd = ["pat", "compose", "--from", cs, "-s", subject, to_addr]
 
-    def _pat_compose_bg():
-        """Run PAT compose in background so the caller isn't blocked."""
-        try:
-            subprocess.run(
-                cmd,
-                input=body or "",
-                text=True,
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=60,
-            )
-        except subprocess.TimeoutExpired:
-            try: app.logger.error("PAT compose timed out (60s): %s", " ".join(cmd))
-            except Exception: pass
-        except subprocess.CalledProcessError as err:
-            try: app.logger.error("PAT send failed: %s\n%s", err, err.stderr or err.stdout)
-            except Exception: pass
-
-    threading.Thread(target=_pat_compose_bg, daemon=True).start()
-
-    # Record to DB immediately (message is queued, PAT delivers async)
+    # Record to DB FIRST (fast), then fire PAT in background (slow)
     try:
         # Best-guess operator (local side): cookie if present, else station callsign
         operator = (
@@ -706,6 +685,27 @@ def send_winlink_message(to_addr: str, subject: str, body: str, metadata: Option
                 pass
     except Exception:
         pass
+
+    # Fire PAT compose in background AFTER DB is written — avoids lock contention
+    def _pat_compose_bg():
+        try:
+            subprocess.run(
+                cmd,
+                input=body or "",
+                text=True,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            try: app.logger.error("PAT compose timed out (60s): %s", " ".join(cmd))
+            except Exception: pass
+        except subprocess.CalledProcessError as err:
+            try: app.logger.error("PAT send failed: %s\n%s", err, err.stderr or err.stdout)
+            except Exception: pass
+
+    threading.Thread(target=_pat_compose_bg, daemon=True).start()
     return True
 
 # ─────────────────────────────────────────────────────────────────────────────
