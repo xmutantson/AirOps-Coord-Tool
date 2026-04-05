@@ -9,7 +9,7 @@
   <!-- EARLY RB SHIM v2
        Runs before any other script can cache fetch/XHR.
        If Remove-mode is active (or payload says op=remove), rewrite:
-         POST /api/manifest/<mid>/scan  →  POST /api/manifest/<mid>/nudge
+         POST /api/manifest/<mid>/scan  ->  POST /api/manifest/<mid>/nudge
        so below-baseline math happens server-side.
        Supports: JSON, urlencoded, FormData, and barcode-only bodies by
        parsing the scanner input field (#rb-scan-input) when needed. -->
@@ -116,13 +116,13 @@
               const newUrl  = String(url).replace(/\/scan(\?.*)?$/, '/nudge$1');
               if (asJsonHeaders(headers)) headers.set('Content-Type','application/json');
               else headers['Content-Type'] = 'application/json';
-              // A) structured → build full /nudge body
+              // A) structured -> build full /nudge body
               if (name && wpu>0){
                 const newInit = Object.assign({}, init, { method:'POST', body: makeNudgeBody(name,wpu,qty), headers });
-                try{ console.debug('[RB-SHIM:f] /scan → /nudge', {name, wpu, qty}); }catch(_){}
+                try{ console.debug('[RB-SHIM:f] /scan -> /nudge', {name, wpu, qty}); }catch(_){}
                 return _origFetch.call(this, newUrl, newInit);
               }
-              // B) barcode-only → let backend resolve barcode for /nudge
+              // B) barcode-only -> let backend resolve barcode for /nudge
               if (obj && obj.barcode){
                 const bInit = Object.assign({}, init, {
                   method:'POST',
@@ -134,7 +134,7 @@
                     draft_id: (typeof window.draftId === 'number' ? window.draftId : null)
                   })
                 });
-                try{ console.debug('[RB-SHIM:f] /scan → /nudge (barcode)', { barcode: obj.barcode }); }catch(_){}
+                try{ console.debug('[RB-SHIM:f] /scan -> /nudge (barcode)', { barcode: obj.barcode }); }catch(_){}
                 return _origFetch.call(this, newUrl, bInit);
               }
               // C) hard-stop unsafe remove fallthrough (no name/wpu and no barcode)
@@ -201,7 +201,7 @@
               // A) structured
               if (name && wpu>0){
                 body = makeNudgeBody(name, wpu, qty);
-                try { console.debug('[RB-SHIM:x] /scan → /nudge', {name, wpu, qty}); } catch(_){}
+                try { console.debug('[RB-SHIM:x] /scan -> /nudge', {name, wpu, qty}); } catch(_){}
               }
               // B) barcode-only
               else if (parsed && parsed.barcode){
@@ -211,7 +211,7 @@
                   qty: qty || 1,
                   draft_id: (typeof window.draftId === 'number' ? window.draftId : null)
                 });
-                try { console.debug('[RB-SHIM:x] /scan → /nudge (barcode)', { barcode: parsed.barcode }); } catch(_){}
+                try { console.debug('[RB-SHIM:x] /scan -> /nudge (barcode)', { barcode: parsed.barcode }); } catch(_){}
               }
             }
           }
@@ -426,7 +426,7 @@
         id="cw-back"
         style="position:absolute; left:1rem; background:none; border:none; font-size:1em; cursor:pointer;"
       >
-        ← Back
+        <- Back
       </button>
       <h4 style="margin:0; font-size:2em;">Running Cargo Total</h4>
 
@@ -456,7 +456,7 @@
         class="back-button"
         style="position:absolute; left:1rem; background:none; border:none; font-size:1em; cursor:pointer;"
       >
-        ← Back
+        <- Back
       </button>
       <h4 style="margin-top:2rem; margin-bottom:0.5rem;">Advanced Inventory Entry</h4>
 
@@ -697,7 +697,7 @@
       return d.getHours().toString().padStart(2,'0') +
              d.getMinutes().toString().padStart(2,'0');
     }
-    /* addHHMM("1425","0135") → "1600"  (wraps at 24 h) */
+    /* addHHMM("1425","0135") -> "1600"  (wraps at 24 h) */
     function addHHMM (startHHMM, deltaHHMM) {
       const sh = parseInt(startHHMM.slice(0,2),10);
       const sm = parseInt(startHHMM.slice(2),10);
@@ -710,7 +710,7 @@
     function validateRampBoss () {
       document.querySelectorAll('#rb-form .form-error').forEach(el => el.remove());
       // Validate all required & enabled fields (even if hidden). If Origin/Dest are hidden and
-      // empty, auto-reveal them by checking “Show Origin & Destination” so the user can fix them.
+      // empty, auto-reveal them by checking "Show Origin & Destination" so the user can fix them.
       const req = Array.from(document.querySelectorAll('#rb-form [required]'))
                        .filter(f => !f.disabled);
       let invalid = req.filter(f => !String(f.value || '').trim());
@@ -788,10 +788,10 @@
        Only render this block when a draft exists to avoid touching d.id. */
 
     {% if draft %}
-    /* Morphing Pilot Ack → Send Now */
+    /* Morphing Pilot Ack -> Send Now */
     (function pilotAckGate(){
       const ackSend = document.getElementById('rb-ack-send');
-      /* NEW: if we’re intentionally hiding the Pilot Ack/Send control,
+      /* NEW: if we're intentionally hiding the Pilot Ack/Send control,
          skip all morphing/handlers so nothing gets wired up behind the scenes. */
       if (ackSend && ackSend.dataset && ackSend.dataset.forceHidden === '1') {
         return;
@@ -953,7 +953,7 @@
       const z = t.padStart(4,'0'); const h=+z.slice(0,2), m=+z.slice(2);
       return (h<=23 && m<=59) ? z : '';
     }
-    // lightweight client preview for OOO/DDD: KSEA/CSEA → SEA; else first 3
+    // lightweight client preview for OOO/DDD: KSEA/CSEA -> SEA; else first 3
     function toThreePreview(v){
       const s = String(v||'').trim().toUpperCase();
       if(!s) return '';
@@ -985,7 +985,7 @@
     originField.addEventListener('input', refreshFlightCode);
     destField  .addEventListener('input', refreshFlightCode);
 
-    // Inbound “Extract”: fill Origin/Dest/Dep HHMM only if blank; never overwrite non-empty
+    // Inbound "Extract": fill Origin/Dest/Dep HHMM only if blank; never overwrite non-empty
     if (fcExtractBtn){
       fcExtractBtn.addEventListener('click', async () => {
         fcExtractHint.style.display = 'none'; fcExtractHint.textContent='';
@@ -1011,7 +1011,7 @@
       });
     }
 
-    /* ───────── Inbound: Tail lookup → try Advanced-Manifest detection ───────── */
+    /* ───────── Inbound: Tail lookup -> try Advanced-Manifest detection ───────── */
     const tailInp = document.getElementById('tail');
     const lookupBtn = document.getElementById('lookup');
     async function maybeDetectAdvancedManifest() {
@@ -1096,7 +1096,7 @@
           }
           // Apply to inventory (committed inbound entries)
           const payload = { manifest_id: manifestId.value, items };
-          // Helpful console breadcrumb while we’re stabilizing
+          // Helpful console breadcrumb while we're stabilizing
           try { console.debug('apply_adv_manifest payload', payload); } catch(_) {}
           const ap = await fetch('/api/apply_adv_manifest', {
             method: 'POST',
@@ -1340,7 +1340,7 @@
                   try { await loadExistingManifest(); } catch(e) { console.warn('repaint failed', e); }
                 }
               }
-              // C) Manifest is now dirty → enable Done
+              // C) Manifest is now dirty -> enable Done
               if (typeof advDone !== 'undefined') advDone.disabled = false;
               if (typeof advDirty !== 'undefined') advDirty = true;
             }
@@ -1422,7 +1422,7 @@
             removeBtn.dataset.boundDelete = '1';
             removeBtn.onclick = async (ev) => {
               ev.preventDefault();
-              /* Aggregated view → remove the whole (name,wpu,origin) key safely */
+              /* Aggregated view -> remove the whole (name,wpu,origin) key safely */
               await deleteByKey(name, wpu, '');
               /* ► mark manifest dirty & enable Done */
               try {
@@ -1441,7 +1441,7 @@
           }
         } /* chip */
       }   /* rows loop */
-      // Just in case: dedupe any stragglers WITHOUT summing (avoid 4+4→8 visuals)
+      // Just in case: dedupe any stragglers WITHOUT summing (avoid 4+4->8 visuals)
       try { dedupeChipsInDOM(/* merge = */ false); } catch(_) {}
 
       // Console guard: warn if duplicate keys are still present
@@ -1459,7 +1459,7 @@
       } catch(_) {}
 
       refreshFromDOM();
-      // snapshot chips are real → user should be able to press “Done”
+      // snapshot chips are real -> user should be able to press "Done"
       if (advLines.childElementCount) advDone.disabled = false;
       // Rebuild remarks live from chips (canonical)
       const rmf = document.getElementById('remarks');
@@ -1610,7 +1610,7 @@
         }
       }
       rbSubmitting = true;
-      /* lock UI after our early gate so we don’t flash the spinner */
+      /* lock UI after our early gate so we don't flash the spinner */
       // NOTE: 'clicked' is already defined above
       lockButtons(clicked);
       // basic required‐field check
@@ -1670,7 +1670,7 @@
           if (takeoffTime) takeoffTime.value = depField.value;
         }
 
-        /* ── when we’re inside EDIT-DRAFT mode and targeting
+        /* ── when we're inside EDIT-DRAFT mode and targeting
          *    /send_queued_flight/<id>, also send it as `takeoff_time`
          *    so the backend sees local-time immediately              ── */
         if (targetURL.includes('/send_queued_flight')) {
@@ -1688,7 +1688,7 @@
         travelHInp.value = travelHInp.value.padStart(2,'0');
         travelMInp.value = travelMInp.value.padStart(2,'0');
 
-        if (isQueue) {                      /* Add to Queue → send travel_time */
+        if (isQueue) {                      /* Add to Queue -> send travel_time */
         /* ensure hidden <input name="travel_time"> exists *and* is current */
         const tt = `${travelHInp.value}${travelMInp.value}`;
         let hid = form.querySelector('input[name="travel_time"]');
@@ -1699,7 +1699,7 @@
           form.appendChild(hid);
         }
         hid.value = tt;
-        } else {                                  /* Send Now → compute ETA   */
+        } else {                                  /* Send Now -> compute ETA   */
           const etaVal = addHHMM(depField.value,
                                  `${travelHInp.value}${travelMInp.value}`);
           let etaField = form.querySelector('input[name="eta"]');
@@ -1732,7 +1732,7 @@
         travelMInp.disabled = true;
       }
 
-      // 2)  finish the manifest (pending → 0)
+      // 2)  finish the manifest (pending -> 0)
       try { await commitManifest(); } catch(_){ unlockButtons(); return; }
 
 
@@ -1786,7 +1786,7 @@
           advLines.innerHTML     = '';
           manifestId.value       = '';
           unlockButtons();
-          return; /* skip the outbound “success row” build */
+          return; /* skip the outbound "success row" build */
       }
 
       const allBlank = ['tail_number','airfield_takeoff','airfield_landing',
@@ -1950,7 +1950,7 @@
   const advWunit   = document.getElementById('adv-wunit');
   const advQty     = document.getElementById('adv-qty');
   const advOriginEl= document.getElementById('adv-origin');
-  let _advOriginSelect = null; // tracks if we swapped input → select
+  let _advOriginSelect = null; // tracks if we swapped input -> select
 
   function _updateAdvOrigin() {
     const container = advOriginEl?.parentElement;
@@ -2017,10 +2017,10 @@
   const rbForm     = document.getElementById('rb-form');
   // Guard A: keys that reached zero this session (prevents respawn in forced-snapshot)
   window.__RB_ZEROED = window.__RB_ZEROED || new Set();
-  // Guard A.1: one-shot clamp for the *first* add after ZERO so UI shows ×1 (no 0→2 jump)
+  // Guard A.1: one-shot clamp for the *first* add after ZERO so UI shows ×1 (no 0->2 jump)
   window.__RB_REHYDRATED_ONCE = window.__RB_REHYDRATED_ONCE || new Set();
   // Guard B: original baseline qty per key from queued snapshot
-  //          (prevents “baseline echo” repaint if the chip is momentarily absent)
+  //          (prevents "baseline echo" repaint if the chip is momentarily absent)
   window.__RB_SNAPSHOT_BASE = window.__RB_SNAPSHOT_BASE || new Map();
   let   advStarting = false;
   /* Reuse globals declared in the main script block:
@@ -2035,7 +2035,7 @@
   let SCAN_READY = new Promise(res => { SCAN_READY_RESOLVE = res; });
   let RB_DRAFT_SEEDED = false;  /* seed queued snapshot at most once per manifest */
 
-  /* ───── Availability index: (normalized name, numeric size) → total avail ───── */
+  /* ───── Availability index: (normalized name, numeric size) -> total avail ───── */
   let AVAIL_INDEX = new Map();
   // Tracks every (item,size) pair that exists at all, even when avail prunes to 0
   let KNOWN_KEYS  = new Set();
@@ -2096,10 +2096,10 @@
   }
   /* Best available category id for a (name,wpu) key. */
   function _resolveCategoryIdForKey(name, wpu, origin){
-    // 1) prefer the visible chip’s category name → id
-    const ch = (typeof findChipByKey===’function’ && findChipByKey(name, wpu, origin))
-            || (typeof findBaselineChip===’function’ && findBaselineChip(name, wpu, origin))
-            || (typeof findDeltaChip===’function’ && findDeltaChip(name, wpu, origin)) || null;
+    // 1) prefer the visible chip's category name -> id
+    const ch = (typeof findChipByKey==='function' && findChipByKey(name, wpu, origin))
+            || (typeof findBaselineChip==='function' && findBaselineChip(name, wpu, origin))
+            || (typeof findDeltaChip==='function' && findDeltaChip(name, wpu, origin)) || null;
     if (ch){
       const byName = _catIdByName(ch.dataset.cat||'');
       if (byName) return byName;
@@ -2161,7 +2161,7 @@
 
     // 1) Apply client-minted compensator if needed
     if (compInboundQty > 0){
-      // We took `net` out → put it back INBOUND in one shot (requires category), then commit.
+      // We took `net` out -> put it back INBOUND in one shot (requires category), then commit.
       const catId = _resolveCategoryIdForKey(name, wpu, origin);
       if (!(Number.isFinite(catId) && catId > 0)){
         showToast('Delete aborted — need a category for the compensator. Pick a category and retry.', 'error');
@@ -2205,7 +2205,7 @@
       if (!ok) { showToast('Delete aborted — compensator error.', 'error'); return; }
     }
     else if (net < 0){
-      // We brought |net| IN → take it back OUT via /nudge (structured remove).
+      // We brought |net| IN -> take it back OUT via /nudge (structured remove).
       const qty = Math.abs(net);
       try { console.debug?.('[X-delete] outbound compensator (nudge)', { name, wpu:Number(wpu), qty }); } catch(_){}
       try{
@@ -2226,7 +2226,7 @@
         return;
       }
     }
-    // else net === 0 → no compensator
+    // else net === 0 -> no compensator
 
     // 2) Delete the key WITHOUT server-side auto-compensation
     try {
@@ -2240,7 +2240,7 @@
       window.__RB_DELETING.delete(gateKey);
     }
 
-    // Snapshot: mark this key as “zeroed” so it won’t respawn on next refresh
+    // Snapshot: mark this key as "zeroed" so it won't respawn on next refresh
     try {
       if (window.__RB_FORCE_SNAPSHOT) (window.__RB_ZEROED = window.__RB_ZEROED || new Set()).add(gateKey);
     } catch(_){}
@@ -2328,9 +2328,9 @@
   /* ────────────────────────────────────────────────────────────────
    * Step 6 — Inventory Matching Rules (Green / Green Dashed / Plain)
    * For each requested item (by sanitized_name):
-   *   • Solid green border   → available_lb ≥ outstanding_lb
-   *   • Dashed green border  → some presence but insufficient, OR weight unknown
-   *   • No border            → no matching item in current inventory
+   *   • Solid green border   -> available_lb ≥ outstanding_lb
+   *   • Dashed green border  -> some presence but insufficient, OR weight unknown
+   *   • No border            -> no matching item in current inventory
    * Notes:
    *   • Preview-only indicator — does not perform fulfillment.
    *   • Availability sourced from /inventory/_advance_data (inventoryAdvancedData).
@@ -2360,7 +2360,7 @@
       const key = _norm(name);
       map.set(key, (map.get(key) || 0) + lbs);
     });
-    // Only "requests" matter → clamp negatives to 0 (net inbound doesn't need stock)
+    // Only "requests" matter -> clamp negatives to 0 (net inbound doesn't need stock)
     for (const [k,v] of map.entries()){
       map.set(k, Math.max(0, v));
     }
@@ -2406,7 +2406,7 @@
     const clearAll = () => chips.forEach(ch => { ch.classList.remove('match-ok','match-partial'); });
     if (!isOutbound) { clearAll(); return; }
 
-    const need = _outstandingByNameLbs();  // Map(normName → lbs)
+    const need = _outstandingByNameLbs();  // Map(normName -> lbs)
     // First, clear everything
     clearAll();
     // For each requested name with > 0 lbs outstanding, decide border class
@@ -2436,8 +2436,8 @@
   }
 
   // Run once on load (initial snapshot), then subsequent calls are triggered by:
-  //  • stock refresh → rebuildAvailIndex(), and
-  //  • chip edits/scan adds/removes → calls sprinkled above.
+  //  • stock refresh -> rebuildAvailIndex(), and
+  //  • chip edits/scan adds/removes -> calls sprinkled above.
   document.addEventListener('DOMContentLoaded', () => {
     try { rebuildAvailIndex(); applyMatchingBorders(); } catch(_){}
   });
@@ -2463,7 +2463,7 @@
     /* NEW: dedupe identical scans arriving within a tiny window */
     const SCAN_DEDUP_MS = 200;
     let   lastScan = { code:'', t:0 };
-    /* Session cache: map barcode → key "sanitized_name|wpu"
+    /* Session cache: map barcode -> key "sanitized_name|wpu"
        so we can pre-block remove scans at/below zero without hitting the backend. */
     const BARCODE_TO_KEY = window.__RB_BARCODE_MAP || (window.__RB_BARCODE_MAP = new Map());
     const CLAMP_OFFSETS  = window.__RB_CLAMP_OFFSETS || (window.__RB_CLAMP_OFFSETS = new Map());
@@ -2508,7 +2508,7 @@
               .find(ch => ch.dataset.key === k) || null;
     }
 
-    /* Aggregate all chips (manual + scanned) by key→qty so we can compare against avail */
+    /* Aggregate all chips (manual + scanned) by key->qty so we can compare against avail */
     function qtyMapFromChips(){
       const m = new Map();
       chipsRoot.querySelectorAll('.adv-chip').forEach(ch => {
@@ -2555,7 +2555,7 @@
       return m;
     }
 
-    /* Find “how many available” for a given key=name|wpu|origin using the normalized index */
+    /* Find "how many available" for a given key=name|wpu|origin using the normalized index */
     function availForKey(k){
       try{
         const parts = String(k).split('|');
@@ -2586,7 +2586,7 @@
           if (SESSION_AVAIL_CAPS.has(v)) return SESSION_AVAIL_CAPS.get(v);
         }
       }catch(_){}
-      // FAIL-CLOSED: unknown → treat as 0 available
+      // FAIL-CLOSED: unknown -> treat as 0 available
       return 0;
     }
     /* Which key increased after a scan? (compare before vs after maps) */
@@ -2819,7 +2819,7 @@
           else if (cats.size > 1) cargoField.value = 'Mixed';
         }
       } catch(_) {}
-      /* user has made a change via scanner → allow Done */
+      /* user has made a change via scanner -> allow Done */
       if (typeof advDone !== 'undefined'){ advDone.disabled = false; }
       try { applyMatchingBorders(); } catch(_){}
     }
@@ -2869,7 +2869,7 @@
             const d0 = findDeltaChip(name, wpu, itOrigin);
             if (d0)   { try { d0.remove(); } catch(_) {} }
             try { ZEROED.add(_k); } catch(_){}
-            return; // ← do not re-create a chip at zero
+            return; // <- do not re-create a chip at zero
           }
           if (!baseChip){
             /* 1) If a hidden Δ chip exists (CSS hides [data-delta="1"]), rehydrate it to a baseline chip
@@ -2901,7 +2901,7 @@
                 console.warn?.('[RB-SNAPSHOT] suppress respawn after zero', { name, wpu, sessionQty });
                 return;
               }
-              // 3) One-time “baseline echo” guard (server may briefly replay snapshot)
+              // 3) One-time "baseline echo" guard (server may briefly replay snapshot)
               try {
                 const SNAP = (window.__RB_SNAPSHOT_BASE = window.__RB_SNAPSHOT_BASE || new Map());
                 const base0 = SNAP.get(_k);
@@ -2910,7 +2910,7 @@
                   return;
                 }
               } catch(_) {}
-              // 4) No chip at all → create a visible baseline chip for the net session qty
+              // 4) No chip at all -> create a visible baseline chip for the net session qty
               upsertScanChip({ ...it, qty: visQty, total: Math.round(visQty * wpu * 100)/100 });
               try { console.debug('[RB-SNAPSHOT] no baseline; painted session chip', { name, wpu, sessionQty }); } catch(_){}
               return;
@@ -3020,7 +3020,7 @@
         try { j = await resp.clone().json(); } catch(_){}
         try {
           console.debug(
-            useNudge ? '[RB-SCAN→NUDGE]' : '[RB-SCAN]',
+            useNudge ? '[RB-SCAN->NUDGE]' : '[RB-SCAN]',
             {
               endpoint,
               barcode,
@@ -3072,7 +3072,7 @@
         }
       } catch(_) {}
 
-      // If an ADD “jumped” by >1 (session rehydrated), keep UI at +1 without touching backend.
+      // If an ADD "jumped" by >1 (session rehydrated), keep UI at +1 without touching backend.
       if (mode === 'add' && typeof deltaNet === 'number' && deltaNet > 1 && changedKNet){
         try {
           const extra = deltaNet - 1;
@@ -3091,7 +3091,7 @@
       }
 
       // If a REMOVE landed exactly at zero, mark this key as ZEROED so snapshot
-      // refreshes don’t repaint the original baseline (“baseline echo”).
+      // refreshes don't repaint the original baseline ("baseline echo").
       if (mode === 'remove' && changedKNet && typeof nowQtyNet === 'number' && nowQtyNet === 0) {
         (window.__RB_ZEROED = window.__RB_ZEROED || new Set()).add(changedKNet);
       }
@@ -3150,9 +3150,9 @@
             });
           } catch(_){}
           // Message semantics:
-          //   • deltaNet < 0  → we actually removed 1 (now = rem)
-          //   • deltaNet === 0 (already handled above) → no-op
-          //   • deltaNet > 0  → would imply Δ− was treated as + (shouldn’t happen with NET map)
+          //   • deltaNet < 0  -> we actually removed 1 (now = rem)
+          //   • deltaNet === 0 (already handled above) -> no-op
+          //   • deltaNet > 0  -> would imply Δ− was treated as + (shouldn't happen with NET map)
           if (deltaNet < 0) {
             const msg = (j.removed || rem === 0)
               ? 'Removed last'
@@ -3161,15 +3161,15 @@
           } else if (deltaNet === 0) {
             setFB('At baseline — nothing to remove', 'scan-warn', 2000);
           } else {
-            // Defensive fallback → treat as a no-op at baseline
-            try { console.warn('[RB-REMOVE:FALLBACK→NOOP]', { deltaNet, forceSnapshot: !!window.__RB_FORCE_SNAPSHOT }); } catch(_){}
+            // Defensive fallback -> treat as a no-op at baseline
+            try { console.warn('[RB-REMOVE:FALLBACK->NOOP]', { deltaNet, forceSnapshot: !!window.__RB_FORCE_SNAPSHOT }); } catch(_){}
             setFB('Nothing left to remove', 'scan-warn', 2000);
           }
         }
       }
 
       // If an ADD actually increased a key, allow it to reappear again,
-      // and clear the “baseline echo” suppression for that key.
+      // and clear the "baseline echo" suppression for that key.
       try {
         if (mode === 'add' && changedKNet && deltaNet > 0) {
           (window.__RB_ZEROED = window.__RB_ZEROED || new Set()).delete(changedKNet);
@@ -3178,7 +3178,7 @@
         }
       } catch(_) {}
 
-      /* ── Outbound gate: allow the “last one” (pruned-at-zero) exactly once ── */
+      /* ── Outbound gate: allow the "last one" (pruned-at-zero) exactly once ── */
       try {
         if (document.body.dataset.advDir === 'outbound' && mode === 'add'){
           const after = qtyMapFromChips();
@@ -3249,7 +3249,7 @@
   // Canonical preview string: "Manifest: NAME SIZE lb×QTY; …;"
   function buildManifestTextFromChips(chips) {
     // De-dupe by (sanitized, wpu, origin) and sum net qty: baseline + signed Δ
-    const agg = new Map(); // key = name|wpu|origin → {name,wpu,qty,origin}
+    const agg = new Map(); // key = name|wpu|origin -> {name,wpu,qty,origin}
     (chips || []).forEach(c => {
       const name   = (c.dataset.sanitized || '').trim();
       const wpu    = Number(c.dataset.wpu || 0);
@@ -3277,7 +3277,7 @@
   const inventoryUrl = "{{ url_for('inventory.inventory_advance_data') }}";
   let invPollTimer = null;
 
- /* track freshness of the inventory “probe” JSON */
+ /* track freshness of the inventory "probe" JSON */
  let lastInventoryFetch = 0;
 
   function updateSizeOptions(cid, itemName) {
@@ -3355,7 +3355,7 @@
     if (advPanel && getComputedStyle(advPanel).display !== 'none') return;
     advStarting = true;
     try {
-      // Fresh Advanced session → clear guards
+      // Fresh Advanced session -> clear guards
       try {
         window.__RB_ZEROED = new Set();
         window.__RB_SNAPSHOT_BASE = new Map();
@@ -3381,14 +3381,14 @@
       // mark advanced mode active for this session
       if (advMode) advMode.value = '1';
 
-      /* Take a snapshot so “Back” can restore */
+      /* Take a snapshot so "Back" can restore */
       snapshot = {
         cargo_type   : document.getElementById('cargo_type').value,
         cargo_weight : document.getElementById('cargo_weight').value,
         remarks      : document.getElementById('remarks').value,
         chipsHTML    : advLines.innerHTML
       };
-      /* panel just opened → nothing changed yet, so keep “Done” off         */
+      /* panel just opened -> nothing changed yet, so keep "Done" off         */
       advDone.disabled = true;
       // Always ensure we have a fresh availability snapshot before allowing scans
       await fetchInventory();
@@ -3409,7 +3409,7 @@
         : (inventoryAdvancedData.stock_categories || catList);
       advCat.innerHTML = '<option value="">Category…</option>' +
         useList.map(c => `<option value="${c.id}">${c.display_name}</option>`).join('');
-      /* clear “last category” helper at the start of every new manifest */
+      /* clear "last category" helper at the start of every new manifest */
       window._lastCatName = '';
       advDirOut.checked = (dir === 'outbound');
       advDirIn.checked  = (dir === 'inbound');
@@ -3438,7 +3438,7 @@
             action:      'delete',
             manifest_id: manifestId.value,
             entry_id:    eid,
-            purge:       '1'      /* ← also a hard delete */
+            purge:       '1'      /* <- also a hard delete */
           })
         });
       } catch {}
@@ -3515,7 +3515,7 @@
          inventoryAdvancedData.all_categories);
     advCat.innerHTML = '<option value="">Category…</option>' +
       useList.map(c => `<option value="${c.id}">${c.display_name}</option>`).join('');
-    /* clear “last category” helper at the start of every new manifest */
+    /* clear "last category" helper at the start of every new manifest */
     window._lastCatName = '';
   }
   advDirOut.addEventListener('change', syncFromAdvToggle);
@@ -3559,7 +3559,7 @@
     }
   });
 
-  // ← send each “Add” click up to the server with CSRF
+  // <- send each "Add" click up to the server with CSRF
   advAdd.addEventListener('click', async () => {
     const dirNow = advDirOut.checked ? 'outbound' : 'inbound';
     // Validate required fields before submitting
@@ -3600,7 +3600,7 @@
     const j = await resp.json();
     if (!resp.ok) return showError(j.message || 'Error adding line');
 
-    // ► New behavior: don’t create a separate “manual chip”.
+    // ► New behavior: don't create a separate "manual chip".
     // Track the pending row, repaint from authoritative aggregate, mark origin as manual.
     pendingIds.push(j.entry_id);
     try { if (window._rbScanRefresh) await window._rbScanRefresh(); } catch(_){}
@@ -3640,9 +3640,9 @@
     advQty.value = '';
   });
 
-  // “Done” simply hides the panel – leave rows pending until Send/Queue
+  // "Done" simply hides the panel – leave rows pending until Send/Queue
   advDone.addEventListener('click', async () => {
-    /* 1️⃣ promote any newly-added rows from pending→committed */
+    /* 1️⃣ promote any newly-added rows from pending->committed */
     if (pendingIds.length){
       await fetch("{{ url_for('inventory.inventory_advance_line') }}",{
         method:'POST',
@@ -3768,7 +3768,7 @@
     }
   }
 
-  // Also restore on explicit “Back” (already closes the panel)
+  // Also restore on explicit "Back" (already closes the panel)
   advBack.addEventListener('click', __rbRestoreLiveRefreshIfSuppressed, { once:false });
 </script>
 
@@ -3859,7 +3859,7 @@
 
   {{ super() }}
   <style>
-    /* Subtle pill that sits next to the Advanced “Done” control */
+    /* Subtle pill that sits next to the Advanced "Done" control */
     .adv-total-pill{
       display:inline-flex; align-items:center; gap:.25rem;
       font-weight:600; font-size:0.95rem;
@@ -3881,7 +3881,7 @@
       pill.className = 'adv-total-pill';
       pill.title = 'Sum of all Advanced chips for this manifest';
       pill.innerHTML = 'Total: <span class="val">0</span> lbs';
-      // Try to place it right after the Advanced “Done” control.
+      // Try to place it right after the Advanced "Done" control.
       // include your real #adv-done and panel #adv-panel
       var doneBtn = document.querySelector(
         '#adv-done, ' +
@@ -3921,7 +3921,7 @@
           var m = (chip.querySelector('.chip-wpu') && chip.querySelector('.chip-wpu').textContent || '').match(/(\d+(?:\.\d+)?)/);
           wpu = m ? m[1] : '0';
         }
-        // Include delta flag + sign so baseline and Δ aren’t deduped together
+        // Include delta flag + sign so baseline and Δ aren't deduped together
         var flag = 'B';
         if (chip.dataset.delta === '1') {
           flag = 'Δ' + (chip.dataset.deltaSign === '-1' ? '-1' : '+1');
@@ -3951,7 +3951,7 @@
       });
     }
     function sumFromDOM(){
-      // Normalize duplicates first so totals/remarks don’t double count.
+      // Normalize duplicates first so totals/remarks don't double count.
       dedupeChipsInDOM();
       // Prefer explicit data-total values on chips if present…
       var root = document.querySelector('#adv-lines, #adv-chips, #adv-selected, .adv-chips, .manifest-chips');
@@ -4102,7 +4102,7 @@
   <script>
   (function(){
     // Treat as scanner if gaps are tiny and there's a decent length
-    const GAP_MS    = 20;   // your runs: max 5ms → 20ms is a comfy ceiling
+    const GAP_MS    = 20;   // your runs: max 5ms -> 20ms is a comfy ceiling
     const MIN_CHARS = 6;    // need at least this many before ENTER
     const RESET_MS  = 800;  // abandon partial bursts after idle
 
@@ -4158,7 +4158,7 @@
       }
     }, true);
 
-    // While focused in the Scan box, verify the “scanner-speed” pattern
+    // While focused in the Scan box, verify the "scanner-speed" pattern
     document.addEventListener('keydown', (e) => {
       const scan = findScanBox();
       if (!capturing || !scan || document.activeElement !== scan) return;

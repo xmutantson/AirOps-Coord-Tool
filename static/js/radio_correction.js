@@ -2,8 +2,8 @@
    - Opens automatically when the inbound parse is "allBlank" (client detects).
    - Left: original message (filled from #incoming-form values).
    - Right: tabs with a form for each type + live-composed subject/body.
-   - “Insert into Form” fills the inbound form for manual submit.
-   - “Build & Re-parse” fills and programmatically submits for a second try.
+   - "Insert into Form" fills the inbound form for manual submit.
+   - "Build & Re-parse" fills and programmatically submits for a second try.
 */
 (function(){
   const modal    = document.getElementById('correction-modal');
@@ -253,7 +253,7 @@
   }
   window.openCorrectionExamples = openModal;
 
-  // Also add a small “Examples” button next to the header for manual access
+  // Also add a small "Examples" button next to the header for manual access
   (function addTriggerBtn(){
     const header = Array.from(document.querySelectorAll('h3'))
       .find(h => /Log Incoming Winlink Message/i.test(h.textContent || ''));

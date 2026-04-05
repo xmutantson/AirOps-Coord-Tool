@@ -1,5 +1,5 @@
 // static/js/propagate.js
-// AOCT Propagation helpers (preview → confirm → apply) with a safe modal
+// AOCT Propagation helpers (preview -> confirm -> apply) with a safe modal
 // - ESC / backdrop click / × / Cancel all close the modal
 // - High z-index and viewport padding so content never renders off-screen
 // - Used by: /inventory/detail, /inventory/stock, /inventory/barcodes
@@ -178,7 +178,7 @@
     `;
   }
 
-  // Preview → Confirm → Apply
+  // Preview -> Confirm -> Apply
   async function previewBulk(kind, names, opts, oldWpu, onApplied) {
     if (!Array.isArray(names) || !names.length) return;
     try {
@@ -199,7 +199,7 @@
   }
 
   // ───────────────────── Attachments / Entry points ───────────────────
-  // 1) Detail table: enable “Fix/Propagate…” links
+  // 1) Detail table: enable "Fix/Propagate…" links
   const __wiredContainers = new WeakSet();
   function attachDetailHandlers(container) {
     container = container || document;

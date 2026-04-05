@@ -49,7 +49,7 @@
   const RESET_FLAG = 'scan_reset_cleared';
   const clearScanBox = () => { if (kbd) { kbd.value = ''; try { kbd.setAttribute('value',''); } catch(_) {} } };
 
-  // Default focus for “Focus here and scan” field (helps operators land + scan)
+  // Default focus for "Focus here and scan" field (helps operators land + scan)
   if (kbd) {
     try { kbd.focus({ preventScroll: true }); } catch(_) { kbd.focus(); }
     // If we just came from a Reset-triggered reload, ensure the field is blank
@@ -85,7 +85,7 @@
   })();
   // one-shot reset (looks like closing the scan UI) — preserve direction for the reload
   const resetAll = () => {
-    // Clear the input so browsers don’t restore stale digits on reload
+    // Clear the input so browsers don't restore stale digits on reload
     clearScanBox();
     try { sessionStorage.setItem(RESET_FLAG, '1'); } catch(_){}
     saveDirOnce(getScanDir());
@@ -207,7 +207,7 @@
   }
   document.addEventListener('keydown', (e) => {
     if (!kbd) return;
-    // If user is already typing in any field/button/etc → don't hijack.
+    // If user is already typing in any field/button/etc -> don't hijack.
     const ae = document.activeElement;
     if (isTypingElement(ae)) return;
     // Ignore modifiers / navigation keys.
@@ -234,7 +234,7 @@
     e.preventDefault();
     kbd.value = kbd.value + key;
     kbd.setSelectionRange(kbd.value.length, kbd.value.length);
-    // Kick the existing burst-detection so “idle ≥120ms” triggers lookup.
+    // Kick the existing burst-detection so "idle ≥120ms" triggers lookup.
     burstChars++; clearTimeout(burstTimer);
     burstTimer = setTimeout(() => { if (burstChars >= 5) handleCode(kbd.value); burstChars = 0; }, 120);
   });
@@ -271,7 +271,7 @@
     return true;
   }
 
-  // Add a small “Reset” button into the header row next to the status pill
+  // Add a small "Reset" button into the header row next to the status pill
   (function injectHeaderReset(){
     if (!statusEl) return;
     const row = statusEl.parentElement;
@@ -452,7 +452,7 @@
         }
       }
     })();
-    setStatus('Unknown → switched to Inbound','warn');
+    setStatus('Unknown -> switched to Inbound','warn');
     // Hide the legacy inventory form while the unknown-item card is up
     hideLegacyForm(true);
     if (!createEl) return;
@@ -511,7 +511,7 @@
     setStatus('Looking up…');
     const ai = parseGS1(code);
 
-    // GET or POST lookup; we’ll use POST to keep it simple/consistent
+    // GET or POST lookup; we'll use POST to keep it simple/consistent
     const resp = await fetch(URLS.lookup, { method:'POST', headers: jsonHeaders(), body: JSON.stringify({ code }) });
     if (resp.ok) {
       const data = await resp.json();
@@ -596,7 +596,7 @@
   }
 
   function lightUnsharp(canvas, amount = 0.45) {
-    // simple 3x3 high-pass “unsharp” for soft prints (cardboard)
+    // simple 3x3 high-pass "unsharp" for soft prints (cardboard)
     const c = document.createElement('canvas');
     c.width = canvas.width; c.height = canvas.height;
     const ctx = c.getContext('2d', { willReadFrequently: true });
@@ -678,7 +678,7 @@
   }
 
   async function decodeWithFallbacks(url) {
-    const ZX = await loadZXing(); // may throw if script can’t load
+    const ZX = await loadZXing(); // may throw if script can't load
     // Hints: try harder & linear formats only
     const hints = new Map();
     hints.set(ZX.DecodeHintType.TRY_HARDER, true);
@@ -806,7 +806,7 @@
     if (cancelBtn) cancelBtn.onclick = resetAll; // cancel = reset the scanner UI
   }
 
-  // Global “Esc” to reset while scanner UI is active
+  // Global "Esc" to reset while scanner UI is active
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') resetAll(); });
 
   // If the legacy Inventory Detail form ever submits normally, keep direction sticky for one reload

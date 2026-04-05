@@ -33,7 +33,7 @@
     setTimeout(() => host.remove(), 12000);
   }
 
-  // ——— Flow trigger A: Duty roster add → ask “Are you a pilot?” → open waiver
+  // ——— Flow trigger A: Duty roster add -> ask "Are you a pilot?" -> open waiver
   // Tiny modal instead of confirm()
   function choosePilotVolunteer(detail){
     const { staffId, name } = detail || {};
@@ -57,7 +57,7 @@
   }
   window.addEventListener("staff:add:success", (e) => choosePilotVolunteer(e.detail||{}));
 
-  // ——— Flow trigger B: Dashboard sign-in success → same prompt
+  // ——— Flow trigger B: Dashboard sign-in success -> same prompt
   window.addEventListener("signin:success", (e) => choosePilotVolunteer(e.detail||{}));
 
   // ——— Flow trigger C: Ramp / Queue / Edit (labels)
@@ -69,19 +69,19 @@
     window.open(url, "_blank", "noopener");
   }
 
-  // After “Add to Queue”
+  // After "Add to Queue"
   window.addEventListener("flight:queued", (e) => {
     const d = e?.detail || {};
     toastWithAction("Added to Queue.", "Print labels", () => openLabels({ flightId: d.flightId, queuedId: d.queuedId || d.id }));
   });
 
-  // After “Send”
+  // After "Send"
   window.addEventListener("flight:sent", (e) => {
     const d = e?.detail || {};
     toastWithAction("Flight sent.", "Print labels", () => openLabels({ flightId: d.flightId }));
   });
 
-  // Helper you can call from row renderers to inject a persistent “Print Labels” button
+  // Helper you can call from row renderers to inject a persistent "Print Labels" button
   window.attachPrintLabelsButton = function attachPrintLabelsButton(containerEl, flightId, queuedId) {
     if (!containerEl || containerEl.querySelector("[data-role=print-labels]")) return;
     const a = document.createElement("a");

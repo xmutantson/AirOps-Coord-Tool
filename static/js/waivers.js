@@ -1,9 +1,9 @@
 /* WWDART – Waivers: signatures + initials + print gating
    Works against the existing waivers.html markup with no template changes.
-   - Click any .sig-field to open a drawing modal; Accept → base64 to hidden input
-   - “Tap to initial” buttons fill from Printed Name; buttons then hide
+   - Click any .sig-field to open a drawing modal; Accept -> base64 to hidden input
+   - "Tap to initial" buttons fill from Printed Name; buttons then hide
    - window.print() is gated until all initials + both signatures exist
-   - Print now opens in a NEW TAB; original page swaps the button to “Continue…”
+   - Print now opens in a NEW TAB; original page swaps the button to "Continue…"
 */
 (function () {
   'use strict';
@@ -21,7 +21,7 @@
   const IS_PRINT_MODE = !!document.querySelector('[data-print="1"]');
 
   if (!section || section === 'labels') {
-    // Labels sheets don’t need this JS.
+    // Labels sheets don't need this JS.
     return;
   }
 
@@ -44,7 +44,7 @@
     const initials = deriveInitials(fromName) || '✓';
     chip.textContent = initials;
     chip.hidden = false;
-    if (btn) btn.remove(); // spec: hide the “Initial” button after setting
+    if (btn) btn.remove(); // spec: hide the "Initial" button after setting
     // expose a simple map in case we want to POST it later
     window.__waiverInitialsMap = window.__waiverInitialsMap || {};
     const key = (chip.id || '').replace(/[^\d]/g,'') || chip.id || '';
@@ -52,7 +52,7 @@
     refreshGate();
   }
 
-  // Wire up all “Tap to initial” buttons
+  // Wire up all "Tap to initial" buttons
   (function bindInitialButtons() {
     const printed = findPrintedInput();
 
@@ -248,7 +248,7 @@
     });
   }
 
-  // Make .sig-field clickable → open modal; map to hidden input names
+  // Make .sig-field clickable -> open modal; map to hidden input names
   (function bindSignatureFields(){
     const fields = $$('.sig-field');
     if (!fields.length) return;
@@ -272,7 +272,7 @@
       field.style.cursor = 'crosshair';
 
       field.addEventListener('click', (e) => {
-        // Don’t steal clicks from existing buttons inside the field
+        // Don't steal clicks from existing buttons inside the field
         if (e.target.closest('button')) return;
         currField = { field, hiddenName };
         // reset canvas to blank
@@ -322,7 +322,7 @@
     return (filled >= rows) && signaturesReady();
   }
 
-  // Try to “disable” obvious print triggers until ready; also guard window.print
+  // Try to "disable" obvious print triggers until ready; also guard window.print
   const realPrint = window.print ? window.print.bind(window) : null;
   function guardPrint(e) {
     if (IS_PRINT_MODE || canPrintNow()) return true;
