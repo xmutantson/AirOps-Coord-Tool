@@ -615,12 +615,30 @@ def winlink_compose():
             flash('To and Subject are required.', 'error')
             return redirect(url_for('winlink.winlink_compose'))
 
-        # Fire all sends in a background thread so the page returns instantly
+        # Record outbound messages to DB synchronously (fast) so
+        # the send log is updated immediately on redirect.
         all_addrs = to_list + cc_list
+        cs = get_send_as_callsign()
+        try:
+            with sqlite3.connect(DB_FILE, timeout=5) as conn:
+                ts_iso = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+                for addr in all_addrs:
+                    conn.execute("""
+                        INSERT INTO winlink_messages
+                          (direction, callsign, sender, subject, body, timestamp)
+                        VALUES ('out', ?, ?, ?, ?, ?)
+                    """, (cs, addr, subject, body, ts_iso))
+        except Exception:
+            pass
+
+        # Fire PAT compose in background (slow, talks to CMS)
         def _compose_bg():
             for addr in all_addrs:
                 try:
-                    send_winlink_message(addr, subject, body)
+                    _cmd = ["pat", "compose", "--from", cs, "-s", subject, addr]
+                    subprocess.run(_cmd, input=body or "", text=True,
+                                  check=True, stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, timeout=60)
                 except Exception:
                     pass
         threading.Thread(target=_compose_bg, daemon=True).start()
