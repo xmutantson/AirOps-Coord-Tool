@@ -107,4 +107,20 @@ Full setup and multi-user walkthrough of AirOps Coordination Tool. General feedb
 8. **Winlink compose form** (#7) — new feature, requires auth gating
 
 ### P3 — Future (Large Scope)
+
+---
+
+## Feature Requests (from post-test development)
+
+### 10. Pilot Ack: Keep Send Buttons Available
+**Description:** Once a pilot acknowledgement is in the system for a flight, the send state buttons should remain available — showing the send button and view manifest PDF link.
+**Status:** Implemented
+
+### 11. Unit-Level Cargo Labels
+**Description:** Cargo labels should be generated at the unit level (one label per physical cargo item), numbered per cargo type (e.g., "Blood Bags 1/20", "Blood Bags 2/20"). Labels are meant to be attached to actual cargo items for tracking.
+**Status:** Not yet implemented
+
+### 12. Label Sizing Options
+**Description:** Label printing should support multiple paper sizes — regular printer (letter/A4) and Dymo-type shipping label printers. Users should be able to choose the format before printing.
+**Status:** Not yet implemented
 9. **Inventory source tracking** (#8) — deep change, implement last

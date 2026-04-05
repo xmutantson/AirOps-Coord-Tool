@@ -112,7 +112,8 @@ def build_manifest_pdf(app, queue_row) -> tuple[bytes, str]:
             fc.weight_per_unit                                      AS wpu,
             fc.quantity                                             AS qty,
             COALESCE(NULLIF(fc.total_weight,0),
-                     COALESCE(fc.weight_per_unit,0)*COALESCE(fc.quantity,0)) AS total
+                     COALESCE(fc.weight_per_unit,0)*COALESCE(fc.quantity,0)) AS total,
+            COALESCE(fc.origin,'')                                  AS origin
           FROM flight_cargo fc
           LEFT JOIN inventory_categories ic ON ic.id = fc.category_id
           WHERE fc.queued_id = ?
@@ -146,12 +147,14 @@ def build_manifest_pdf(app, queue_row) -> tuple[bytes, str]:
         if total_f <= 0 and wpu_f > 0 and qty_i > 0:
             total_f = wpu_f * qty_i
         if name and qty_i > 0 and total_f > 0:
+            origin = (r.get("origin") or "").strip()
             rows.append({
                 "category_name": cat,
                 "sanitized_name": name,
                 "wpu": round(wpu_f, 2) if wpu_f else None,
                 "qty": qty_i,
                 "total": round(total_f, 1),
+                "origin": origin,
             })
 
     # Fallback: parse "Manifest: …" from cargo_type/remarks if no normalized rows exist

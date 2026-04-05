@@ -385,36 +385,49 @@
 
   {# ============== DART MATERIAL IDENTIFICATION LABELS ============== #}
   {% if _section == "labels" %}
-  {% for page in labels|batch(4, fill_with=None) %}
+  {# Label sizing CSS: letter (default 4-up), shipping (4x6, 1-up), address (1.1x3.5, 1-up) #}
+  {% set ls = label_size|default('letter') %}
+  <style>
+    {% if ls == 'shipping' %}
+      @page { size: 4in 6in; margin: 3mm; }
+      .labels-page { display: block; }
+      .label-card { width: 100%; page-break-after: always; font-size: 11px; padding: 2mm; }
+      .label-card h3 { font-size: 12px; margin: 0 0 1mm; }
+      .label-card table { font-size: 10px; }
+      .label-card td { padding: 1mm 2mm; }
+    {% elif ls == 'address' %}
+      @page { size: 3.5in 1.1in; margin: 1mm; }
+      .labels-page { display: block; }
+      .label-card { width: 100%; page-break-after: always; font-size: 7px; padding: 1mm; }
+      .label-card h3 { font-size: 8px; margin: 0; }
+      .label-card table { font-size: 7px; }
+      .label-card td { padding: 0.5mm 1mm; }
+      .label-lines div { display: none; }
+    {% endif %}
+  </style>
+  {% set batch_size = 1 if ls in ('shipping','address') else 4 %}
+  {% for page in labels|batch(batch_size, fill_with=None) %}
   <section id="labels" class="labels-page">
     <span id="labels-dart" hidden></span>
-    {# Expect a list like:
-       labels = [
-         {"mission": "M-001", "from_org":"Walla Walla DART", "origin":"ALW",
-          "destination":"EPH", "date_sealed":"2025-08-09", "weight_lb":"42",
-          "contents":"Rice 10 lb × 3; Beans 5 lb × 2"},
-         ... up to any number; we render 6 per page and paginate via CSS
-       ]
-    #}
     {% for label in page if label %}
       <div class="label-card">
-        <h3>DART MATERIAL IDENTIFICATION LABEL</h3>
+        <h3>CARGO IDENTIFICATION LABEL{% if label.unit_label %} <span style="float:right;">{{ label.unit_label }}</span>{% endif %}</h3>
         <table>
-          <tr><td>Mission Number:</td><td>{{ mission_number or label.mission or "" }}</td></tr>
-          <tr><td>From:</td><td>{{ label.from_org or "Walla Walla DART" }}</td></tr>
-          <tr><td>Originating Airport:</td><td>{{ label.origin or "" }}</td></tr>
-          <tr><td>Destination Airport:</td><td>{{ label.destination or "" }}</td></tr>
-          <tr><td>Date Sealed/Shipped:</td><td>{{ label.date_sealed or "" }}</td></tr>
-          <tr><td>Weight (lb):</td><td>{{ label.weight_lb or "" }}</td></tr>
+          <tr><td>Mission:</td><td>{{ mission_number or label.mission or "" }}</td></tr>
+          {% if label.tail %}<tr><td>Tail #:</td><td>{{ label.tail }}</td></tr>{% endif %}
+          <tr><td>From:</td><td>{{ label.origin or "" }}</td></tr>
+          <tr><td>To:</td><td>{{ label.destination or "" }}</td></tr>
+          <tr><td>Date:</td><td>{{ label.date_sealed or "" }}</td></tr>
+          <tr><td>Item:</td><td>{{ label.contents or "" }}</td></tr>
+          {% if label.cargo_origin %}<tr><td>Source:</td><td>{{ label.cargo_origin }}</td></tr>{% endif %}
+          <tr><td>Weight:</td><td>{{ label.weight_lb or "" }} lb</td></tr>
+          {% if not label.unit_label %}
           <tr>
-            <td>Contents:</td>
-            <td class="label-lines">
-              {% if label.contents %}
-                <div style="border:none;height:auto;white-space:pre-wrap">{{ label.contents }}</div>
-              {% endif %}
-              <div></div><div></div><div></div><div></div><div></div>
+            <td colspan="2" class="label-lines">
+              <div></div><div></div><div></div>
             </td>
           </tr>
+          {% endif %}
         </table>
       </div>
     {% endfor %}

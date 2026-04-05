@@ -1781,7 +1781,20 @@ def _labels_for_queued(qid: int,
         items = [i for i in items if _slug(i.get("item","")) == only_slug]
 
     mission = f"Q-{qid}"
+    # Also pull flight_cargo rows for origin data
+    fc_rows = dict_rows("""
+        SELECT sanitized_name, weight_per_unit, quantity, COALESCE(origin,'') AS cargo_origin
+          FROM flight_cargo WHERE queued_id=?
+         ORDER BY sanitized_name, weight_per_unit
+    """, (qid,))
+    # Build origin lookup: name|wpu -> origin
+    origin_map = {}
+    for fc in fc_rows:
+        k = f"{(fc['sanitized_name'] or '').strip().lower()}|{fc['weight_per_unit']}"
+        origin_map[k] = (fc.get('cargo_origin') or '').strip()
+
     base = []
+    unit_mode = (request.args.get("unit_labels") or "").strip().lower() in ("1", "yes", "true")
     if items:
         for it in items:
             name = (it.get("item") or "").strip()
@@ -1796,23 +1809,48 @@ def _labels_for_queued(qid: int,
                 size_lb = f"{float(size_lb):.2f}" if size_lb is not None else (f"{float(tot_w)/qty:.2f}" if qty else "")
             except Exception:
                 size_lb = ""
-            base.append({
-                "mission": mission,
-                "from_org": "Walla Walla DART",
-                "origin": origin,
-                "destination": dest,
-                "date_sealed": ts,
-                "weight_lb": weight_lb,
-                "contents": f"{name}" + (f" × {qty}" if qty else ""),
-                "name": name, "size_lb": size_lb, "qty": qty, "dest": dest, "tail": tail,
-                "flight_code": "",
-            })
+            item_origin_tag = it.get("origin") or ""
+            # Fall back to flight_cargo origin if parser didn't capture it
+            if not item_origin_tag:
+                k = f"{name.lower()}|{size_lb}"
+                item_origin_tag = origin_map.get(k, "")
+
+            if unit_mode and qty > 0:
+                # Generate one label per physical unit, numbered
+                for unit_num in range(1, qty + 1):
+                    base.append({
+                        "mission": mission,
+                        "from_org": get_preference('mission_number') or 'Air Ops',
+                        "origin": origin,
+                        "destination": dest,
+                        "date_sealed": ts,
+                        "weight_lb": size_lb,
+                        "contents": name,
+                        "cargo_origin": item_origin_tag,
+                        "unit_label": f"{unit_num}/{qty}",
+                        "name": name, "size_lb": size_lb, "qty": qty, "dest": dest, "tail": tail,
+                        "flight_code": "",
+                    })
+            else:
+                base.append({
+                    "mission": mission,
+                    "from_org": get_preference('mission_number') or 'Air Ops',
+                    "origin": origin,
+                    "destination": dest,
+                    "date_sealed": ts,
+                    "weight_lb": weight_lb,
+                    "contents": f"{name}" + (f" x {qty}" if qty else ""),
+                    "cargo_origin": item_origin_tag,
+                    "unit_label": "",
+                    "name": name, "size_lb": size_lb, "qty": qty, "dest": dest, "tail": tail,
+                    "flight_code": "",
+                })
     else:
         generic = (cargo or remarks or "").strip()
         base.append({
-            "mission": mission, "from_org": "Walla Walla DART",
+            "mission": mission, "from_org": get_preference('mission_number') or 'Air Ops',
             "origin": origin, "destination": dest, "date_sealed": ts,
-            "weight_lb": "", "contents": generic,
+            "weight_lb": "", "contents": generic, "cargo_origin": "", "unit_label": "",
         })
     try:
         copies = max(1, min(int(copies), 100))
@@ -1958,9 +1996,11 @@ def docs_labels_cargo():
     if not labels:
         abort(404, description="No labels could be generated for this request.")
 
+    label_size = (request.args.get("label_size") or "letter").strip().lower()
     ctx = {
         "section": "labels",
         "labels": labels,
+        "label_size": label_size,
         "print_mode": True,
         "auto_print": True,
         "active": "supervisor",

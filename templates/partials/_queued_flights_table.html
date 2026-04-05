@@ -42,13 +42,22 @@
         <td>{{ q.cargo_type }}</td>
         <td>{{ q.remarks }}</td>
         <td>{{ q.created_at }}</td>
-        <!-- Labels action cell (aligns with <th>Labels) -->
+        <!-- Labels action cell -->
         <td style="text-align:center; white-space:nowrap;">
-          <a href="/docs/labels/cargo?queued_id={{ q.id }}&scope=all"
-             title="Print labels"
-             aria-label="Print labels"
-             target="_blank" rel="noopener"
-             class="icon-btn">📦</a>
+          <details style="display:inline-block; position:relative;">
+            <summary style="cursor:pointer; list-style:none;" title="Print labels">📦</summary>
+            <div style="position:absolute; right:0; z-index:10; background:#fff; border:1px solid #ccc; border-radius:6px; padding:.5rem; box-shadow:0 4px 12px rgba(0,0,0,.15); white-space:nowrap; font-size:.85em;">
+              <div style="font-weight:600; margin-bottom:.3rem;">Labels</div>
+              <a href="/docs/labels/cargo?queued_id={{ q.id }}&scope=all"
+                 target="_blank" rel="noopener" style="display:block; padding:.2rem 0;">Summary (Letter)</a>
+              <a href="/docs/labels/cargo?queued_id={{ q.id }}&scope=all&unit_labels=1&label_size=letter"
+                 target="_blank" rel="noopener" style="display:block; padding:.2rem 0;">Unit Labels (Letter)</a>
+              <a href="/docs/labels/cargo?queued_id={{ q.id }}&scope=all&unit_labels=1&label_size=shipping"
+                 target="_blank" rel="noopener" style="display:block; padding:.2rem 0;">Unit Labels (4x6 Shipping)</a>
+              <a href="/docs/labels/cargo?queued_id={{ q.id }}&scope=all&unit_labels=1&label_size=address"
+                 target="_blank" rel="noopener" style="display:block; padding:.2rem 0;">Unit Labels (Address)</a>
+            </div>
+          </details>
         </td>
         <td style="text-align:center;">
           <a href="{{ url_for('ramp.view_manifest_pdf', queue_id=q.id) }}"
@@ -61,7 +70,8 @@
             <span title="Acked {{ q.pilot_ack_signed_at }}" style="color:#2e7d32;">&#10003;</span>
           {% else %}
             <a href="{{ url_for('ramp.edit_queued_flight', qid=q.id) }}"
-               title="Pilot ack needed" style="color:#e65100;">Needs Ack</a>
+               class="button" title="Pilot ack needed"
+               style="background:#ffc107; color:#333; padding:.3rem .6rem; font-size:.85em; text-decoration:none; border-radius:4px;">Ack</a>
           {% endif %}
         </td>
         <td>
@@ -71,10 +81,10 @@
                 data-tt="{{ q.travel_time or '' }}"
                 action="{{ url_for('ramp.send_queued_flight', qid=q.id) }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit">Send</button>
+            <button type="submit" style="background:#2e7d32; color:#fff; padding:.3rem .6rem; border:none; border-radius:4px; cursor:pointer;">Send</button>
           </form>
           {% else %}
-            <span class="muted" style="font-size:.85em;">Ack first</span>
+            <button disabled style="background:#ccc; color:#666; padding:.3rem .6rem; border:none; border-radius:4px; font-size:.85em;">Send</button>
           {% endif %}
         </td>
       </tr>

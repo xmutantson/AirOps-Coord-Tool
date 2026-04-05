@@ -21,7 +21,7 @@ data/
 *.sqlite*
 *.sqlite3
 *.log
-reports/
+/reports/
 
 # ---- Node/Frontend ----
 node_modules/
