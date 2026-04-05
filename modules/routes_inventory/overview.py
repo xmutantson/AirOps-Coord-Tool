@@ -403,7 +403,8 @@ def inventory_detail_table():
       SELECT e.id, c.display_name AS category,
              e.raw_name, e.sanitized_name,
              e.weight_per_unit, e.quantity,
-             e.total_weight, e.direction, e.timestamp
+             e.total_weight, e.direction, e.timestamp,
+             COALESCE(e.origin,'') AS origin
         FROM inventory_entries e
         JOIN inventory_categories c ON c.id=e.category_id
        ORDER BY e.timestamp DESC
