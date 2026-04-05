@@ -1128,41 +1128,49 @@
     lookupBtn?.addEventListener('click', maybeDetectAdvancedManifest);
 
     /* —— Chip helpers (UI): locate chip by (sanitized_name,wpu) and set qty ——— */
-    function findChipByKey(name, wpu){
+    function findChipByKey(name, wpu, origin){
       const n = String(name||'').trim().toLowerCase();
       const w = Number(wpu);
+      const o = (origin||'').toLowerCase().trim();
       return [...document.querySelectorAll('#adv-lines .adv-chip')].find(ch =>
         (ch.dataset.sanitized||'').trim().toLowerCase() === n &&
-        Math.abs(Number(ch.dataset.wpu||0) - w) < 1e-9
+        Math.abs(Number(ch.dataset.wpu||0) - w) < 1e-9 &&
+        (ch.dataset.origin||'').toLowerCase().trim() === o
       ) || null;
     }
 
-    function findBaselineChip(name, wpu){
+    function findBaselineChip(name, wpu, origin){
+      const o = (origin||'').toLowerCase().trim();
       return [...document.querySelectorAll('#adv-lines .adv-chip')].find(ch =>
         ch.dataset.delta!=='1' &&
         (ch.dataset.sanitized||'').trim().toLowerCase() === String(name||'').trim().toLowerCase() &&
-        Math.abs(Number(ch.dataset.wpu||0) - Number(wpu)) < 1e-9
+        Math.abs(Number(ch.dataset.wpu||0) - Number(wpu)) < 1e-9 &&
+        (ch.dataset.origin||'').toLowerCase().trim() === o
       ) || null;
     }
-    function findDeltaChip(name, wpu){
+    function findDeltaChip(name, wpu, origin){
+      const o = (origin||'').toLowerCase().trim();
       return [...document.querySelectorAll('#adv-lines .adv-chip')].find(ch =>
         ch.dataset.delta==='1' &&
         (ch.dataset.sanitized||'').trim().toLowerCase() === String(name||'').trim().toLowerCase() &&
-        Math.abs(Number(ch.dataset.wpu||0) - Number(wpu)) < 1e-9
+        Math.abs(Number(ch.dataset.wpu||0) - Number(wpu)) < 1e-9 &&
+        (ch.dataset.origin||'').toLowerCase().trim() === o
       ) || null;
     }
 
     /* Net qty calculator for a (name,wpu) key based on what's on screen.
        Baseline counts positive; Δ chips are signed (Δ+ positive, Δ− negative). */
-    function computeNetForKey(name, wpu){
+    function computeNetForKey(name, wpu, origin){
       const nm = String(name||'').trim().toLowerCase();
       const w  = Number(wpu);
+      const o  = (origin||'').toLowerCase().trim();
       let net = 0;
       const chips = document.querySelectorAll('#adv-lines .adv-chip');
       chips.forEach(ch => {
         const cn = (ch.dataset.sanitized || '').trim().toLowerCase();
         const cw = Number(ch.dataset.wpu || 0);
-        if (cn !== nm || Math.abs(cw - w) >= 1e-9) return;
+        const co = (ch.dataset.origin || '').toLowerCase().trim();
+        if (cn !== nm || Math.abs(cw - w) >= 1e-9 || co !== o) return;
         let q = Number(ch.dataset.effective ?? ch.dataset.qty ?? 0);
         if (ch.dataset.delta === '1') {
           const s = (ch.dataset.deltaSign === '-1') ? -1 : 1;
@@ -1174,13 +1182,15 @@
     }
 
     /* Remove all chips (baseline and any Δ) for a (name,wpu) key. */
-    function removeChipsForKey(name, wpu){
+    function removeChipsForKey(name, wpu, origin){
       const nm = String(name||'').trim().toLowerCase();
       const w  = Number(wpu);
+      const o  = (origin||'').toLowerCase().trim();
       [...document.querySelectorAll('#adv-lines .adv-chip')].forEach(ch=>{
         const cn = (ch.dataset.sanitized||'').trim().toLowerCase();
         const cw = Number(ch.dataset.wpu||0);
-        if (cn === nm && Math.abs(cw - w) < 1e-9) ch.remove();
+        const co = (ch.dataset.origin||'').toLowerCase().trim();
+        if (cn === nm && Math.abs(cw - w) < 1e-9 && co === o) ch.remove();
       });
       try { if (window.refreshFromDOM) window.refreshFromDOM(); } catch(_){}
     }
@@ -1262,7 +1272,8 @@
             if (j && (typeof j.effective_qty !== 'undefined') && (j.sanitized_name || j.name)) {
               const nm = j.sanitized_name || j.name;
               const w  = j.weight_per_unit;
-              const chip = findChipByKey(nm, w);
+              const _org = (j.origin || '').trim();
+              const chip = findChipByKey(nm, w, _org);
               // A) Baseline chip update/removal
               if (chip) {
                 if (j.removed || j.effective_qty === 0) chip.remove();
@@ -1272,27 +1283,29 @@
               if (j.spawn_delta && j.spawn_delta.qty > 0) {
                 const dn = j.spawn_delta.sanitized_name || nm;
                 const dw = Number(j.spawn_delta.weight_per_unit || w);
+                const dorg = (j.spawn_delta.origin || _org || '').trim();
                 const isNeg = (j.spawn_delta?.deltaSign === -1 || j.spawn_delta?.sign === -1);
                 /* Snapshot edit: we never show Δ−; cap at baseline (0) visually. */
                 if (window.__RB_FORCE_SNAPSHOT && isNeg) {
                   try {
-                    const d = findDeltaChip(dn, dw);
+                    const d = findDeltaChip(dn, dw, dorg);
                     if (d) d.remove();
                     // baseline chip was already updated above from effective_qty
                     console.debug('[nudge] suppressed Δ− in snapshot mode', { dn, dw });
                   } catch(_) {}
                   return res;
                 }
-                let dchip = findChipByKey(dn, dw);
+                let dchip = findChipByKey(dn, dw, dorg);
                 // If baseline chip was just removed, a subsequent find may return null; we'll (re)create
                 if (!dchip && typeof window._rbUpsertChip === 'function') {
                   window._rbUpsertChip({
                     sanitized_name: dn,
                     weight_per_unit: dw,
+                    origin: dorg,
                     qty: j.spawn_delta.qty,
                     total: Number(dw) * Number(j.spawn_delta.qty || 0)
                   });
-                  dchip = findChipByKey(dn, dw);
+                  dchip = findChipByKey(dn, dw, dorg);
                 }
                 if (!dchip) {
                   // minimal fallback chip if _rbUpsertChip is unavailable
@@ -1300,6 +1313,7 @@
                   wrap.className = 'adv-chip';
                   wrap.dataset.sanitized = dn;
                   wrap.dataset.wpu = String(dw);
+                  wrap.dataset.origin = '';
                   wrap.dataset.effective = String(j.spawn_delta.qty);
                   wrap.dataset.pending = '0';
                   wrap.dataset.delta = '1';
@@ -1317,7 +1331,7 @@
                 dchip.dataset.delta   = '1';
               }
               // C) If baseline was cleared and we still didn't find a chip to touch, force a repaint
-              if ((j.baseline_cleared || j.removed) && !findChipByKey(nm, w)) {
+              if ((j.baseline_cleared || j.removed) && !findChipByKey(nm, w, _org)) {
                 // In forced-snapshot mode, repainting from /queued_manifest will rehydrate
                 // the original baseline (e.g., ×3). Instead, just refresh the session aggregate.
                 if (window.__RB_FORCE_SNAPSHOT && typeof window._rbScanRefresh === 'function') {
@@ -1379,7 +1393,7 @@
         if (!name || !wpu || qty <= 0) continue;
         /* Record the original baseline for this session (normalized key) */
         try {
-          const k = `${normName(name)}|${Number(wpu)}`;
+          const k = `${normName(name)}|${Number(wpu)}|`;
           (window.__RB_SNAPSHOT_BASE = window.__RB_SNAPSHOT_BASE || new Map()).set(k, Number(qty));
           console.debug?.('[RB-SNAPSHOT:BASE]', { key:k, baseQty: qty });
         } catch(_) {}
@@ -1390,12 +1404,13 @@
           wrap.className = 'adv-chip';
           wrap.dataset.sanitized = name;
           wrap.dataset.wpu = String(wpu);
+          wrap.dataset.origin = '';
           wrap.dataset.effective = String(qty);
           wrap.dataset.pending = '0';
           wrap.innerHTML = `<span class="chip-label">${name} ${wpu} lb</span><span class="chip-qty">×${qty}</span>`;
           (document.getElementById('adv-lines') || document.body).appendChild(wrap);
         }
-        const chip = findChipByKey(name, wpu);
+        const chip = findChipByKey(name, wpu, '');
         if (chip) {
           chip.dataset.pending = "0";
           chip.dataset.cat = r.category_name || '';
@@ -1407,8 +1422,8 @@
             removeBtn.dataset.boundDelete = '1';
             removeBtn.onclick = async (ev) => {
               ev.preventDefault();
-              /* Aggregated view → remove the whole (name,wpu) key safely */
-              await deleteByKey(name, wpu);
+              /* Aggregated view → remove the whole (name,wpu,origin) key safely */
+              await deleteByKey(name, wpu, '');
               /* ► mark manifest dirty & enable Done */
               try {
                 chip.remove();               /* already gone visually */
@@ -2080,11 +2095,11 @@
     return null;
   }
   /* Best available category id for a (name,wpu) key. */
-  function _resolveCategoryIdForKey(name, wpu){
+  function _resolveCategoryIdForKey(name, wpu, origin){
     // 1) prefer the visible chip’s category name → id
-    const ch = (typeof findChipByKey==='function' && findChipByKey(name, wpu))
-            || (typeof findBaselineChip==='function' && findBaselineChip(name, wpu))
-            || (typeof findDeltaChip==='function' && findDeltaChip(name, wpu)) || null;
+    const ch = (typeof findChipByKey===’function’ && findChipByKey(name, wpu, origin))
+            || (typeof findBaselineChip===’function’ && findBaselineChip(name, wpu, origin))
+            || (typeof findDeltaChip===’function’ && findDeltaChip(name, wpu, origin)) || null;
     if (ch){
       const byName = _catIdByName(ch.dataset.cat||'');
       if (byName) return byName;
@@ -2098,9 +2113,9 @@
   //  • If NET>0 ⇒ mint one INBOUND compensator (qty=NET) then delete the key (no server auto-comp).
   //  • If NET<0 ⇒ mint one OUTBOUND compensator via /nudge (qty=|NET|) then delete the key (no server auto-comp).
   //  • Remove all chips, refresh totals/remarks/stock.
-  async function deleteByKey(name, wpu){
+  async function deleteByKey(name, wpu, origin){
     // Per-key reentry guard (prevents double compensation & double delete)
-    const gateKey = `${normName(name)}|${Number(wpu)}`;
+    const gateKey = `${normName(name)}|${Number(wpu)}|${(origin||'').toLowerCase().trim()}`;
     if (window.__RB_DELETING.has(gateKey)) return;
     window.__RB_DELETING.add(gateKey);
     try {
@@ -2109,18 +2124,18 @@
     // Clear any UI clamp offset applied to this key
     try {
       if (window.__RB_CLAMP_OFFSETS) {
-        window.__RB_CLAMP_OFFSETS.delete(`${normName(name)}|${Number(wpu)}`);
+        window.__RB_CLAMP_OFFSETS.delete(gateKey);
       }
     } catch(_){}
 
     // Compute NET from on-screen state
-    const net = computeNetForKey(name, wpu);
+    const net = computeNetForKey(name, wpu, origin);
 
     // ── Snapshot guard: only compensate what happened *this session*.
     // Baseline (from the queued draft) must NOT be compensated.
     const inSnapshot = !!window.__RB_FORCE_SNAPSHOT;
     const baseMap = window.__RB_SNAPSHOT_BASE || new Map();
-    const baseQty = Number(baseMap.get(`${normName(name)}|${Number(wpu)}`) || 0);
+    const baseQty = Number(baseMap.get(gateKey) || 0);
     // How much should we actually put back INBOUND?
     //  - live mode: everything (net)
     //  - snapshot mode: only the session delta above baseline
@@ -2147,7 +2162,7 @@
     // 1) Apply client-minted compensator if needed
     if (compInboundQty > 0){
       // We took `net` out → put it back INBOUND in one shot (requires category), then commit.
-      const catId = _resolveCategoryIdForKey(name, wpu);
+      const catId = _resolveCategoryIdForKey(name, wpu, origin);
       if (!(Number.isFinite(catId) && catId > 0)){
         showToast('Delete aborted — need a category for the compensator. Pick a category and retry.', 'error');
         return;
@@ -2231,7 +2246,7 @@
     } catch(_){}
 
     // 3) Remove all matching chips (baseline + any Δ) from the DOM
-    removeChipsForKey(name, wpu);
+    removeChipsForKey(name, wpu, origin);
     // Refresh chips/remarks and stock UI without calling scoped functions
     try { if (window._rbScanRefresh) await window._rbScanRefresh(); } catch(_){}
     try { await fetchInventory(); } catch(_){}
@@ -2486,9 +2501,9 @@
     btnRem && (btnRem.onclick = ()=>setMode('remove'));
 
     /* key helper for matching chips 1:1 with aggregated items (use same normalization as index) */
-    const keyOf = (name,wpu)=> `${normName(name)}|${Number(wpu)}`;
-    function findChipByKey(name, wpu){
-      const k = keyOf(name, wpu);
+    const keyOf = (name,wpu,origin)=> `${normName(name)}|${Number(wpu)}|${(origin||'').toLowerCase().trim()}`;
+    function findChipByKey(name, wpu, origin){
+      const k = keyOf(name, wpu, origin);
       return [...chipsRoot.querySelectorAll('.adv-chip')]
               .find(ch => ch.dataset.key === k) || null;
     }
@@ -2509,7 +2524,8 @@
         const qtyStr = (ch.dataset.effective ?? ch.dataset.qty ?? '');
         const qty    = Number(qtyStr);
         if (Number.isNaN(qty)) return; // treat as 0 by omission
-        const k    = keyOf(name, wpu);
+        const origin = (ch.dataset.origin || '').trim();
+        const k    = keyOf(name, wpu, origin);
         m.set(k, (m.get(k) || 0) + qty);
       });
       return m;
@@ -2532,16 +2548,18 @@
           const s = (ch.dataset.deltaSign === '-1') ? -1 : 1;
           qty = s * qty;
         }
-        const k = keyOf(name, wpu);
+        const origin = (ch.dataset.origin || '').trim();
+        const k = keyOf(name, wpu, origin);
         m.set(k, (m.get(k) || 0) + qty);
       });
       return m;
     }
 
-    /* Find “how many available” for a given key=name|wpu using the normalized index */
+    /* Find “how many available” for a given key=name|wpu|origin using the normalized index */
     function availForKey(k){
       try{
-        const [nameLower, wpuStr] = String(k).split('|');
+        const parts = String(k).split('|');
+        const [nameLower, wpuStr] = parts;
         const n = normName(nameLower);
         // prefer exact raw string first (e.g., "0.5975")
         const directExact = AVAIL_INDEX.get(`${n}|${wpuStr}`);
@@ -2588,19 +2606,31 @@
       return null;
     }
 
-    function setChipOriginByKey(keyOrName, maybeWpu, origin){
-      let key = keyOrName;
-      if (typeof maybeWpu !== 'undefined' && typeof origin !== 'undefined'){
-        key = keyOf(keyOrName, maybeWpu);
+    function setChipOriginByKey(keyOrName, maybeWpu, sourceTag){
+      let chips;
+      if (typeof maybeWpu !== 'undefined' && typeof sourceTag !== 'undefined'){
+        // Called as (name, wpu, 'manual'|'scanner') — find all chips matching name+wpu (any cargo origin)
+        const n = String(keyOrName||'').trim().toLowerCase();
+        const w = Number(maybeWpu);
+        chips = [...chipsRoot.querySelectorAll('.adv-chip')].filter(ch =>
+          (ch.dataset.sanitized||'').trim().toLowerCase() === n &&
+          Math.abs(Number(ch.dataset.wpu||0) - w) < 1e-9
+        );
       } else {
-        origin = maybeWpu;
+        sourceTag = maybeWpu;
+        // Called as (key, 'manual'|'scanner') — find chip by key
+        chips = [...chipsRoot.querySelectorAll('.adv-chip')].filter(ch => ch.dataset.key === keyOrName);
       }
-      const chip = [...chipsRoot.querySelectorAll('.adv-chip')]
-        .find(ch => ch.dataset.key === key);
-      if (!chip) return;
-      chip.dataset.lastOrigin = (origin === 'scanner') ? 'scanner' : 'manual';
-      const tag = chip.querySelector('.chip-origin');
-      if (tag) tag.textContent = (chip.dataset.lastOrigin === 'scanner') ? '(scanned)' : '';
+      for (const chip of chips) {
+        chip.dataset.lastOrigin = (sourceTag === 'scanner') ? 'scanner' : 'manual';
+        const tag = chip.querySelector('.chip-origin');
+        if (tag) {
+          const cargoOrigin = (chip.dataset.origin || '').trim();
+          const originLabel = cargoOrigin ? '('+cargoOrigin+')' : '';
+          const scannedLabel = (sourceTag === 'scanner') ? ' (scanned)' : '';
+          tag.textContent = (originLabel + scannedLabel).trim();
+        }
+      }
     }
     /* Remove N units for the same barcode to undo an overage */
     async function undoOverage(barcode, count){
@@ -2633,14 +2663,15 @@
     function upsertScanChip(item){
       const name = item.sanitized_name;
       const wpu  = Number(item.weight_per_unit);
+      const origin = (item.origin || '').trim();
       const qty  = Number(item.qty||0);
       const tot  = Math.round(wpu * qty * 100) / 100;
       // Prefer a baseline chip; if only a Δ chip exists, rehydrate it to baseline
       let chip   = (typeof window.findBaselineChip === 'function')
-                     ? window.findBaselineChip(name, wpu)
+                     ? window.findBaselineChip(name, wpu, origin)
                      : null;
       if (!chip && typeof window.findDeltaChip === 'function') {
-        const d = window.findDeltaChip(name, wpu);
+        const d = window.findDeltaChip(name, wpu, origin);
         if (d) {
           try {
             // strip delta markers so CSS no longer hides it
@@ -2652,7 +2683,7 @@
         }
       }
       // Fallback: no chip at all — create a fresh baseline chip
-      if (!chip) chip = findChipByKey(name, wpu);
+      if (!chip) chip = findChipByKey(name, wpu, origin);
       // Try to carry a category for this chip so Cargo Type can be derived later.
       // Prefer server-provided category_name, else infer from local inventory map.
       const catName = (item.category_name || item.category || _guessCatForItem(name) || '');
@@ -2662,15 +2693,16 @@
         chip.style.minWidth   = '180px';
         chipsRoot.appendChild(chip);
       }
-      chip.dataset.key       = keyOf(name, wpu);
+      chip.dataset.key       = keyOf(name, wpu, origin);
       chip.dataset.sanitized = name;
       chip.dataset.wpu       = String(wpu);
+      chip.dataset.origin    = origin || '';
       chip.dataset.cat       = catName;
       chip.dataset.qty       = String(qty);
       chip.dataset.total     = String(tot);
       chip.innerHTML = `
         <span class="chip-content">${name}</span>
-        <span class="chip-origin" style="margin-left:.35rem;font-size:.85em;opacity:.75;"></span>
+        <span class="chip-origin" style="margin-left:.35rem;font-size:.85em;opacity:.75;">${origin ? '('+origin+')' : ''}</span>
         <button class="chip-remove" title="Remove whole line">❌</button><br>
         <span class="chip-wpu">${wpu} lb</span> <span class="chip-qty">×${qty}</span><br>
         <span class="chip-total">= ${tot} lb</span>
@@ -2679,7 +2711,11 @@
       try { recalcChipTotal(chip); } catch(_){}
       // If a lastOrigin is already set on this chip, render the badge accordingly
       const tag = chip.querySelector('.chip-origin');
-      if (tag) tag.textContent = (chip.dataset.lastOrigin === 'scanner') ? '(scanned)' : '';
+      if (tag) {
+        const originLabel = origin ? '('+origin+')' : '';
+        const scannedLabel = (chip.dataset.lastOrigin === 'scanner') ? ' (scanned)' : '';
+        tag.textContent = originLabel + scannedLabel;
+      }
       // Maintain a running set of categories seen this session
       window._rbCategories = window._rbCategories || new Set();
       if (catName) window._rbCategories.add(catName);
@@ -2688,7 +2724,7 @@
         removeBtn.dataset.boundDelete = '1';
         removeBtn.onclick = async (ev) => {
           ev.preventDefault();
-          await deleteByKey(name, wpu);   // deletes the entire (name,size) line safely
+          await deleteByKey(name, wpu, origin);   // deletes the entire (name,size,origin) line safely
         };
       }
     }
@@ -2696,12 +2732,13 @@
     window._rbUpsertChip = upsertScanChip;
 
     // ─── Signed Δ chip (one per key): deltaSign = +1 (adds) or -1 (removes) ───
-    function upsertDeltaChip({ sanitized_name, weight_per_unit, qty, category_name, deltaSign }){
+    function upsertDeltaChip({ sanitized_name, weight_per_unit, qty, category_name, deltaSign, origin: itemOrigin }){
       const name = sanitized_name;
       const wpu  = Number(weight_per_unit);
+      const origin = (itemOrigin || '').trim();
       const qAbs = Math.max(0, Number(qty||0));
       if (!name || !wpu || qAbs === 0) return;
-      let chip = findDeltaChip(name, wpu);
+      let chip = findDeltaChip(name, wpu, origin);
       const sign = (deltaSign === -1 || deltaSign === '-1') ? -1 : 1;
       const tot  = Math.round(wpu * qAbs * 100) / 100;
       if (!chip){
@@ -2711,16 +2748,19 @@
         chip.dataset.delta   = '1';
         chip.dataset.sanitized = name;
         chip.dataset.wpu       = String(wpu);
+        chip.dataset.origin    = origin || '';
         document.getElementById('adv-lines').appendChild(chip);
       }
+      chip.dataset.key       = keyOf(name, wpu, origin);
       chip.dataset.deltaSign = (sign === -1 ? '-1' : '1');
       chip.dataset.cat       = category_name || chip.dataset.cat || '';
       chip.dataset.qty       = String(qAbs);
       chip.dataset.total     = String(tot);              // absolute; sum uses sign
       const badge = (sign === 1 ? 'Δ+' : 'Δ−');
+      const originLabel = origin ? ' ('+origin+')' : '';
       chip.innerHTML = `
         <span class="chip-content">${name}</span>
-        <span class="chip-origin" style="margin-left:.35rem;font-size:.85em;opacity:.9;">${badge}</span>
+        <span class="chip-origin" style="margin-left:.35rem;font-size:.85em;opacity:.9;">${badge}${originLabel}</span>
         <button class="chip-remove" title="Remove whole line">❌</button><br>
         <span class="chip-wpu">${wpu} lb</span> <span class="chip-qty">×${qAbs}</span><br>
         <span class="chip-total">= ${sign === 1 ? '' : '−'}${tot} lb</span>
@@ -2728,7 +2768,7 @@
       try { recalcChipTotal(chip); } catch(_){}
       const removeBtn = chip.querySelector('.chip-remove');
       if (removeBtn){
-        removeBtn.onclick = async (ev) => { ev.preventDefault(); await deleteByKey(name, wpu); };
+        removeBtn.onclick = async (ev) => { ev.preventDefault(); await deleteByKey(name, wpu, origin); };
       }
       return chip;
     }
@@ -2814,18 +2854,19 @@
         items.forEach(it => {
           const name = it.sanitized_name;
           const wpu  = Number(it.weight_per_unit);
-          const _k   = keyOf(name, wpu);
+          const itOrigin = (it.origin || '').trim();
+          const _k   = keyOf(name, wpu, itOrigin);
           seen.add(_k);
           const sessionQty = Number(it.qty || 0);
           // Apply any UI clamp offset so effective qty matches what we showed
           const off = (window.__RB_CLAMP_OFFSETS && window.__RB_CLAMP_OFFSETS.get(_k)) || 0;
           const visQty = Math.max(0, sessionQty - off);
-          let baseChip   = findBaselineChip(name, wpu);
+          let baseChip   = findBaselineChip(name, wpu, itOrigin);
           // If the net session qty is zero or below, remove any existing chips,
           // remember as zeroed, and skip creation.
           if (visQty <= 0) {
             if (baseChip) { try { baseChip.remove(); } catch(_) {} }
-            const d0 = findDeltaChip(name, wpu);
+            const d0 = findDeltaChip(name, wpu, itOrigin);
             if (d0)   { try { d0.remove(); } catch(_) {} }
             try { ZEROED.add(_k); } catch(_){}
             return; // ← do not re-create a chip at zero
@@ -2834,7 +2875,7 @@
             /* 1) If a hidden Δ chip exists (CSS hides [data-delta="1"]), rehydrate it to a baseline chip
                   BEFORE any ZEROED/echo guards so the user sees the chip again. */
             if (typeof window.findDeltaChip === 'function') {
-              const d = window.findDeltaChip(name, wpu);
+              const d = window.findDeltaChip(name, wpu, itOrigin);
               if (d){
                 try { d.removeAttribute('data-delta'); delete d.dataset.delta; delete d.dataset.deltaSign; } catch(_){}
                 baseChip = d;
@@ -2890,7 +2931,7 @@
             setChipEffectiveOnly(baseChip, visQty);
             baseChip.dataset.total = String(Math.round(wpu * visQty * 100) / 100);
           } catch(_) {}
-          const d = findDeltaChip(name, wpu);
+          const d = findDeltaChip(name, wpu, itOrigin);
           if (d) d.remove();
         });
         /* Do NOT prune while in snapshot mode — baseline chips must remain even
@@ -2898,7 +2939,7 @@
       } else {
         items.forEach(it => {
           upsertScanChip(it);
-          seen.add(keyOf(it.sanitized_name, it.weight_per_unit));
+          seen.add(keyOf(it.sanitized_name, it.weight_per_unit, (it.origin||'').trim()));
         });
         pruneMissingScanChips(seen);
       }
@@ -3207,25 +3248,29 @@
 
   // Canonical preview string: "Manifest: NAME SIZE lb×QTY; …;"
   function buildManifestTextFromChips(chips) {
-    // De-dupe by (sanitized, wpu) and sum net qty: baseline + signed Δ
-    const agg = new Map(); // key = name|wpu → {name,wpu,qty}
+    // De-dupe by (sanitized, wpu, origin) and sum net qty: baseline + signed Δ
+    const agg = new Map(); // key = name|wpu|origin → {name,wpu,qty,origin}
     (chips || []).forEach(c => {
-      const name = (c.dataset.sanitized || '').trim();
-      const wpu  = Number(c.dataset.wpu || 0);
-      let   qty  = Number(c.dataset.effective ?? c.dataset.qty ?? 0);
+      const name   = (c.dataset.sanitized || '').trim();
+      const wpu    = Number(c.dataset.wpu || 0);
+      const origin = (c.dataset.origin || '').trim();
+      let   qty    = Number(c.dataset.effective ?? c.dataset.qty ?? 0);
       if (c.dataset.delta === '1') {
         const sign = (c.dataset.deltaSign === '-1') ? -1 : 1;
         qty = sign * qty;
       }
-      const key  = `${name.toLowerCase()}|${wpu}`;
-      const cur  = agg.get(key) || { name, wpu, qty: 0 };
+      const key  = `${name.toLowerCase()}|${wpu}|${origin.toLowerCase()}`;
+      const cur  = agg.get(key) || { name, wpu, qty: 0, origin };
       cur.qty += qty;
       agg.set(key, cur);
     });
     // Only print positive net quantities
     const parts = [...agg.values()]
       .filter(e => e.qty > 0)
-      .map(e => `${e.name} ${e.wpu} lb×${e.qty}`);
+      .map(e => {
+        const tag = e.origin ? ` [${e.origin}]` : '';
+        return `${e.name} ${e.wpu} lb×${e.qty}${tag}`;
+      });
     return parts.length ? `Manifest: ${parts.join('; ')};` : '';
   }
 
@@ -3454,8 +3499,9 @@
     for (const chip of chips) {
       const name = chip.dataset.sanitized;
       const wpu = chip.dataset.wpu;
+      const chipOrigin = (chip.dataset.origin || '').trim();
       if (name && wpu) {
-        try { await deleteByKey(name, Number(wpu)); } catch(_) {}
+        try { await deleteByKey(name, Number(wpu), chipOrigin); } catch(_) {}
       }
     }
     advLines.innerHTML = '';
