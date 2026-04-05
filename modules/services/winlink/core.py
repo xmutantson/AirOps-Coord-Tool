@@ -1,6 +1,6 @@
 
 from markupsafe import escape
-import sqlite3, re, os, json, subprocess
+import sqlite3, re, os, json, subprocess, threading
 from datetime import datetime, timezone
 
 from typing import Tuple, Optional, List, Dict
@@ -615,26 +615,29 @@ def send_winlink_message(to_addr: str, subject: str, body: str, metadata: Option
     if not cs:
         return False
     cmd = ["pat", "compose", "--from", cs, "-s", subject, to_addr]
-    try:
-        subprocess.run(
-            cmd,
-            input=body or "",
-            text=True,
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=30,
-        )
-    except subprocess.TimeoutExpired:
-        try: app.logger.error("PAT compose timed out (30s): %s", " ".join(cmd))
-        except Exception: pass
-        return False
-    except subprocess.CalledProcessError as err:
-        try: app.logger.error("PAT send failed (AOCT reply): %s\n%s", err, err.stderr or err.stdout)
-        except Exception: pass
-        return False
 
-    # Mirror to DB on success
+    def _pat_compose_bg():
+        """Run PAT compose in background so the caller isn't blocked."""
+        try:
+            subprocess.run(
+                cmd,
+                input=body or "",
+                text=True,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            try: app.logger.error("PAT compose timed out (60s): %s", " ".join(cmd))
+            except Exception: pass
+        except subprocess.CalledProcessError as err:
+            try: app.logger.error("PAT send failed: %s\n%s", err, err.stderr or err.stdout)
+            except Exception: pass
+
+    threading.Thread(target=_pat_compose_bg, daemon=True).start()
+
+    # Record to DB immediately (message is queued, PAT delivers async)
     try:
         # Best-guess operator (local side): cookie if present, else station callsign
         operator = (
