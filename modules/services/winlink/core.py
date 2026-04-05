@@ -623,7 +623,12 @@ def send_winlink_message(to_addr: str, subject: str, body: str, metadata: Option
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            timeout=30,
         )
+    except subprocess.TimeoutExpired:
+        try: app.logger.error("PAT compose timed out (30s): %s", " ".join(cmd))
+        except Exception: pass
+        return False
     except subprocess.CalledProcessError as err:
         try: app.logger.error("PAT send failed (AOCT reply): %s\n%s", err, err.stderr or err.stdout)
         except Exception: pass
