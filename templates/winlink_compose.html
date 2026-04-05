@@ -30,9 +30,15 @@
   <form method="POST" action="{{ url_for('winlink.winlink_compose') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
-    <label for="compose-to">To (callsign or SMTP address):</label>
+    <label for="compose-to">To (comma-separated callsigns or SMTP addresses):</label>
     <input id="compose-to" type="text" name="to" required
-           placeholder="e.g. W7WEK or SMTP:user@example.com"
+           placeholder="e.g. W7WEK, SMTP:user@example.com"
+           oninput="this.value=this.value.toUpperCase()"
+           style="width:100%; padding:.6rem; font-size:1rem;">
+
+    <label for="compose-cc" style="margin-top:.75rem;">CC (optional, comma-separated):</label>
+    <input id="compose-cc" type="text" name="cc"
+           placeholder="e.g. KI7SI, SMTP:ops@example.com"
            oninput="this.value=this.value.toUpperCase()"
            style="width:100%; padding:.6rem; font-size:1rem;">
 
@@ -50,6 +56,39 @@
       <button type="submit">Send Message</button>
     </div>
   </form>
+
+  {# ── Send Log ──────────────────────────────────────── #}
+  {% if send_log %}
+  <hr style="margin:2rem 0 1rem;">
+  <h3>Recent Outbound Messages</h3>
+  <table class="full-bleed" style="font-size:.9rem;">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>To</th>
+        <th>Subject</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for msg in send_log %}
+      <tr>
+        <td style="white-space:nowrap;">{{ msg.timestamp[:19] }}</td>
+        <td>{{ msg.sender }}</td>
+        <td>{{ msg.subject }}</td>
+        <td>
+          {% if msg.sent_via_pat %}
+            <span style="color:#2e7d32;">Sent</span>
+          {% else %}
+            <span style="color:#e65100;">Queued</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
   {% endif %}
 </div>
 {% endblock %}

@@ -602,23 +602,45 @@ def winlink_compose():
 
     # Handle compose form submission
     if request.method == 'POST' and 'to' in request.form:
-        to_addr = request.form.get('to', '').strip().upper()
+        to_raw  = request.form.get('to', '').strip().upper()
+        cc_raw  = request.form.get('cc', '').strip().upper()
         subject = request.form.get('subject', '').strip()
         body    = request.form.get('body', '').strip()
-        if not to_addr or not subject:
+
+        # Split comma-separated recipients
+        to_list = [a.strip() for a in to_raw.split(',') if a.strip()]
+        cc_list = [a.strip() for a in cc_raw.split(',') if a.strip()]
+
+        if not to_list or not subject:
             flash('To and Subject are required.', 'error')
             return redirect(url_for('winlink.winlink_compose'))
-        ok = send_winlink_message(to_addr, subject, body)
-        if ok:
-            flash(f'Message queued to {to_addr} via PAT.', 'success')
+
+        ok_any = False
+        for addr in to_list:
+            ok_any = send_winlink_message(addr, subject, body) or ok_any
+        for addr in cc_list:
+            ok_any = send_winlink_message(addr, subject, body) or ok_any
+
+        all_recips = ', '.join(to_list + cc_list)
+        if ok_any:
+            flash(f'Message queued to {all_recips} via PAT.', 'success')
         else:
             flash('Failed to send message via PAT.', 'error')
         return redirect(url_for('winlink.winlink_compose'))
 
-    # GET: show compose form
+    # GET: show compose form + send log
     send_as = get_send_as_callsign()
+    send_log = dict_rows("""
+        SELECT timestamp, callsign, sender, subject,
+               CASE WHEN timestamp IS NOT NULL THEN 1 ELSE 0 END AS sent_via_pat
+          FROM winlink_messages
+         WHERE direction='out'
+         ORDER BY id DESC
+         LIMIT 20
+    """)
     return render_template('winlink_compose.html',
-                           active='radio', locked=False, send_as=send_as)
+                           active='radio', locked=False,
+                           send_as=send_as, send_log=send_log)
 
 
 @bp.post('/start', endpoint='winlink_start')
