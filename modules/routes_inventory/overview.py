@@ -65,9 +65,25 @@ def inventory_advance_data():
         HAVING qty > 0
     """)
 
+    # Get distinct origins per item+size for outbound auto-populate
+    origin_rows = dict_rows("""
+      SELECT category_id AS cid, sanitized_name, weight_per_unit,
+             COALESCE(origin,'') AS origin
+        FROM inventory_entries
+       WHERE COALESCE(origin,'') != ''
+       GROUP BY category_id, sanitized_name, weight_per_unit, origin
+    """)
+
     # Build stocked categories list (for outbound - only pick from stock)
     stocked_cat_ids = set()
-    data = {"categories":[], "stock_categories":[], "items":{}, "sizes":{}, "avail":{}}
+    data = {"categories":[], "stock_categories":[], "items":{}, "sizes":{}, "avail":{}, "origins":{}}
+
+    # Build origins lookup: cid → item → size → [origin1, origin2, ...]
+    for o in origin_rows:
+        cid = str(o['cid'])
+        data["origins"].setdefault(cid, {})\
+            .setdefault(o['sanitized_name'], {})\
+            .setdefault(str(o['weight_per_unit']), []).append(o['origin'])
 
     for r in rows:
         cid = str(r['cid'])

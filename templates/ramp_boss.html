@@ -1933,6 +1933,7 @@
   const advWeight  = document.getElementById('adv-weight');
   const advWunit   = document.getElementById('adv-wunit');
   const advQty     = document.getElementById('adv-qty');
+  const advOriginEl= document.getElementById('adv-origin');
   const advAdd     = document.getElementById('adv-add-line');
   const advLines   = document.getElementById('adv-lines');
   const advDone    = document.getElementById('adv-done');
@@ -3218,6 +3219,7 @@
       inventoryAdvancedData.items            = fresh.items;
       inventoryAdvancedData.sizes            = fresh.sizes;
       inventoryAdvancedData.avail            = fresh.avail;
+      inventoryAdvancedData.origins          = fresh.origins || {};
       rebuildAvailIndex();
       lastInventoryFetch = Date.now();
       if (
@@ -3459,6 +3461,29 @@
   advSize.addEventListener('change', () => {
     if (document.body.dataset.advDir === 'outbound') {
       advQty.disabled = false;
+      // Auto-populate origin from inventory data
+      if (advOriginEl) {
+        const origins = inventoryAdvancedData.origins?.[advCat.value]?.[advItem.value]?.[advSize.value] || [];
+        if (origins.length === 1) {
+          // Single origin — auto-fill
+          advOriginEl.value = origins[0];
+          advOriginEl.readOnly = false;
+        } else if (origins.length > 1) {
+          // Multiple origins — convert to select
+          advOriginEl.value = '';
+          advOriginEl.setAttribute('list', '');
+          // Build a temporary datalist with just these origins
+          let dl = document.getElementById('origin-item-choices');
+          if (!dl) { dl = document.createElement('datalist'); dl.id = 'origin-item-choices'; document.body.appendChild(dl); }
+          dl.innerHTML = origins.map(o => `<option value="${o}">`).join('');
+          advOriginEl.setAttribute('list', 'origin-item-choices');
+          advOriginEl.readOnly = false;
+        } else {
+          advOriginEl.value = '';
+          advOriginEl.setAttribute('list', 'origin-suggestions');
+          advOriginEl.readOnly = false;
+        }
+      }
     }
   });
 
