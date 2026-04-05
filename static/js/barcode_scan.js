@@ -122,6 +122,72 @@
     return (v === 'auto1') ? 'auto1' : 'prompt';
   }
 
+  // --- Scanner burst detection: even when a form field is focused ---------------
+  // Hand scanners type at inhuman speed (< 30ms between chars). When we detect
+  // such a burst while a form field is focused, close any open tool and redirect
+  // to the scan box so the barcode is captured correctly.
+  let _burstField = { chars: 0, lastTs: 0, field: null, buffer: '' };
+  const BURST_CHAR_GAP_MS = 40;  // max ms between chars to count as scanner
+  const BURST_MIN_CHARS   = 6;   // min chars in burst to trigger redirect
+
+  document.addEventListener('keydown', (e) => {
+    const ae = document.activeElement;
+    if (!ae || ae === kbd) return; // already in scan box — handled by existing logic
+    if (!isTypingElement(ae)) return; // not in a form field — handled by existing redirect
+
+    const key = e.key || '';
+    if (key.length !== 1 && key !== 'Enter') return; // only printable + enter
+
+    const now = performance.now();
+    const gap = now - _burstField.lastTs;
+
+    if (gap > BURST_CHAR_GAP_MS || ae !== _burstField.field) {
+      // New burst or different field — reset
+      _burstField = { chars: 1, lastTs: now, field: ae, buffer: key === 'Enter' ? '' : key };
+      return;
+    }
+
+    _burstField.chars++;
+    _burstField.lastTs = now;
+    if (key !== 'Enter') _burstField.buffer += key;
+
+    if (_burstField.chars >= BURST_MIN_CHARS) {
+      // Scanner detected! Close any open tool and redirect to scan box.
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Undo what the scanner already typed into the focused field
+      if (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA') {
+        // Strip the burst chars from the end of the field value
+        const val = ae.value || '';
+        const buf = _burstField.buffer;
+        if (val.endsWith(buf.slice(0, -1))) {
+          ae.value = val.slice(0, val.length - (buf.length - 1));
+        }
+      }
+
+      // Close open tools (unknown-item form, known-item card)
+      if (createEl) createEl.hidden = true;
+      if (resultEl) resultEl.hidden = true;
+
+      // Move the captured burst to the scan box
+      if (kbd) {
+        kbd.value = _burstField.buffer;
+        kbd.focus();
+        // Continue burst detection in the scan box from here
+        burstChars = _burstField.chars;
+        clearTimeout(burstTimer);
+        burstTimer = setTimeout(() => {
+          if (burstChars >= 5) handleCode(kbd.value);
+          burstChars = 0;
+        }, 120);
+      }
+
+      _burstField = { chars: 0, lastTs: 0, field: null, buffer: '' };
+      return;
+    }
+  }, true); // capture phase to intercept before field handlers
+
   // --- Global redirect of scanner keystrokes when nothing is focused -----------
   function isTypingElement(el){
     if (!el) return false;
