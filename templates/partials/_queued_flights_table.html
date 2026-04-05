@@ -13,6 +13,8 @@
         <th>Remarks</th>
         <th>Queued At</th>
         <th>Labels</th>
+        <th>Manifest</th>
+        <th>Ack</th>
         <th>Send</th>
       </tr>
     </thead>
@@ -48,7 +50,22 @@
              target="_blank" rel="noopener"
              class="icon-btn">📦</a>
         </td>
+        <td style="text-align:center;">
+          <a href="{{ url_for('ramp.view_manifest_pdf', queue_id=q.id) }}"
+             target="_blank" rel="noopener"
+             title="View Manifest PDF"
+             class="icon-btn">📄</a>
+        </td>
+        <td style="text-align:center;">
+          {% if q.pilot_ack_signed_at %}
+            <span title="Acked {{ q.pilot_ack_signed_at }}" style="color:#2e7d32;">&#10003;</span>
+          {% else %}
+            <a href="{{ url_for('ramp.edit_queued_flight', qid=q.id) }}"
+               title="Pilot ack needed" style="color:#e65100;">Needs Ack</a>
+          {% endif %}
+        </td>
         <td>
+          {% if q.pilot_ack_signed_at %}
           <form method="post"
                 class="q-send-form"
                 data-tt="{{ q.travel_time or '' }}"
@@ -56,6 +73,9 @@
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit">Send</button>
           </form>
+          {% else %}
+            <span class="muted" style="font-size:.85em;">Ack first</span>
+          {% endif %}
         </td>
       </tr>
       {% endfor %}

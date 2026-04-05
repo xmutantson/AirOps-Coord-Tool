@@ -946,10 +946,15 @@ def queued_flights():
         airport_idents = list(dict.fromkeys([a.strip().upper() for a in acc if a and a.strip()]))
 
     # Build query
+    try:
+        ensure_column("queued_flights", "pilot_ack_signed_at", "TEXT")
+    except Exception:
+        pass
     base_sql = """
       SELECT id, direction, tail_number, pilot_name,
              airfield_takeoff, airfield_landing,
-             travel_time, cargo_type, remarks, created_at
+             travel_time, cargo_type, remarks, created_at,
+             COALESCE(pilot_ack_signed_at,'') AS pilot_ack_signed_at
         FROM queued_flights
        WHERE 1=1
     """
@@ -1004,10 +1009,15 @@ def queued_flights_table_partial():
                 acc.append(code)
         airport_idents = list(dict.fromkeys([a.strip().upper() for a in acc if a and a.strip()]))
 
+    try:
+        ensure_column("queued_flights", "pilot_ack_signed_at", "TEXT")
+    except Exception:
+        pass
     base_sql = """
       SELECT id, direction, tail_number, pilot_name,
              airfield_takeoff, airfield_landing,
-             travel_time, cargo_type, remarks, created_at
+             travel_time, cargo_type, remarks, created_at,
+             COALESCE(pilot_ack_signed_at,'') AS pilot_ack_signed_at
         FROM queued_flights
        WHERE 1=1
     """
@@ -1056,12 +1066,12 @@ def send_queued_flight(qid):
         has_ack = False
     if not has_ack:
         msg = "Pilot acknowledgment required before sending this flight."
-        logger.warning("send_queued_flight(%s): ack gate tripped — pilot_ack_signed_at=%r",
+        logger.warning("send_queued_flight(%s): ack gate tripped -- pilot_ack_signed_at=%r",
                        qid, ack[0].get('pilot_ack_signed_at') if ack else 'NO ROW')
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
             return jsonify({'error': 'pilot_ack_required', 'message': msg}), 400
         flash(msg, 'error')
-        return redirect(url_for('ramp.queued_flights'))
+        return redirect(request.referrer or url_for('ramp.queued_flights'))
 
     # ── take-off & ETA come **from the browser** when available ─────────────
     cli_dep = request.form.get("takeoff_time","").strip()
