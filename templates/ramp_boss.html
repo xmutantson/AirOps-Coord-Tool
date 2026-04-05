@@ -2668,12 +2668,16 @@
       const origin = (item.origin || '').trim();
       const qty  = Number(item.qty||0);
       const tot  = Math.round(wpu * qty * 100) / 100;
-      // Prefer a baseline chip; if only a Δ chip exists, rehydrate it to baseline
+      const _dbgKey = `${name}|${wpu}|${origin}`;
+      console.debug('[upsertScanChip]', _dbgKey, 'qty='+qty);
+      // Prefer a baseline chip; if only a delta chip exists, rehydrate it to baseline
       let chip   = (typeof window.findBaselineChip === 'function')
                      ? window.findBaselineChip(name, wpu, origin)
                      : null;
+      console.debug('  findBaselineChip:', chip ? 'FOUND' : 'null');
       if (!chip && typeof window.findDeltaChip === 'function') {
         const d = window.findDeltaChip(name, wpu, origin);
+        console.debug('  findDeltaChip:', d ? 'FOUND' : 'null');
         if (d) {
           try {
             // strip delta markers so CSS no longer hides it
@@ -2686,6 +2690,7 @@
       }
       // Fallback: no chip at all — create a fresh baseline chip
       if (!chip) chip = findChipByKey(name, wpu, origin);
+      console.debug('  findChipByKey:', chip ? ('FOUND key='+chip.dataset.key) : 'null -> CREATING');
       // Try to carry a category for this chip so Cargo Type can be derived later.
       // Prefer server-provided category_name, else infer from local inventory map.
       const catName = (item.category_name || item.category || _guessCatForItem(name) || '');
