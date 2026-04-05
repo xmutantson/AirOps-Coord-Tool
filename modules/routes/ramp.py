@@ -375,7 +375,7 @@ def ramp_boss():
                         COALESCE(MAX(origin),'') AS origin
                         FROM inventory_entries
                        WHERE session_id=? AND pending IN (0,1)
-                       GROUP BY category_id, sanitized_name, weight_per_unit
+                       GROUP BY category_id, sanitized_name, weight_per_unit, origin
                        HAVING net_qty > 0
                     """, (mid,)).fetchall()
                     for r in rows:
@@ -471,7 +471,7 @@ def ramp_boss():
                             COALESCE(MAX(origin),'') AS origin
                           FROM inventory_entries
                          WHERE session_id=? AND pending IN (0,1)
-                         GROUP BY category_id, sanitized_name, weight_per_unit
+                         GROUP BY category_id, sanitized_name, weight_per_unit, origin
                          HAVING net_qty > 0
                         """, ('in', mid)).fetchall()
                         for r in rows:
@@ -525,7 +525,7 @@ def ramp_boss():
                             COALESCE(MAX(origin),'') AS origin
                           FROM inventory_entries
                          WHERE session_id=? AND pending IN (0,1)
-                         GROUP BY category_id, sanitized_name, weight_per_unit
+                         GROUP BY category_id, sanitized_name, weight_per_unit, origin
                          HAVING net_qty > 0
                         """, ('in', mid)).fetchall()
                         for r in rows:
@@ -789,7 +789,7 @@ def queue_flight():
           FROM inventory_entries
           WHERE session_id = ?
             AND pending     IN (0,1)
-          GROUP BY category_id, sanitized_name, weight_per_unit
+          GROUP BY category_id, sanitized_name, weight_per_unit, origin
           HAVING SUM(CASE direction WHEN ? THEN quantity ELSE -quantity END) > 0
        """, (qid,
              ('in' if direction=='inbound' else 'out'),
@@ -1157,7 +1157,7 @@ def send_queued_flight(qid):
                  WHERE session_id = ? AND pending IN (0,1)
                    AND ( ? IS NULL OR timestamp > ? )
               )
-              GROUP BY category_id, sanitized_name, weight_per_unit
+              GROUP BY category_id, sanitized_name, weight_per_unit, origin
               HAVING net_qty > 0
             """, (row_dir, row_dir, qid, mid, snap_latest, snap_latest)).fetchall()
 
@@ -1354,7 +1354,7 @@ def delete_queued_flight(qid):
                          SUM(CASE direction WHEN 'out' THEN quantity ELSE -quantity END) AS net_qty
                     FROM inventory_entries
                    WHERE session_id IN ({ph}) AND pending=0
-                   GROUP BY session_id, category_id, LOWER(sanitized_name), CAST(weight_per_unit AS REAL)
+                   GROUP BY session_id, category_id, LOWER(sanitized_name), CAST(weight_per_unit AS REAL), COALESCE(origin,'')
                 """, tuple(sess_ids)).fetchall()
                 for r in rows:
                     k  = (int(r['cat']), (r['key_name'] or '').strip(), float(r['wpu']))
@@ -1468,7 +1468,7 @@ def api_queued_manifest(qid):
                WHERE session_id = ? AND pending = 1
             ) x
             JOIN inventory_categories ic ON ic.id = x.category_id
-            GROUP BY x.category_id, x.sanitized_name, x.weight_per_unit
+            GROUP BY x.category_id, x.sanitized_name, x.weight_per_unit, COALESCE(x.origin,'')
           )
           SELECT NULL AS entry_id, category_name, sanitized,
                  net_total  AS total, wpu, net_qty AS qty, 0 AS delta
@@ -1605,7 +1605,7 @@ def edit_queued_flight(qid):
                        AND pending = 0
                        AND ( ? IS NULL OR timestamp > ? )   -- ► only deltas since snapshot/draft cut line
                   )
-                  GROUP BY category_id, sanitized_name, weight_per_unit
+                  GROUP BY category_id, sanitized_name, weight_per_unit, origin
                   HAVING net_qty > 0
                 """, (row_dir, row_dir, qid, mid, cutline, cutline)).fetchall()
 
