@@ -369,7 +369,8 @@ def ramp_boss():
                       SELECT
                         category_id, sanitized_name, weight_per_unit,
                         SUM(CASE direction WHEN 'out' THEN quantity ELSE -quantity END) AS net_qty,
-                        MAX(timestamp) AS latest_ts
+                        MAX(timestamp) AS latest_ts,
+                        COALESCE(MAX(origin),'') AS origin
                         FROM inventory_entries
                        WHERE session_id=? AND pending IN (0,1)
                        GROUP BY category_id, sanitized_name, weight_per_unit
@@ -381,10 +382,10 @@ def ramp_boss():
                         c.execute("""
                           INSERT INTO flight_cargo(
                             flight_id, session_id, category_id, sanitized_name,
-                            weight_per_unit, quantity, total_weight, direction, timestamp
-                          ) VALUES (?,?,?,?,?,?,?,'out',?)
+                            weight_per_unit, quantity, total_weight, direction, timestamp, origin
+                          ) VALUES (?,?,?,?,?,?,?,'out',?,?)
                         """, (fid, mid, int(r['category_id']), r['sanitized_name'],
-                              wpu, qty, wpu*qty, r['latest_ts']))
+                              wpu, qty, wpu*qty, r['latest_ts'], r['origin']))
                     c.execute("UPDATE inventory_entries SET pending=0 WHERE session_id=? AND pending=1", (mid,))
 
                 # mark this as a NEW insert
@@ -464,7 +465,8 @@ def ramp_boss():
                           SELECT
                             category_id, sanitized_name, weight_per_unit,
                             SUM(CASE direction WHEN ? THEN quantity ELSE -quantity END) AS net_qty,
-                            MAX(timestamp) AS latest_ts
+                            MAX(timestamp) AS latest_ts,
+                            COALESCE(MAX(origin),'') AS origin
                           FROM inventory_entries
                          WHERE session_id=? AND pending IN (0,1)
                          GROUP BY category_id, sanitized_name, weight_per_unit
@@ -476,10 +478,10 @@ def ramp_boss():
                               INSERT INTO flight_cargo(
                                 flight_id, session_id, category_id, sanitized_name,
                                 weight_per_unit, quantity, total_weight,
-                                direction, timestamp
-                              ) VALUES (?,?,?,?,?,?,?, ?,?)
+                                direction, timestamp, origin
+                              ) VALUES (?,?,?,?,?,?,?, ?,?,?)
                             """, (fid, mid, int(r['category_id']), r['sanitized_name'],
-                                  wpu, qty, wpu*qty, 'in', r['latest_ts']))
+                                  wpu, qty, wpu*qty, 'in', r['latest_ts'], r['origin']))
                         c.execute("UPDATE inventory_entries SET pending=0 WHERE session_id=? AND pending=1", (mid,))
 
                 else:
@@ -517,7 +519,8 @@ def ramp_boss():
                           SELECT
                             category_id, sanitized_name, weight_per_unit,
                             SUM(CASE direction WHEN ? THEN quantity ELSE -quantity END) AS net_qty,
-                            MAX(timestamp) AS latest_ts
+                            MAX(timestamp) AS latest_ts,
+                            COALESCE(MAX(origin),'') AS origin
                           FROM inventory_entries
                          WHERE session_id=? AND pending IN (0,1)
                          GROUP BY category_id, sanitized_name, weight_per_unit
@@ -529,10 +532,10 @@ def ramp_boss():
                               INSERT INTO flight_cargo(
                                 flight_id, session_id, category_id, sanitized_name,
                                 weight_per_unit, quantity, total_weight,
-                                direction, timestamp
-                              ) VALUES (?,?,?,?,?,?,?, ?,?)
+                                direction, timestamp, origin
+                              ) VALUES (?,?,?,?,?,?,?, ?,?,?)
                             """, (fid, mid, int(r['category_id']), r['sanitized_name'],
-                                  wpu, qty, wpu*qty, 'in', r['latest_ts']))
+                                  wpu, qty, wpu*qty, 'in', r['latest_ts'], r['origin']))
                         c.execute("UPDATE inventory_entries SET pending=0 WHERE session_id=? AND pending=1", (mid,))
 
             # Route to Radio outbox only if we actually created/updated something
@@ -768,7 +771,7 @@ def queue_flight():
           INSERT INTO flight_cargo(
             queued_id, session_id, category_id, sanitized_name,
             weight_per_unit, quantity, total_weight,
-            direction, timestamp
+            direction, timestamp, origin
           )
           SELECT
             ?,                -- queued_id
@@ -779,7 +782,8 @@ def queue_flight():
             SUM(CASE direction WHEN ? THEN quantity ELSE -quantity END)                                   AS net_qty,
             weight_per_unit * SUM(CASE direction WHEN ? THEN quantity ELSE -quantity END)                 AS net_total,
             ?                       AS direction,
-            MAX(timestamp)        AS latest_ts
+            MAX(timestamp)        AS latest_ts,
+            COALESCE(MAX(origin),'') AS origin
           FROM inventory_entries
           WHERE session_id = ?
             AND pending     IN (0,1)
@@ -835,7 +839,8 @@ def queue_flight():
           SELECT ic.display_name AS cat,
                  fc.sanitized_name AS name,
                  fc.weight_per_unit AS wpu,
-                 fc.quantity AS qty
+                 fc.quantity AS qty,
+                 COALESCE(fc.origin,'') AS origin
             FROM flight_cargo fc
             JOIN inventory_categories ic ON ic.id = fc.category_id
            WHERE fc.queued_id = ?
@@ -850,6 +855,9 @@ def queue_flight():
             remarks_txt = ("Manifest: " + "; ".join(
                 f"{r['name']} {_fmt_wpu(r['wpu'])} lbx{r['qty']}" for r in rows
             ) + ";") if rows else ""
+            origins = {r['origin'] for r in rows if r.get('origin')}
+            if origins:
+                remarks_txt += " Source: " + ", ".join(sorted(origins)) + ";"
             cats = {r['cat'] for r in rows}
             new_type = (cats.pop() if len(cats) == 1 else 'Mixed') if rows else ''
             # Only overwrite if the operator didn't supply a value
@@ -1132,15 +1140,18 @@ def send_queued_flight(qid):
                 weight_per_unit,
                 SUM(CASE direction WHEN ? THEN quantity ELSE -quantity END)        AS net_qty,
                 SUM(CASE direction WHEN ? THEN total_weight ELSE -total_weight END) AS net_total,
-                MAX(timestamp) AS latest_ts
+                MAX(timestamp) AS latest_ts,
+                COALESCE(MAX(origin),'') AS origin
               FROM (
                 SELECT category_id, sanitized_name, weight_per_unit,
-                       quantity, total_weight, direction, timestamp
+                       quantity, total_weight, direction, timestamp,
+                       COALESCE(origin,'') AS origin
                   FROM flight_cargo
                  WHERE queued_id = ?
                 UNION ALL
                 SELECT category_id, sanitized_name, weight_per_unit,
-                       quantity, total_weight, direction, timestamp
+                       quantity, total_weight, direction, timestamp,
+                       COALESCE(origin,'') AS origin
                   FROM inventory_entries
                  WHERE session_id = ? AND pending IN (0,1)
                    AND ( ? IS NULL OR timestamp > ? )
@@ -1153,18 +1164,18 @@ def send_queued_flight(qid):
             c.execute("DELETE FROM flight_cargo WHERE queued_id = ?", (qid,))
 
             # 3️⃣ re-insert exactly what we just fetched
-            for cat, name, wpu, qty, tot, ts in rows:
+            for cat, name, wpu, qty, tot, ts, orig in rows:
                 c.execute("""
                   INSERT INTO flight_cargo(
                     queued_id, session_id, category_id, sanitized_name,
                     weight_per_unit, quantity, total_weight,
-                    direction, timestamp
-                  ) VALUES (?,?,?,?,?,?,?,?,?)
+                    direction, timestamp, origin
+                  ) VALUES (?,?,?,?,?,?,?,?,?,?)
                 """, (
                   qid, mid,
                   cat, name, wpu,
                   qty, tot,
-                  row_dir, ts
+                  row_dir, ts, orig
                 ))
 
         # now move all associated cargo rows onto this flight
@@ -1572,11 +1583,13 @@ def edit_queued_flight(qid):
                     weight_per_unit,
                     SUM(CASE direction WHEN ? THEN quantity ELSE -quantity END)        AS net_qty,
                     SUM(CASE direction WHEN ? THEN total_weight ELSE -total_weight END) AS net_total,
-                    MAX(timestamp)                  AS latest_ts
+                    MAX(timestamp)                  AS latest_ts,
+                    COALESCE(MAX(origin),'') AS origin
                   FROM (
                     /* previous snapshot rows */
                     SELECT category_id, sanitized_name, weight_per_unit,
-                           quantity, total_weight, direction, timestamp
+                           quantity, total_weight, direction, timestamp,
+                           COALESCE(origin,'') AS origin
                       FROM flight_cargo
                      WHERE queued_id = ?
 
@@ -1584,7 +1597,8 @@ def edit_queued_flight(qid):
 
                     /* newly-committed edits this session */
                     SELECT category_id, sanitized_name, weight_per_unit,
-                           quantity, total_weight, direction, timestamp
+                           quantity, total_weight, direction, timestamp,
+                           COALESCE(origin,'') AS origin
                       FROM inventory_entries
                      WHERE session_id = ?
                        AND pending = 0
@@ -1597,18 +1611,18 @@ def edit_queued_flight(qid):
             # 2️⃣ Replace snapshot only if a *new* commit happened now
             if mid and committed_now:
                 c.execute("DELETE FROM flight_cargo WHERE queued_id=?", (qid,))
-                for cat_id, name, wpu, qty, tot, ts in rows:
+                for cat_id, name, wpu, qty, tot, ts, orig in rows:
                     c.execute("""
                       INSERT INTO flight_cargo(
                         queued_id, session_id, category_id, sanitized_name,
                         weight_per_unit, quantity, total_weight,
-                        direction, timestamp
-                      ) VALUES (?,?,?,?,?,?,?,?,?)
+                        direction, timestamp, origin
+                      ) VALUES (?,?,?,?,?,?,?,?,?,?)
                     """, (
                       qid, mid,
                       cat_id, name, wpu,
                       qty,  tot,
-                      row_dir, ts
+                      row_dir, ts, orig
                     ))
             # ──────────────────────────────────────────────────────────
             #  Re-compute the new total weight for this draft and store

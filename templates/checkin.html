@@ -247,7 +247,13 @@
           const nm  = data.name || nameVal;
 
           setTimeout(() => {
-            openWaiverChoice(sid, nm);
+            if (aff === 'pilot') {
+              window.location.href = `/docs/waiver/pilot?staff_id=${encodeURIComponent(sid)}&return=/`;
+            } else if (aff === 'volunteer') {
+              window.location.href = `/docs/waiver/volunteer?staff_id=${encodeURIComponent(sid)}&return=/`;
+            } else {
+              openWaiverChoice(sid, nm);
+            }
           }, 3000);
           return;
         }

@@ -177,6 +177,13 @@
       <input id="qty" name="qty" type="number" step="1" min="0" required
              value="{{ request.form.get('qty','') }}">
 
+      <!-- Origin (optional) -->
+      <label for="origin" style="margin-top:.75rem;">Origin (optional)</label>
+      <input id="origin" name="origin" list="origin-suggestions"
+             placeholder="e.g. Hospital A, Warehouse B"
+             style="width:100%; padding:.6rem;">
+      <datalist id="origin-suggestions"></datalist>
+
       <button type="submit" style="grid-column: span 2; margin-top: 1rem;">
         Save Entry
       </button>
@@ -574,6 +581,14 @@
 })();
 </script>
 
+
+  <!-- Populate origin suggestions -->
+  <script>
+  fetch('/inventory/api/origins').then(r=>r.json()).then(list=>{
+    const dl = document.getElementById('origin-suggestions');
+    if(dl) list.forEach(v=>{ const o=document.createElement('option'); o.value=v; dl.appendChild(o); });
+  }).catch(()=>{});
+  </script>
 
   <!-- CSRF for JSON + shared scanner JS -->
   <meta name="csrf-token" content="{{ csrf_token() }}">

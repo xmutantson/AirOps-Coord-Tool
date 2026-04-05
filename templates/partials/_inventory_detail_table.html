@@ -9,6 +9,7 @@
       <th>Qty</th>
       <th>Total Wt ({{ mass_pref }})</th>
       <th>In / Out</th>
+      <th>Origin</th>
       <th>When</th>
     </tr>
   </thead>
@@ -43,11 +44,12 @@
         <td>{{ e.quantity }}</td>
         <td>{{ e.total_weight }} {{ mass_pref }}</td>
         <td>{{ 'In' if e.direction=='in' else 'Out' }}</td>
+        <td>{{ e.origin or '' }}</td>
         <td>{{ e.timestamp }}</td>
       </tr>
     {% else %}
       <tr>
-        <td colspan="9" class="muted">No entries yet.</td>
+        <td colspan="10" class="muted">No entries yet.</td>
       </tr>
     {% endfor %}
   </tbody>

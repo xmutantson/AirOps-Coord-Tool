@@ -432,13 +432,14 @@ def api_scan_barcode():
         if qty > avail:
             return jsonify({"status": "error", "message": f"Only {int(avail)} available"}), 400
 
+    origin = (data.get('origin') or '').strip()
     with sqlite3.connect(DB_FILE) as c:
         cur = c.execute("""
           INSERT INTO inventory_entries(
             category_id, raw_name, sanitized_name,
             weight_per_unit, quantity, total_weight,
-            direction, timestamp, pending, pending_ts, session_id, source
-          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            direction, timestamp, pending, pending_ts, session_id, source, origin
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
           cat_id, raw, name,
           wpu, qty, total,
@@ -446,7 +447,7 @@ def api_scan_barcode():
           (0 if commit else 1),
           (None if commit else ts),
           mid,
-          "barcode-scan"
+          "barcode-scan", origin
         ))
         eid = cur.lastrowid
 

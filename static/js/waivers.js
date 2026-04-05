@@ -450,14 +450,8 @@
       let nextUrl = '/';
       let nextLabel = 'Complete — Return to Dashboard';
 
-      // If a ?return=/path is present, prefer it
-      const ret = (q.get('return') || '').trim();
-      if (ret && ret.startsWith('/')) {
-        nextUrl = ret;
-      }
-
-      // For pilots, offer aircraft info form
-      if (isPilot && !ret) {
+      // For pilots, always go to aircraft info (skip return param)
+      if (isPilot) {
         nextUrl   = staffId ? (`/aircraft/new?staff_id=${encodeURIComponent(staffId)}`) : '/aircraft';
         nextLabel = 'Continue to Pilot & Aircraft Information';
 
@@ -467,6 +461,12 @@
         dashBtn.textContent = 'Return to Dashboard';
         dashBtn.onclick = () => { window.location.href = '/'; };
         btn.parentElement.appendChild(dashBtn);
+      } else {
+        // If a ?return=/path is present, prefer it for non-pilots
+        const ret = (q.get('return') || '').trim();
+        if (ret && ret.startsWith('/')) {
+          nextUrl = ret;
+        }
       }
 
       btn.textContent = nextLabel;

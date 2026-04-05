@@ -1121,6 +1121,8 @@ def run_migrations():
     ensure_column("inventory_entries", "pending_ts", "TEXT")
     ensure_column("inventory_entries", "session_id", "TEXT")
     ensure_column("inventory_entries", "source",     "TEXT DEFAULT 'inventory'")
+    ensure_column("inventory_entries", "origin",     "TEXT DEFAULT ''")
+    ensure_column("flight_cargo",     "origin",     "TEXT DEFAULT ''")
 
     # wargame_metrics.key for linking metrics to entities (e.g., flight:<id>)
     ensure_column("wargame_metrics", "key", "TEXT")

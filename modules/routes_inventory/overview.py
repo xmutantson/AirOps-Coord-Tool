@@ -153,18 +153,19 @@ def inventory_advance_line():
 
         # decide source: ramp-panel vs. inventory-detail
         src = 'ramp'
+        origin = (request.form.get('origin') or '').strip()
         with sqlite3.connect(DB_FILE) as c:
             cur = c.execute("""
               INSERT INTO inventory_entries(
                 category_id, raw_name, sanitized_name,
                 weight_per_unit, quantity, total_weight,
-                direction, timestamp, pending, pending_ts, session_id, source
-              ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                direction, timestamp, pending, pending_ts, session_id, source, origin
+              ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
               cat_id, raw, sanitized,
               wpu, qty, total,
               ('in' if direction.startswith('in') else 'out'),
-              ts, 1, ts, mid, src
+              ts, 1, ts, mid, src, origin
             ))
             eid = cur.lastrowid
             # current running total for this manifest/session (pending only)
@@ -346,6 +347,13 @@ def inventory_overview():
         'inventory_overview.html',
         active='inventory'
     )
+
+@bp.route('/api/origins')
+def api_origins():
+    """Return distinct non-empty origin values for datalist auto-suggest."""
+    rows = dict_rows("SELECT DISTINCT origin FROM inventory_entries WHERE COALESCE(origin,'') != '' ORDER BY origin")
+    return jsonify([r['origin'] for r in rows])
+
 
 @bp.route('/_overview_table')
 def inventory_overview_table():

@@ -536,8 +536,19 @@
                disabled
                placeholder="Qty"
                style="min-width:10ch;">
+        <input id="adv-origin"
+               list="origin-suggestions"
+               placeholder="Origin (optional)"
+               style="min-width:10ch; padding:.4rem;">
         <button type="button" id="adv-add-line">Add</button>
       </div>
+      <datalist id="origin-suggestions"></datalist>
+      <script>
+      fetch('/inventory/api/origins').then(r=>r.json()).then(list=>{
+        const dl = document.getElementById('origin-suggestions');
+        if(dl) list.forEach(v=>{ const o=document.createElement('option'); o.value=v; dl.appendChild(o); });
+      }).catch(()=>{});
+      </script>
 
       <div id="adv-lines" style="margin-top:1rem; display:flex; flex-wrap:wrap; gap:0.5rem;">
         <!-- chips appear here -->
@@ -3464,6 +3475,7 @@
       if (!advName.value.trim()) return showError('Please enter an item name');
       if (!advWeight.value) return showError('Please enter a weight');
     }
+    const advOriginEl = document.getElementById('adv-origin');
     const params = new URLSearchParams({
       csrf_token:  csrfToken,
       action:      'add',
@@ -3475,7 +3487,8 @@
       name:        dirNow === 'inbound'  ? advName.value   : '',
       weight:      dirNow === 'inbound'  ? advWeight.value : '',
       wunit:       dirNow === 'inbound'  ? advWunit.value  : '',
-      qty:         advQty.value
+      qty:         advQty.value,
+      origin:      advOriginEl ? advOriginEl.value : ''
     });
 
     let resp;

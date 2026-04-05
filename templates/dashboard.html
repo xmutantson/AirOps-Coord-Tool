@@ -249,8 +249,13 @@
               window.showToast?.('Profile saved and clocked in. Thanks!', 'success');
               const sid = data.staff_id;
               const nm  = data.name || (fd.get('name') || '');
-              if (aff === 'pilot' || aff === 'volunteer') {
-                openWaiverChoice(sid, nm, null);
+              if (aff === 'pilot') {
+                // Go straight to pilot waiver — no need to ask again
+                window.location.href = `/docs/waiver/pilot?staff_id=${encodeURIComponent(sid)}&return=/`;
+                return;
+              } else if (aff === 'volunteer') {
+                window.location.href = `/docs/waiver/volunteer?staff_id=${encodeURIComponent(sid)}&return=/`;
+                return;
               } else {
                 const choose = data.waiver_choose_url || (`/staff/waiver/choose?staff_id=${encodeURIComponent(sid)}`);
                 openWaiverChoice(sid, nm, choose);

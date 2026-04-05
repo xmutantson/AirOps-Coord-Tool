@@ -67,11 +67,24 @@
         </option>
       </select>
 
+      <label for="origin" style="margin-top:.75rem;">Origin (optional)</label>
+      <input id="origin" name="origin" list="origin-suggestions"
+             value="{{ entry.origin or '' }}"
+             placeholder="e.g. Hospital A, Warehouse B"
+             style="width:100%; padding:.6rem;">
+      <datalist id="origin-suggestions"></datalist>
+
       <button type="submit" style="grid-column:span 2; margin-top:1rem;">
         Save Changes
       </button>
     </form>
   </div>
+<script>
+fetch('/inventory/api/origins').then(r=>r.json()).then(list=>{
+  const dl = document.getElementById('origin-suggestions');
+  if(dl) list.forEach(v=>{ const o=document.createElement('option'); o.value=v; dl.appendChild(o); });
+}).catch(()=>{});
+</script>
 <script defer src="{{ url_for('static', filename='js/propagate.js') }}"></script>
 <script>
 (function(){

@@ -131,16 +131,17 @@ def inventory_detail():
                 )
 
         # ---- Insert entry ----
+        origin = (request.form.get('origin') or '').strip()
         with sqlite3.connect(DB_FILE) as c:
             cur = c.execute(
                 """
                 INSERT INTO inventory_entries(
                     category_id, raw_name, sanitized_name,
                     weight_per_unit, quantity, total_weight,
-                    direction, timestamp
-                ) VALUES (?,?,?,?,?,?,?,?)
+                    direction, timestamp, origin
+                ) VALUES (?,?,?,?,?,?,?,?,?)
                 """,
-                (cat_id, raw, noun, wpu_lbs, qty, total, dirn, ts),
+                (cat_id, raw, noun, wpu_lbs, qty, total, dirn, ts, origin),
             )
             eid = cur.lastrowid
 
@@ -221,7 +222,8 @@ def inventory_detail():
                c.display_name AS category,
                e.raw_name, e.sanitized_name,
                e.weight_per_unit, e.quantity,
-               e.total_weight, e.direction, e.timestamp
+               e.total_weight, e.direction, e.timestamp,
+               COALESCE(e.origin,'') AS origin
           FROM inventory_entries e
           JOIN inventory_categories c ON c.id = e.category_id
          ORDER BY e.timestamp DESC
@@ -278,20 +280,22 @@ def inventory_edit(entry_id: int):
         total       = wpu * qty
         dirn        = request.form["direction"]
 
+        origin = (request.form.get('origin') or '').strip()
         with sqlite3.connect(DB_FILE) as c:
             c.execute(
                 """
                 UPDATE inventory_entries
                    SET category_id=?,
                        raw_name=?, sanitized_name=?,
-                       weight_per_unit=?, quantity=?, total_weight=?, direction=?
+                       weight_per_unit=?, quantity=?, total_weight=?, direction=?,
+                       origin=?
                  WHERE id=?
                 """,
                 (
                     int(request.form["category"]),
                     raw, noun,
                     wpu, qty, total, dirn,
-                    entry_id,
+                    origin, entry_id,
                 ),
             )
         return redirect(url_for("inventory.inventory_detail"))
