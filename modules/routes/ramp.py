@@ -2290,6 +2290,15 @@ def api_manifest_adopt_snapshot(manifest_id: str):
 @bp.post('/api/manifest/<manifest_id>/delete_key')
 def api_manifest_delete_key(manifest_id: str):
     try:
+        return _api_manifest_delete_key_impl(manifest_id)
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        logger.exception("delete_key crashed for manifest=%s body=%s", manifest_id, request.get_data(as_text=True)[:500])
+        return jsonify(ok=False, error='server error'), 500
+
+def _api_manifest_delete_key_impl(manifest_id: str):
+    try:
         data = request.get_json(silent=True) or {}
         name = (data.get('sanitized_name') or '').strip()
         wpu  = float(data.get('weight_per_unit'))
