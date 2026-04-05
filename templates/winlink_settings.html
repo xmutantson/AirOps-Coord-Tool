@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}WinLink Settings – Aircraft Ops{% endblock %}
+
+{% block content %}
+<div class="container preferences">
+  <p><a href="{{ url_for('radio.radio') }}">&larr; Back to Radio</a></p>
+  <h2>WinLink Settings</h2>
+
+  <form id="mappings-form" method="POST" action="{{ url_for('radio.winlink_settings') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <h3>Airport &rarr; WinLink Callsign Mappings</h3>
+    <div id="airport-mappings">
+      {% for code, cs in airport_mappings %}
+      <div class="mapping-row">
+        <input name="airport_codes[]" class="map-airport"
+               value="{{ code }}" placeholder="Airport ICAO or FAA"
+               oninput="this.value=this.value.toUpperCase()">
+        <input name="winlink_callsigns[]" class="map-callsign"
+               value="{{ cs }}" placeholder="WinLink Callsign"
+               oninput="this.value=this.value.toUpperCase()">
+        <button type="button" class="remove-mapping" title="Remove row">&minus;</button>
+      </div>
+      {% endfor %}
+      {% if not airport_mappings %}
+      <div class="mapping-row">
+        <input name="airport_codes[]" class="map-airport"
+               placeholder="Airport ICAO or FAA"
+               oninput="this.value=this.value.toUpperCase()">
+        <input name="winlink_callsigns[]" class="map-callsign"
+               placeholder="WinLink Callsign"
+               oninput="this.value=this.value.toUpperCase()">
+        <button type="button" class="remove-mapping" title="Remove row">&minus;</button>
+      </div>
+      {% endif %}
+    </div>
+    <button type="button" id="add-mapping" class="block-btn">+ Add mapping</button>
+
+    <h3 style="margin-top:2em;">WinLink CC Addresses</h3>
+    <div class="cc-row">
+      {% for idx in [1,2,3] %}
+        <input name="winlink_cc_{{ idx }}" class="map-cc"
+               value="{{ (winlink_cc_1,winlink_cc_2,winlink_cc_3)[idx-1] }}"
+               placeholder="CC Address #{{ idx }}"
+               oninput="this.value=this.value.toUpperCase()">
+      {% endfor %}
+    </div>
+    <div class="cc-row" style="margin-top:.5rem;">
+      <strong>Include CCs on AOCT messages:</strong>
+    </div>
+    <div class="cc-row" style="display:grid;grid-template-columns: minmax(150px,240px) minmax(70px,120px);gap:.5rem;align-items:center;">
+      <label for="aoct_cc_query">&bull; Cargo <em>Query</em> sends:</label>
+      <select id="aoct_cc_query" name="aoct_cc_query">
+        <option value="no"  {% if aoct_cc_query!='yes' %}selected{% endif %}>No</option>
+        <option value="yes" {% if aoct_cc_query=='yes' %}selected{% endif %}>Yes</option>
+      </select>
+      <label for="aoct_cc_reply">&bull; Cargo <em>Reply</em> sends:</label>
+      <select id="aoct_cc_reply" name="aoct_cc_reply">
+        <option value="no"  {% if aoct_cc_reply!='yes' %}selected{% endif %}>No</option>
+        <option value="yes" {% if aoct_cc_reply=='yes' %}selected{% endif %}>Yes</option>
+      </select>
+      <label for="aoct_cc_broadcast">&bull; Cargo <em>Broadcast</em> sends:</label>
+      <select id="aoct_cc_broadcast" name="aoct_cc_broadcast">
+        <option value="no"  {% if aoct_cc_broadcast!='yes' %}selected{% endif %}>No</option>
+        <option value="yes" {% if aoct_cc_broadcast=='yes' %}selected{% endif %}>Yes</option>
+      </select>
+    </div>
+    <button type="submit" class="save-mappings-btn">Save WinLink Settings</button>
+  </form>
+</div>
+
+<script>
+(function(){
+  const addBtn    = document.getElementById('add-mapping');
+  const container = document.getElementById('airport-mappings');
+  if (!addBtn || !container) return;
+
+  addBtn.addEventListener('click', () => {
+    const template = container.querySelector('.mapping-row').cloneNode(true);
+    template.querySelectorAll('input').forEach(i => i.value = '');
+    const prev = template.querySelector('.airport-warn');
+    if (prev) prev.remove();
+    container.appendChild(template);
+  });
+
+  container.addEventListener('click', (e) => {
+    if (e.target.matches('.remove-mapping') && container.children.length > 1) {
+      e.target.closest('.mapping-row').remove();
+    }
+  });
+
+  // Validate airport codes on blur
+  let _validateTimer = null;
+  container.addEventListener('focusout', (e) => {
+    const inp = e.target.closest('.map-airport');
+    if (!inp) return;
+    const code = (inp.value || '').trim();
+    const prev = inp.parentElement.querySelector('.airport-warn');
+    if (prev) prev.remove();
+    inp.style.borderColor = '';
+    if (!code || code.length < 2) return;
+    clearTimeout(_validateTimer);
+    _validateTimer = setTimeout(async () => {
+      try {
+        const r = await fetch('/api/airport_exists/' + encodeURIComponent(code));
+        const j = await r.json();
+        if (!j.exists) {
+          inp.style.borderColor = '#e65100';
+          const warn = document.createElement('small');
+          warn.className = 'airport-warn';
+          warn.style.cssText = 'color:#e65100; display:block; margin-top:.15rem;';
+          warn.textContent = '"' + code + '" is not a known airport code';
+          inp.parentElement.appendChild(warn);
+        }
+      } catch(_){}
+    }, 200);
+  });
+
+  // Warn on unsaved changes when navigating away
+  let _dirty = false;
+  document.getElementById('mappings-form').addEventListener('input', () => { _dirty = true; });
+  document.getElementById('mappings-form').addEventListener('change', () => { _dirty = true; });
+  document.getElementById('mappings-form').addEventListener('submit', () => { _dirty = false; });
+  window.addEventListener('beforeunload', (e) => {
+    if (_dirty) { e.preventDefault(); e.returnValue = ''; }
+  });
+})();
+</script>
+
+{% endblock %}

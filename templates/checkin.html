@@ -112,8 +112,8 @@
         <h3 style="margin:0 0 .25rem 0;">Choose Waiver</h3>
         <p class="muted" style="margin:0 0 .75rem 0;">for <strong>${name || 'new staffer'}</strong></p>
         <div class="actions" style="justify-content:flex-start; gap:.5rem; display:flex; flex-wrap:wrap;">
-          <a class="button" target="_blank" rel="noopener" href="/docs/waiver/pilot?staff_id=${encodeURIComponent(staffId)}">Pilot</a>
-          <a class="button" target="_blank" rel="noopener" href="/docs/waiver/volunteer?staff_id=${encodeURIComponent(staffId)}">Volunteer</a>
+          <a class="button" target="aoct-waiver" rel="noopener" href="/docs/waiver/pilot?staff_id=${encodeURIComponent(staffId)}">Pilot</a>
+          <a class="button" target="aoct-waiver" rel="noopener" href="/docs/waiver/volunteer?staff_id=${encodeURIComponent(staffId)}">Volunteer</a>
           <button type="button" class="button secondary" id="wc-close">Done</button>
         </div>
       </div>`;
@@ -247,11 +247,6 @@
           const nm  = data.name || nameVal;
 
           setTimeout(() => {
-            if (aff === 'pilot') {
-              window.open(`/docs/waiver/pilot?staff_id=${encodeURIComponent(sid)}`, '_blank', 'noopener');
-            } else if (aff === 'volunteer') {
-              window.open(`/docs/waiver/volunteer?staff_id=${encodeURIComponent(sid)}`, '_blank', 'noopener');
-            }
             openWaiverChoice(sid, nm);
           }, 3000);
           return;

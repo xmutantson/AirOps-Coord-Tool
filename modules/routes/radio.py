@@ -356,6 +356,64 @@ def _latest_sighting_for_tail_db_first(tail: str) -> dict | None:
 #        # never block a request just because RadioTX couldn’t start
 #        pass
 
+@bp.route('/winlink_settings', methods=['GET','POST'], endpoint='winlink_settings')
+def winlink_settings():
+    """Dedicated page for Winlink airport mappings and CC addresses."""
+    if request.method == 'POST':
+        # --- Save airport→callsign mappings ---
+        if 'airport_codes[]' in request.form:
+            codes   = request.form.getlist('airport_codes[]')
+            callers = request.form.getlist('winlink_callsigns[]')
+            canon_map = {}
+            for c, w in zip(codes, callers):
+                if not c.strip() or not w.strip():
+                    continue
+                canon = canonical_airport_code(c)
+                w = w.strip().upper()
+                canon_map[canon] = w
+            raw = "\n".join(
+                f"{c.strip().upper()}:{canon_map[canonical_airport_code(c)]}"
+                for c in codes
+                if c.strip() and canonical_airport_code(c) in canon_map
+            )
+            set_preference('airport_call_mappings', raw)
+
+        # --- Save CC addresses ---
+        for idx in (1, 2, 3):
+            key = f"winlink_cc_{idx}"
+            if key in request.form:
+                set_preference(key, request.form.get(key, '').strip())
+
+        # --- Save AOCT CC toggles ---
+        for key in ('aoct_cc_query', 'aoct_cc_reply', 'aoct_cc_broadcast'):
+            if key in request.form:
+                val = 'yes' if request.form.get(key, 'no').strip().lower() == 'yes' else 'no'
+                set_preference(key, val)
+
+        flash('WinLink settings saved.', 'success')
+        return redirect(url_for('radio.winlink_settings'))
+
+    # GET: load current values
+    raw = get_preference('airport_call_mappings') or ''
+    mappings = []
+    for line in raw.splitlines():
+        if ':' not in line:
+            continue
+        code, cs = line.split(':', 1)
+        mappings.append((code.strip(), cs.strip()))
+
+    return render_template('winlink_settings.html',
+        active='radio',
+        airport_mappings=mappings,
+        winlink_cc_1=get_preference('winlink_cc_1') or '',
+        winlink_cc_2=get_preference('winlink_cc_2') or '',
+        winlink_cc_3=get_preference('winlink_cc_3') or '',
+        aoct_cc_query=get_preference('aoct_cc_query') or 'no',
+        aoct_cc_reply=get_preference('aoct_cc_reply') or 'no',
+        aoct_cc_broadcast=get_preference('aoct_cc_broadcast') or 'no',
+    )
+
+
 @bp.route('/radio', methods=['GET','POST'], endpoint='radio')
 def radio():
     if request.method == 'POST':
