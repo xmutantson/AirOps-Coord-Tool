@@ -602,6 +602,8 @@ def winlink_compose():
 
     # Handle compose form submission
     if request.method == 'POST' and 'to' in request.form:
+        import time as _time
+        _t0 = _time.monotonic()
         to_raw  = request.form.get('to', '').strip().upper()
         cc_raw  = request.form.get('cc', '').strip().upper()
         subject = request.form.get('subject', '').strip()
@@ -617,15 +619,20 @@ def winlink_compose():
 
         ok_any = False
         for addr in to_list:
+            _ts = _time.monotonic()
             ok_any = send_winlink_message(addr, subject, body) or ok_any
+            print(f"[compose] send_winlink_message({addr}) took {_time.monotonic()-_ts:.1f}s", flush=True)
         for addr in cc_list:
+            _ts = _time.monotonic()
             ok_any = send_winlink_message(addr, subject, body) or ok_any
+            print(f"[compose] send_winlink_message(CC:{addr}) took {_time.monotonic()-_ts:.1f}s", flush=True)
 
         all_recips = ', '.join(to_list + cc_list)
         if ok_any:
             flash(f'Message queued to {all_recips} via PAT.', 'success')
         else:
             flash('Failed to send message via PAT.', 'error')
+        print(f"[compose] total POST took {_time.monotonic()-_t0:.1f}s", flush=True)
         return redirect(url_for('winlink.winlink_compose'))
 
     # GET: show compose form + send log
