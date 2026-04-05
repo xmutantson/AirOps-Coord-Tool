@@ -15,7 +15,8 @@
 <div class="winlink-controls" style="display:flex; gap:0.5rem; align-items:center; margin:1rem 0;">
   <form method="POST"
         id="winlink-poll-form"
-        action="{{ url_for('winlink.winlink_start') if not winlink_job_active else url_for('winlink.winlink_stop') }}">
+        action="{{ url_for('winlink.winlink_start') if not winlink_job_active else url_for('winlink.winlink_stop') }}"
+        onsubmit="return confirm('{{ 'This will START checking for new Winlink messages every 5 minutes and deliver any queued outbound messages. Continue?' if not winlink_job_active else 'This will STOP checking for new Winlink messages. Outbound messages will remain queued until polling is restarted. Continue?' }}')">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button type="submit"
             class="btn btn-{{ 'success' if not winlink_job_active else 'danger' }}">
@@ -24,7 +25,8 @@
   </form>
 
   <form method="POST"
-        action="{{ url_for('winlink.winlink_auto_start') if not winlink_auto_active else url_for('winlink.winlink_auto_stop') }}">
+        action="{{ url_for('winlink.winlink_auto_start') if not winlink_auto_active else url_for('winlink.winlink_auto_stop') }}"
+        onsubmit="return confirm('{{ 'This will START automatically sending flight reports via Winlink as they are logged. Continue?' if not winlink_auto_active else 'This will STOP automatically sending flight reports. You can still send individual flights manually. Continue?' }}')">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button type="submit"
             class="btn btn-{{ 'success' if not winlink_auto_active else 'danger' }}">
