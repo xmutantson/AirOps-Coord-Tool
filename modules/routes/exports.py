@@ -1781,21 +1781,60 @@ def _labels_for_queued(qid: int,
         items = [i for i in items if _slug(i.get("item","")) == only_slug]
 
     mission = f"Q-{qid}"
-    # Also pull flight_cargo rows for origin data
+    # Prefer flight_cargo rows (structured, with origin) over parsed remarks
     fc_rows = dict_rows("""
-        SELECT sanitized_name, weight_per_unit, quantity, COALESCE(origin,'') AS cargo_origin
-          FROM flight_cargo WHERE queued_id=?
-         ORDER BY sanitized_name, weight_per_unit
+        SELECT ic.display_name AS category_name,
+               fc.sanitized_name, fc.weight_per_unit, fc.quantity,
+               COALESCE(fc.origin,'') AS cargo_origin
+          FROM flight_cargo fc
+          LEFT JOIN inventory_categories ic ON ic.id = fc.category_id
+         WHERE fc.queued_id=?
+         ORDER BY fc.sanitized_name, fc.weight_per_unit
     """, (qid,))
-    # Build origin lookup: name|wpu -> origin
-    origin_map = {}
-    for fc in fc_rows:
-        k = f"{(fc['sanitized_name'] or '').strip().lower()}|{fc['weight_per_unit']}"
-        origin_map[k] = (fc.get('cargo_origin') or '').strip()
 
     base = []
     unit_mode = (request.args.get("unit_labels") or "").strip().lower() in ("1", "yes", "true")
-    if items:
+    # Use flight_cargo if available (structured data with origin)
+    if fc_rows:
+        for fc in fc_rows:
+            name = (fc['sanitized_name'] or '').strip()
+            qty = int(fc['quantity'] or 0)
+            wpu = float(fc['weight_per_unit'] or 0)
+            item_origin = (fc.get('cargo_origin') or '').strip()
+            cat = (fc.get('category_name') or '').strip()
+            weight_lb = f"{wpu * qty:.1f}" if qty and wpu else ""
+            size_lb = f"{wpu:.2f}" if wpu else ""
+
+            if unit_mode and qty > 0:
+                for unit_num in range(1, qty + 1):
+                    base.append({
+                        "mission": mission,
+                        "from_org": get_preference('mission_number') or 'Air Ops',
+                        "origin": origin,
+                        "destination": dest,
+                        "date_sealed": ts,
+                        "weight_lb": size_lb,
+                        "contents": f"{cat}: {name}" if cat else name,
+                        "cargo_origin": item_origin,
+                        "unit_label": f"{unit_num}/{qty}",
+                        "name": name, "size_lb": size_lb, "qty": qty, "dest": dest, "tail": tail,
+                        "flight_code": "",
+                    })
+            else:
+                base.append({
+                    "mission": mission,
+                    "from_org": get_preference('mission_number') or 'Air Ops',
+                    "origin": origin,
+                    "destination": dest,
+                    "date_sealed": ts,
+                    "weight_lb": weight_lb,
+                    "contents": f"{cat}: {name} x {qty}" if cat else f"{name} x {qty}",
+                    "cargo_origin": item_origin,
+                    "unit_label": "",
+                    "name": name, "size_lb": size_lb, "qty": qty, "dest": dest, "tail": tail,
+                    "flight_code": "",
+                })
+    elif items:
         for it in items:
             name = (it.get("item") or "").strip()
             qty  = int(it.get("qty") or 0)

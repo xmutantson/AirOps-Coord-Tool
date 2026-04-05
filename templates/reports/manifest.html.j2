@@ -142,21 +142,11 @@
           <h2>Cargo</h2>
           <table class="meta-table">
             <tr><td class="label"><strong>Type</strong></td><td class="value">{{ q.cargo_type or '—' }}</td></tr>
-            {% set _notes = (q.remarks or '') %}
-            {% if _notes and not _notes.lower().startswith('manifest:') %}
+            {% set _notes = (q.remarks or '').strip() %}
+            {% if _notes and 'manifest:' not in _notes.lower() %}
             <tr><td class="label"><strong>Notes</strong></td><td class="value notes">{{ _notes }}</td></tr>
-            {% elif _notes and 'manifest:' in _notes.lower() %}
-            {# Strip manifest lines since tabular view shows them; keep non-manifest remarks #}
-            {% set _clean = [] %}
-            {% for part in _notes.split(';') %}
-              {% if part.strip() and 'manifest:' not in part.lower() and 'source:' not in part.lower() %}
-                {% if _clean.append(part.strip()) %}{% endif %}
-              {% endif %}
-            {% endfor %}
-            {% if _clean %}
-            <tr><td class="label"><strong>Notes</strong></td><td class="value notes">{{ _clean|join('; ') }}</td></tr>
             {% endif %}
-            {% endif %}
+            {# If remarks is a Manifest: line, suppress entirely — tabular view shows the data #}
           </table>
         </div>
       </div>

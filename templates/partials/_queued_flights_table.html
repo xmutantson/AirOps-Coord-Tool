@@ -44,7 +44,8 @@
         <td>{{ q.created_at }}</td>
         <!-- Labels action cell -->
         <td style="text-align:center; white-space:nowrap;">
-          <details style="display:inline-block; position:relative;">
+          <details class="label-dropdown" style="display:inline-block; position:relative;"
+                   onclick="document.querySelectorAll('.label-dropdown[open]').forEach(d => { if(d!==this) d.removeAttribute('open'); })">
             <summary style="cursor:pointer; list-style:none;" title="Print labels">📦</summary>
             <div style="position:absolute; right:0; bottom:100%; z-index:9999; background:#fff; border:1px solid #ccc; border-radius:6px; padding:.5rem; box-shadow:0 4px 12px rgba(0,0,0,.15); white-space:nowrap; font-size:.85em; margin-bottom:4px;">
               <div style="font-weight:600; margin-bottom:.3rem;">Labels</div>
@@ -69,9 +70,8 @@
           {% if q.pilot_ack_signed_at %}
             <span title="Acked {{ q.pilot_ack_signed_at }}" style="color:#2e7d32;">&#10003;</span>
           {% else %}
-            <a href="{{ url_for('ramp.edit_queued_flight', qid=q.id) }}"
-               class="button" title="Pilot ack needed"
-               style="background:#ffc107; color:#333; padding:.3rem .6rem; font-size:.85em; text-decoration:none; border-radius:4px;">Ack</a>
+            <button type="button" data-action="pilot-ack" data-qid="{{ q.id }}"
+               style="background:#ffc107; color:#333; padding:.3rem .6rem; font-size:.85em; border:1px solid #e0a800; border-radius:4px; cursor:pointer;">Ack</button>
           {% endif %}
         </td>
         <td>
@@ -79,12 +79,14 @@
           <form method="post"
                 class="q-send-form"
                 data-tt="{{ q.travel_time or '' }}"
-                action="{{ url_for('ramp.send_queued_flight', qid=q.id) }}">
+                data-tail="{{ q.tail_number or '' }}"
+                action="{{ url_for('ramp.send_queued_flight', qid=q.id) }}"
+                onsubmit="return confirm('Aircraft {{ q.tail_number or '' }} has taken off?')">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" style="background:#2e7d32; color:#fff; padding:.3rem .6rem; border:none; border-radius:4px; cursor:pointer;">Send</button>
           </form>
           {% else %}
-            <button disabled style="background:#ccc; color:#666; padding:.3rem .6rem; border:none; border-radius:4px; font-size:.85em;">Send</button>
+            <button disabled style="background:#ccc; color:#666; padding:.3rem .6rem; border:none; border-radius:4px; font-size:.85em;">Ack first</button>
           {% endif %}
         </td>
       </tr>
