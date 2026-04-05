@@ -394,21 +394,23 @@ def export_all_csv():
         cw.writerow([
             'ID','CategoryID','RawName','SanitizedName',
             'WeightPerUnit','Quantity','TotalWeight',
-            'Direction','Timestamp','Source'
+            'Direction','Timestamp','Source','Origin'
         ])
         for row in conn.execute("""
             SELECT id, category_id, raw_name, sanitized_name,
                    weight_per_unit, quantity, total_weight,
-                   direction, timestamp, source
+                   direction, timestamp, source,
+                   COALESCE(origin,'') AS origin
               FROM inventory_entries
         """):
             # Guard textual columns against Excel formula interpretation
-            rid, cat_id, raw_name, san_name, wpu, qty, tot_w, direction, ts, source = row
+            rid, cat_id, raw_name, san_name, wpu, qty, tot_w, direction, ts, source, origin = row
             cw.writerow([
                 _csv_safe(rid), _csv_safe(cat_id),
                 _csv_safe(raw_name), _csv_safe(san_name),
                 _csv_safe(wpu), _csv_safe(qty), _csv_safe(tot_w),
-                _csv_safe(direction), _csv_safe(ts), _csv_safe(source)
+                _csv_safe(direction), _csv_safe(ts), _csv_safe(source),
+                _csv_safe(origin)
             ])
         zf.writestr('inventory_entries.csv', buf.getvalue())
 

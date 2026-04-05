@@ -3442,8 +3442,8 @@ def seed_wargame_baseline_inventory():
               INSERT INTO inventory_entries(
                 category_id,raw_name,sanitized_name,
                 weight_per_unit,quantity,total_weight,
-                direction,timestamp,pending
-              ) VALUES (?,?,?,?,?,?, 'in', ?, 0)
+                direction,timestamp,pending,origin
+              ) VALUES (?,?,?,?,?,?, 'in', ?, 0, '')
             """, (
               cid, noun, noun,
               float(size_lb), int(qty), float(size_lb)*int(qty),
@@ -4341,6 +4341,7 @@ def insert_inventory_entry_and_reconcile(
     *, category_id: int, sanitized_name: str, size_lb: float, qty: int,
     direction: str, raw_name: str = "", total_weight: float | None = None,
     session_id: str = "", source: str = "inventory", timestamp_iso: str | None = None,
+    origin: str = "",
 ):
     """
     Convenience wrapper used by routes: insert the entry and immediately
@@ -4353,10 +4354,11 @@ def insert_inventory_entry_and_reconcile(
           INSERT INTO inventory_entries(
             category_id, raw_name, sanitized_name,
             weight_per_unit, quantity, total_weight,
-            direction, timestamp, session_id, pending, source
-          ) VALUES (?,?,?,?,?,?, ?,?,?, 0,?)
+            direction, timestamp, session_id, pending, source, origin
+          ) VALUES (?,?,?,?,?,?, ?,?,?, 0,?,?)
         """, (int(category_id), raw_name or sanitized_name, sanitized_name,
-              float(size_lb), int(qty), tw, direction, ts, session_id or "", source))
+              float(size_lb), int(qty), tw, direction, ts, session_id or "", source,
+              origin or ""))
     try:
         apply_inventory_entry_to_batches(direction, sanitized_name, float(size_lb), int(qty))
     except Exception:
@@ -4606,7 +4608,8 @@ def _pending_row_get(c, session_id: str, cat_id: int, name: str, wpu: float, dir
     """, (session_id, int(cat_id), name, float(wpu), direction)).fetchone()
 
 def upsert_scan_pending(*, session_id: str, category_id: int, sanitized_name: str,
-                        weight_per_unit: float, direction: str, delta_qty: int) -> int:
+                        weight_per_unit: float, direction: str, delta_qty: int,
+                        origin: str = "") -> int:
     """
     Apply a ±delta_qty to the single pending row for this item+direction.
     Returns the resulting pending quantity for that row (0 ⇒ deleted).
@@ -4637,12 +4640,12 @@ def upsert_scan_pending(*, session_id: str, category_id: int, sanitized_name: st
               INSERT INTO inventory_entries(
                 category_id, raw_name, sanitized_name,
                 weight_per_unit, quantity, total_weight,
-                direction, timestamp, pending, pending_ts, session_id, source
-              ) VALUES (?,?,?,?,?,?, ?, ?,1, ?, ?, 'scanner')
+                direction, timestamp, pending, pending_ts, session_id, source, origin
+              ) VALUES (?,?,?,?,?,?, ?, ?,1, ?, ?, 'scanner', ?)
             """, (
               int(category_id), sanitized_name, sanitized_name,
               float(weight_per_unit), int(delta_qty), float(weight_per_unit)*int(delta_qty),
-              direction, ts, ts, session_id
+              direction, ts, ts, session_id, origin or ''
             ))
             c.commit()
             return int(delta_qty)

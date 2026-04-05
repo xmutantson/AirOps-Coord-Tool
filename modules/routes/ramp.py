@@ -245,12 +245,12 @@ def api_apply_adv_manifest():
               INSERT INTO inventory_entries(
                 category_id, raw_name, sanitized_name,
                 weight_per_unit, quantity, total_weight,
-                direction, timestamp, pending, session_id, source
-              ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                direction, timestamp, pending, session_id, source, origin
+              ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
               cid, raw, name,
               wpu, qty, tot,
-              'in', now, 0, mid, 'adv-detect'
+              'in', now, 0, mid, 'adv-detect', ''
             ))
             inserted += 1
     try:
@@ -1382,13 +1382,13 @@ def delete_queued_flight(qid):
                     category_id, raw_name, sanitized_name,
                     weight_per_unit, quantity, total_weight,
                     direction, timestamp, pending, pending_ts,
-                    session_id, source
-                  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    session_id, source, origin
+                  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (
                   cat_id, nm, nm,
                   wpu, qty, float(wpu) * qty,
                   comp_dir, now_iso, 0, None,
-                  None, 'queue-delete/base'
+                  None, 'queue-delete/base', ''
                 ))
 
             # 3b) session-backed keys (per session id)
@@ -1404,13 +1404,13 @@ def delete_queued_flight(qid):
                     category_id, raw_name, sanitized_name,
                     weight_per_unit, quantity, total_weight,
                     direction, timestamp, pending, pending_ts,
-                    session_id, source
-                  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    session_id, source, origin
+                  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (
                   int(cat_id), nm, nm,
                   float(wpu), qty, float(wpu) * qty,
                   comp_dir, now_iso, 0, None,
-                  sid, 'queue-delete/sess'
+                  sid, 'queue-delete/sess', ''
                 ))
 
         # remove cargo and draft
@@ -1780,12 +1780,13 @@ def delete_flight(fid):
               INSERT INTO inventory_entries(
                 category_id, raw_name, sanitized_name,
                 weight_per_unit, quantity, total_weight,
-                direction, timestamp, source
-              ) VALUES (?,?,?,?,?,?,?,?,?)
+                direction, timestamp, source, origin
+              ) VALUES (?,?,?,?,?,?,?,?,?,?)
             """, (
               r['category_id'], r['sanitized_name'], r['sanitized_name'],
               r['weight_per_unit'], r['quantity'], r['total_weight'],
-              rev, datetime.utcnow().isoformat(), 'flight-delete'
+              rev, datetime.utcnow().isoformat(), 'flight-delete',
+              r['origin'] if r['origin'] else ''
             ))
         c.execute("DELETE FROM flight_cargo WHERE flight_id=?", (fid,))
         c.execute("DELETE FROM flights WHERE id=?", (fid,))
@@ -1868,14 +1869,15 @@ def delete_flight_cargo(fcid):
                 category_id, raw_name, sanitized_name,
                 weight_per_unit, quantity, total_weight,
                 direction, timestamp, pending, pending_ts,
-                session_id, source
-              ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                session_id, source, origin
+              ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
               r['category_id'], r['sanitized_name'], r['sanitized_name'],
               r['weight_per_unit'], r['quantity'],
               float(r['weight_per_unit']) * int(r['quantity']),
               rev, now,
-              0,  None, sid_for_comp, 'chip-delete'
+              0,  None, sid_for_comp, 'chip-delete',
+              r['origin'] if r['origin'] else ''
             ))
             comp_id = cur.lastrowid
 
@@ -1910,12 +1912,13 @@ def delete_flight_cargo(fcid):
                     category_id, raw_name, sanitized_name,
                     weight_per_unit, quantity, total_weight,
                     direction, timestamp, pending, pending_ts,
-                    session_id, source
-                  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    session_id, source, origin
+                  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (
                   r['category_id'], r['sanitized_name'], r['sanitized_name'],
                   r['weight_per_unit'], qty, float(r['weight_per_unit'])*qty,
-                  comp_dir, now, 0, None, sid or None, 'chip-delete/sess-total'
+                  comp_dir, now, 0, None, sid or None, 'chip-delete/sess-total',
+                  r['origin'] if r['origin'] else ''
                 ))
                 comp_id = cur.lastrowid
         else:
@@ -2487,8 +2490,8 @@ def _api_manifest_delete_key_impl(manifest_id: str):
                         """, (name, wpu)).fetchone()
                         cat_id = int(any_hist['category_id']) if any_hist and any_hist['category_id'] is not None else 1
                 cur = c.execute("""
-                  INSERT INTO inventory_entries(category_id,raw_name,sanitized_name,weight_per_unit,quantity,total_weight,direction,timestamp,pending,pending_ts,session_id,source)
-                  VALUES (?,?,?,?,?,?,?, ?,0,NULL,?, 'chip-delete/base-fallback')
+                  INSERT INTO inventory_entries(category_id,raw_name,sanitized_name,weight_per_unit,quantity,total_weight,direction,timestamp,pending,pending_ts,session_id,source,origin)
+                  VALUES (?,?,?,?,?,?,?, ?,0,NULL,?, 'chip-delete/base-fallback', '')
                 """, (cat_id, name, name, wpu, base_qty, float(wpu)*base_qty, comp_dir, now, manifest_id))
                 comp_id = cur.lastrowid
                 return jsonify(ok=True, comp_id=comp_id, comp_dir=comp_dir, qty=base_qty, pending_committed=pending_committed), 200, {'Content-Type':'application/json'}
@@ -2535,13 +2538,13 @@ def _api_manifest_delete_key_impl(manifest_id: str):
             category_id, raw_name, sanitized_name,
             weight_per_unit, quantity, total_weight,
             direction, timestamp, pending, pending_ts,
-            session_id, source
-          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            session_id, source, origin
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
           cat_id, name, name,
           wpu, qty, float(wpu) * qty,
           comp_dir, now, 0, None,
-          manifest_id, 'chip-delete-all/sess-total'
+          manifest_id, 'chip-delete-all/sess-total', ''
         ))
         comp_id = cur.lastrowid
 
@@ -2719,12 +2722,12 @@ def api_manifest_nudge(manifest_id: str):
                         category_id, raw_name, sanitized_name,
                         weight_per_unit, quantity, total_weight,
                         direction, timestamp, pending, pending_ts,
-                        session_id, source
-                      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                        session_id, source, origin
+                      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """, (
                       cat_id, name, name,
                       float(wpu), cancel_qty, float(wpu)*cancel_qty,
-                      rev_dir, now, 0, None, mid, 'scan-nudge/remove'
+                      rev_dir, now, 0, None, mid, 'scan-nudge/remove', ''
                     ))
                 applied_committed = cancel_qty
 
@@ -2738,12 +2741,12 @@ def api_manifest_nudge(manifest_id: str):
                     category_id, raw_name, sanitized_name,
                     weight_per_unit, quantity, total_weight,
                     direction, timestamp, pending, pending_ts,
-                    session_id, source
-                  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    session_id, source, origin
+                  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (
                   cat_id, name, name,
                   float(wpu), int(overage), float(wpu)*int(overage),
-                  rev_dir, now, 0, None, mid, 'scan-nudge/over'
+                  rev_dir, now, 0, None, mid, 'scan-nudge/over', ''
                 ))
                 spawn_delta = {
                   'sanitized_name': name,
