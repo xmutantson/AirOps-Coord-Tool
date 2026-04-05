@@ -134,8 +134,19 @@
   document.addEventListener('keydown', (e) => {
     if (!kbd) return;
     const ae = document.activeElement;
-    // If already in the scan box, let the existing handler deal with it
-    if (ae === kbd) { _bf.redirected = false; _bf.buf = ''; return; }
+    // Scan box is focused — detect new scanner burst and clear stale data.
+    // Only clear if the box has content AND a burst was previously completed
+    // (burstChars was reset to 0 by the idle timer after a successful scan).
+    if (ae === kbd) {
+      _bf.redirected = false; _bf.buf = '';
+      if (burstChars === 0 && kbd.value.length > 0) {
+        // First keystroke after idle — new scan starting. Clear stale barcode.
+        clearScanBox();
+        if (createEl) createEl.hidden = true;
+        if (resultEl) resultEl.hidden = true;
+      }
+      return;
+    }
 
     const key = e.key || '';
     if (key.length !== 1 && key !== 'Enter') return;
