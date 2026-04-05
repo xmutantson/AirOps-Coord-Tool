@@ -539,7 +539,8 @@
         <input id="adv-origin"
                list="origin-suggestions"
                placeholder="Origin (optional)"
-               style="min-width:10ch; padding:.4rem;">
+               readonly
+               style="min-width:10ch; padding:.4rem; background:#f5f5f5;">
         <button type="button" id="adv-add-line">Add</button>
       </div>
       <datalist id="origin-suggestions"></datalist>
@@ -1934,6 +1935,44 @@
   const advWunit   = document.getElementById('adv-wunit');
   const advQty     = document.getElementById('adv-qty');
   const advOriginEl= document.getElementById('adv-origin');
+  let _advOriginSelect = null; // tracks if we swapped input → select
+
+  function _updateAdvOrigin() {
+    const container = advOriginEl?.parentElement;
+    if (!container) return;
+    const origins = inventoryAdvancedData.origins?.[advCat.value]?.[advItem.value]?.[advSize.value] || [];
+
+    // Remove any previous select we created
+    if (_advOriginSelect) { _advOriginSelect.remove(); _advOriginSelect = null; }
+    advOriginEl.style.display = '';
+
+    if (origins.length === 0) {
+      // No origin data — show readonly empty
+      advOriginEl.value = '';
+      advOriginEl.readOnly = true;
+      advOriginEl.style.background = '#f5f5f5';
+    } else if (origins.length === 1) {
+      // Single origin — auto-fill, readonly
+      advOriginEl.value = origins[0];
+      advOriginEl.readOnly = true;
+      advOriginEl.style.background = '#f5f5f5';
+    } else {
+      // Multiple origins — swap input for a select dropdown
+      advOriginEl.style.display = 'none';
+      _advOriginSelect = document.createElement('select');
+      _advOriginSelect.id = 'adv-origin-select';
+      _advOriginSelect.style.cssText = 'min-width:10ch; padding:.4rem;';
+      _advOriginSelect.innerHTML = '<option value="">Choose origin…</option>' +
+        origins.map(o => `<option value="${o}">${o}</option>`).join('');
+      container.insertBefore(_advOriginSelect, advOriginEl);
+    }
+  }
+
+  // Helper: get current origin value (from input or select)
+  function _getAdvOrigin() {
+    if (_advOriginSelect) return _advOriginSelect.value || '';
+    return advOriginEl ? advOriginEl.value.trim() : '';
+  }
   const advAdd     = document.getElementById('adv-add-line');
   const advLines   = document.getElementById('adv-lines');
   const advDone    = document.getElementById('adv-done');
@@ -3402,6 +3441,14 @@
     document.querySelector(`input[name="direction"][value="${dir}"]`).checked = true;
     applyDirUI();
     applyAdvDirUI(dir);
+    // Origin: readonly for outbound (auto-populated), editable for inbound
+    if (_advOriginSelect) { _advOriginSelect.remove(); _advOriginSelect = null; }
+    if (advOriginEl) {
+      advOriginEl.style.display = '';
+      advOriginEl.readOnly = (dir === 'outbound');
+      advOriginEl.style.background = (dir === 'outbound') ? '#f5f5f5' : '';
+      advOriginEl.value = '';
+    }
     // Delete all pending chips properly (returns items to inventory) before switching
     const chips = [...advLines.querySelectorAll('.adv-chip')];
     for (const chip of chips) {
@@ -3462,28 +3509,7 @@
     if (document.body.dataset.advDir === 'outbound') {
       advQty.disabled = false;
       // Auto-populate origin from inventory data
-      if (advOriginEl) {
-        const origins = inventoryAdvancedData.origins?.[advCat.value]?.[advItem.value]?.[advSize.value] || [];
-        if (origins.length === 1) {
-          // Single origin — auto-fill
-          advOriginEl.value = origins[0];
-          advOriginEl.readOnly = false;
-        } else if (origins.length > 1) {
-          // Multiple origins — convert to select
-          advOriginEl.value = '';
-          advOriginEl.setAttribute('list', '');
-          // Build a temporary datalist with just these origins
-          let dl = document.getElementById('origin-item-choices');
-          if (!dl) { dl = document.createElement('datalist'); dl.id = 'origin-item-choices'; document.body.appendChild(dl); }
-          dl.innerHTML = origins.map(o => `<option value="${o}">`).join('');
-          advOriginEl.setAttribute('list', 'origin-item-choices');
-          advOriginEl.readOnly = false;
-        } else {
-          advOriginEl.value = '';
-          advOriginEl.setAttribute('list', 'origin-suggestions');
-          advOriginEl.readOnly = false;
-        }
-      }
+      _updateAdvOrigin();
     }
   });
 
@@ -3513,7 +3539,7 @@
       weight:      dirNow === 'inbound'  ? advWeight.value : '',
       wunit:       dirNow === 'inbound'  ? advWunit.value  : '',
       qty:         advQty.value,
-      origin:      advOriginEl ? advOriginEl.value : ''
+      origin:      _getAdvOrigin()
     });
 
     let resp;
