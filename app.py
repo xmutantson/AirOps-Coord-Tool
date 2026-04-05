@@ -705,7 +705,6 @@ for _mod in (
     "modules.routes_inventory.detail",
     "modules.routes_inventory.stock",
     "modules.routes_inventory.barcodes",
-    "modules.routes_inventory.scan",
     "modules.routes_inventory.propagate",
     "modules.routes_inventory.requests",
 ):
