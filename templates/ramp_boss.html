@@ -3643,12 +3643,15 @@
     window._rbCategories.add(catName);
     document.getElementById('cargo_type').value =
       window._rbCategories.size === 1 ? catName : 'Mixed';
-    // ─── **NEW** clear inbound free-text on add ─────────────────────────
+    // ─── clear fields after add ─────────────────────────
     if (dirNow === 'inbound') {
       document.getElementById('adv-name').value   = '';
       document.getElementById('adv-weight').value = '';
     }
     advQty.value = '';
+    // Reset origin field
+    if (_advOriginSelect) { _advOriginSelect.remove(); _advOriginSelect = null; }
+    if (advOriginEl) { advOriginEl.value = ''; advOriginEl.style.display = ''; }
   });
 
   // "Done" simply hides the panel – leave rows pending until Send/Queue
