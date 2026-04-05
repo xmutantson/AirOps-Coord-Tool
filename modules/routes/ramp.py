@@ -1325,7 +1325,7 @@ def delete_queued_flight(qid):
         # read the latest snapshot inside the txn
         snap = c.execute("""
             SELECT category_id, sanitized_name, weight_per_unit,
-                   quantity, direction, session_id
+                   quantity, direction, session_id, COALESCE(origin,'') AS origin
               FROM flight_cargo
              WHERE queued_id=?
         """, (qid,)).fetchall()
@@ -1336,18 +1336,23 @@ def delete_queued_flight(qid):
             now_iso = datetime.utcnow().isoformat()
 
             # 1) snapshot net per key (out=+qty, in=-qty)
-            base_net = {}      # (cat_id, name_lower, wpu_float) -> net_qty
+            base_net = {}      # (cat_id, name_lower, wpu_float, origin) -> net_qty
             name_case = {}     # representative cased name per key
+            origin_case = {}   # representative origin per key
             sess_ids = set()
             for r in snap:
                 try:
+                    orig = (r.get('origin') or '').strip()
                     k = (int(r['category_id']),
                          (r['sanitized_name'] or '').strip().lower(),
-                         float(r['weight_per_unit']))
+                         float(r['weight_per_unit']),
+                         orig.lower())
                     sgn = 1 if r['direction'] == 'out' else -1
                     base_net[k] = base_net.get(k, 0) + sgn * int(r['quantity'] or 0)
                     if k not in name_case and r['sanitized_name']:
                         name_case[k] = r['sanitized_name']
+                    if k not in origin_case:
+                        origin_case[k] = orig
                     if r['session_id']:
                         sess_ids.add(str(r['session_id']))
                 except Exception:
@@ -1364,19 +1369,23 @@ def delete_queued_flight(qid):
                          LOWER(sanitized_name)                         AS key_name,
                          CAST(weight_per_unit AS REAL)                 AS wpu,
                          MIN(sanitized_name)                           AS name_repr,
+                         COALESCE(origin,'')                           AS origin,
                          SUM(CASE direction WHEN 'out' THEN quantity ELSE -quantity END) AS net_qty
                     FROM inventory_entries
                    WHERE session_id IN ({ph}) AND pending=0
                    GROUP BY session_id, category_id, LOWER(sanitized_name), CAST(weight_per_unit AS REAL), COALESCE(origin,'')
                 """, tuple(sess_ids)).fetchall()
                 for r in rows:
-                    k  = (int(r['cat']), (r['key_name'] or '').strip(), float(r['wpu']))
+                    orig = (r.get('origin') or '').strip()
+                    k  = (int(r['cat']), (r['key_name'] or '').strip(), float(r['wpu']), orig.lower())
                     sk = (str(r['sid']),) + k
                     q  = int(r['net_qty'] or 0)
                     sess_net_by_key[k] = sess_net_by_key.get(k, 0) + q
                     sess_net_by_sid_key[sk] = q
                     if k not in name_case and r['name_repr']:
                         name_case[k] = (r['name_repr'] or '').strip()
+                    if k not in origin_case:
+                        origin_case[k] = orig
 
             # 3) Compensate:
             #    • If a key has session commits → compensate the session net (per session).
@@ -1389,8 +1398,9 @@ def delete_queued_flight(qid):
                     continue
                 comp_dir = 'in' if q > 0 else 'out'
                 qty = abs(int(q))
-                cat_id, key_name, wpu = k
+                cat_id, key_name, wpu, _orig_lower = k
                 nm = name_case.get(k, key_name)
+                orig = origin_case.get(k, '')
                 c.execute("""
                   INSERT INTO inventory_entries(
                     category_id, raw_name, sanitized_name,
@@ -1402,15 +1412,17 @@ def delete_queued_flight(qid):
                   cat_id, nm, nm,
                   wpu, qty, float(wpu) * qty,
                   comp_dir, now_iso, 0, None,
-                  None, 'queue-delete/base', ''
+                  None, 'queue-delete/base', orig
                 ))
 
             # 3b) session-backed keys (per session id)
             for sk, q in sess_net_by_sid_key.items():
                 if q == 0:
                     continue
-                sid, cat_id, key_name, wpu = sk
-                nm = name_case.get((cat_id, key_name, wpu), key_name)
+                sid, cat_id, key_name, wpu, _orig_lower = sk
+                k = (cat_id, key_name, wpu, _orig_lower)
+                nm = name_case.get(k, key_name)
+                orig = origin_case.get(k, '')
                 comp_dir = 'in' if q > 0 else 'out'
                 qty = abs(int(q))
                 c.execute("""
@@ -1424,7 +1436,7 @@ def delete_queued_flight(qid):
                   int(cat_id), nm, nm,
                   float(wpu), qty, float(wpu) * qty,
                   comp_dir, now_iso, 0, None,
-                  sid, 'queue-delete/sess', ''
+                  sid, 'queue-delete/sess', orig
                 ))
 
         # remove cargo and draft
