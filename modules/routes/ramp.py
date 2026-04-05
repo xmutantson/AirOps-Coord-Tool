@@ -1047,6 +1047,7 @@ def send_queued_flight(qid):
 
     # ── HARD GATE: pilot acknowledgment must exist before sending ─────────
     try:
+        ensure_column("queued_flights", "pilot_ack_signed_at", "TEXT")
         ack = dict_rows("""
             SELECT pilot_ack_signed_at FROM queued_flights WHERE id=? LIMIT 1
         """, (qid,))
@@ -1055,10 +1056,12 @@ def send_queued_flight(qid):
         has_ack = False
     if not has_ack:
         msg = "Pilot acknowledgment required before sending this flight."
+        logger.warning("send_queued_flight(%s): ack gate tripped — pilot_ack_signed_at=%r",
+                       qid, ack[0].get('pilot_ack_signed_at') if ack else 'NO ROW')
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
             return jsonify({'error': 'pilot_ack_required', 'message': msg}), 400
         flash(msg, 'error')
-        return redirect(url_for('ramp.edit_queued_flight', qid=qid))
+        return redirect(url_for('ramp.queued_flights'))
 
     # ── take-off & ETA come **from the browser** when available ─────────────
     cli_dep = request.form.get("takeoff_time","").strip()
