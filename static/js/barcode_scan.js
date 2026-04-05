@@ -158,6 +158,8 @@
     burstTimer = setTimeout(() => { if (burstChars >= 5) handleCode(kbd.value); burstChars = 0; }, 120);
   });
 
+  function _getOrigin(){ const el = app.querySelector('#u_origin'); return el ? el.value.trim() : ''; }
+
   async function postKnownAuto1(code, item){
     const dirWord = (getScanDir() === 'IN') ? 'inbound' : 'outbound';
     const payload = {
@@ -165,7 +167,8 @@
       qty: 1,
       direction: dirWord,
       commit_now: true,
-      manifest_id: MANIFEST_ID || undefined
+      manifest_id: MANIFEST_ID || undefined,
+      origin: _getOrigin()
     };
     const r = await fetch(URLS.scanPost, { method:'POST', headers: jsonHeaders(), body: JSON.stringify(payload) });
     let j = null; try { j = await r.json(); } catch(_){}
@@ -332,7 +335,7 @@
         if (!qtyVal) { setStatus('Enter a quantity','err'); num?.focus(); return; }
         const qty = parseInt(qtyVal, 10);
         const dirWord = getScanDir() === 'IN' ? 'inbound' : 'outbound';
-        const body = { barcode: code, qty, direction: dirWord, commit_now: true, manifest_id: MANIFEST_ID || undefined };
+        const body = { barcode: code, qty, direction: dirWord, commit_now: true, manifest_id: MANIFEST_ID || undefined, origin: _getOrigin() };
         const resp = await fetch(URLS.scanPost, { method:'POST', headers: jsonHeaders(), body: JSON.stringify(body) });
         if (resp.ok) {
           setStatus(`Posted ${dirWord} x${qty}`,'ok'); /* no beep on posting */
