@@ -3844,13 +3844,24 @@ def get_boot_id() -> str:
 
 def _parse_manifest(manifest: str):
     """
-    Return list of dicts: [{'name':str,'size_lb':float,'qty':int}, ...]
+    Return list of dicts: [{'name':str,'size_lb':float,'qty':int,'origin':str}, ...]
     Accepts 'tarps 10 lbx3; water 20 lbx2' and minor variants (x, lbs, spaces).
+    Also parses optional [Origin] tag: 'water 30 lb×3 [Hospital A]'
+    Source tag 'Source: X, Y;' at the end is parsed and applied to items missing origin.
     """
     items = []
+    # Extract trailing "Source: X, Y;" before splitting on semicolons
+    source_default = ''
+    source_m = re.search(r'\bSource:\s*(.+?)(?:;|$)', manifest or '', re.I)
+    if source_m:
+        source_default = source_m.group(1).strip()
+
     for part in (manifest or '').split(';'):
         t = part.strip()
         if not t: continue
+        # Skip the "Source: ..." tag itself
+        if re.match(r'(?i)^\s*source\s*:', t):
+            continue
         # If this chunk starts with a human label like "Manifest: ...",
         # drop everything up to and including that label (only if it
         # occurs before the first digit, which begins the size).
@@ -3860,18 +3871,27 @@ def _parse_manifest(manifest: str):
             if not first_digit or m.start() <= first_digit.start():
                 t = t[m.end():].strip()
 
+        # Extract optional [Origin] tag at end
+        origin = ''
+        origin_m = re.search(r'\s*\[([^\]]+)\]\s*$', t)
+        if origin_m:
+            origin = origin_m.group(1).strip()
+            t = t[:origin_m.start()].strip()
+
         # greedy name, then number + 'lb'/'lbs', then 'x' or '×' qty
         m = re.search(r'^(?P<name>.+?)\s+(?P<size>\d+(?:\.\d+)?)\s*lb[s]?\s*[×x]\s*(?P<qty>\d+)\s*$', t, re.I)
         if not m:
             # fallback: just a weight → treat as one line with qty=1 and name=t
             m2 = re.search(r'^(?P<name>.+?)\s+(?P<size>\d+(?:\.\d+)?)\s*lb[s]?\s*$', t, re.I)
             if m2:
-                items.append({'name': m2.group('name').strip(), 'size_lb': float(m2.group('size')), 'qty': 1})
+                items.append({'name': m2.group('name').strip(), 'size_lb': float(m2.group('size')), 'qty': 1,
+                              'origin': origin or source_default})
             continue
         items.append({
             'name': m.group('name').strip(),
             'size_lb': float(m.group('size')),
-            'qty': int(m.group('qty'))
+            'qty': int(m.group('qty')),
+            'origin': origin or source_default
         })
     return items
 

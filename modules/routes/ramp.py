@@ -160,7 +160,8 @@ def api_adv_manifest_from_tail(tail: str):
             'sanitized_name': sanitized,
             'size_lb': float(it['size_lb']),
             'qty': int(it['qty']),
-            'category_id': guess  # may be None
+            'category_id': guess,
+            'origin': it.get('origin', '')
         })
     return jsonify({
         'remarks': remarks,
@@ -190,7 +191,8 @@ def api_adv_manifest_parse():
             'sanitized_name': sanitized,
             'size_lb': float(it['size_lb']),
             'qty': int(it['qty']),
-            'category_id': guess
+            'category_id': guess,
+            'origin': it.get('origin', '')
         })
     return jsonify({
         'remarks': remarks,
@@ -250,7 +252,7 @@ def api_apply_adv_manifest():
             """, (
               cid, raw, name,
               wpu, qty, tot,
-              'in', now, 0, mid, 'adv-detect', ''
+              'in', now, 0, mid, 'adv-detect', (it.get('origin') or '').strip()
             ))
             inserted += 1
     try:
