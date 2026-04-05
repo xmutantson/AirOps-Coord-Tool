@@ -91,3 +91,7 @@
 - Don't silently change behavior — explain what changed and why
 - Don't skip the Docker build — it's the deployment artifact
 - Don't create new files when editing existing ones achieves the same goal
+- Don't use smart quotes, curly apostrophes, or non-ASCII characters in JavaScript
+  code (U+2018/2019/201C/201D, etc.). Browsers reject them as illegal characters.
+  Use only straight quotes/apostrophes in code. Emojis and Unicode in HTML text
+  content and Jinja comments are fine.

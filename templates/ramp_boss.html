@@ -2487,7 +2487,7 @@
     function ensureManifestId(){
       if (!manifestId.value) {
         manifestId.value = uuid4();
-        RB_DRAFT_SEEDED = false;  /* new session → allow one seed */
+        RB_DRAFT_SEEDED = false;  /* new session - allow one seed */
       }
       return manifestId.value;
     }
