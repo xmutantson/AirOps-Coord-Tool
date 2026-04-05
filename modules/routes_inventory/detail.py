@@ -147,7 +147,7 @@ def inventory_detail():
 
         # Success flash (tiny and useful for scanner workflows)
         try:
-            flash(f"Logged {dirn} {qty} × {noun} ({wpu_lbs:.1f} lb)", "success")
+            flash(f"Logged {dirn} {qty} x {noun} ({wpu_lbs:.1f} lb)", "success")
         except Exception:
             pass
 

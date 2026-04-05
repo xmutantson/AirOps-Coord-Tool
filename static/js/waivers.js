@@ -455,12 +455,7 @@
         nextUrl   = staffId ? (`/aircraft/new?staff_id=${encodeURIComponent(staffId)}`) : '/aircraft';
         nextLabel = 'Continue to Pilot & Aircraft Information';
 
-        // Add a second button for "just go to dashboard"
-        const dashBtn = document.createElement('button');
-        dashBtn.className = 'button btn-secondary';
-        dashBtn.textContent = 'Return to Dashboard';
-        dashBtn.onclick = () => { window.location.href = '/'; };
-        btn.parentElement.appendChild(dashBtn);
+        // Pilots proceed to Aircraft Info only — no dashboard shortcut
       } else {
         // If a ?return=/path is present, prefer it for non-pilots
         const ret = (q.get('return') || '').trim();

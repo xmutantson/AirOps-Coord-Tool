@@ -217,7 +217,7 @@
             if (btn.dataset.originalLabel) btn.textContent = btn.dataset.originalLabel;
             btn.classList.remove('btn-disabled');
           }
-          link.style.display = '';
+          // Manifest link hidden — users access via Labels column icon
         }
 
         // Submit enrichment (time + local-date stamp for flight code)
@@ -313,7 +313,7 @@
                 if (link) {
                   link.href = (j.pdf_url || `/ramp/manifest/${qid}.pdf`);
                   link.textContent = 'View Manifest PDF';
-                  link.style.display = '';
+                  // Manifest link hidden — users access via Labels column icon
                 }
               }
 

@@ -13,8 +13,6 @@
         <th>Remarks</th>
         <th>Queued At</th>
         <th>Labels</th>
-        <th>Manifest</th>
-        <th>Ack</th>
         <th>Send</th>
       </tr>
     </thead>
@@ -42,7 +40,7 @@
         <td>{{ q.cargo_type }}</td>
         <td>{{ q.remarks }}</td>
         <td>{{ q.created_at }}</td>
-        <!-- Labels action cell -->
+        <!-- Labels dropdown -->
         <td style="text-align:center; white-space:nowrap;">
           <details class="label-dropdown" style="display:inline-block; position:relative;"
                    onclick="document.querySelectorAll('.label-dropdown[open]').forEach(d => { if(d!==this) d.removeAttribute('open'); })">
@@ -60,34 +58,17 @@
             </div>
           </details>
         </td>
-        <td style="text-align:center;">
-          <a href="{{ url_for('ramp.view_manifest_pdf', queue_id=q.id) }}"
-             target="_blank" rel="noopener"
-             title="View Manifest PDF"
-             class="icon-btn">📄</a>
-        </td>
-        <td style="text-align:center;">
-          {% if q.pilot_ack_signed_at %}
-            <span title="Acked {{ q.pilot_ack_signed_at }}" style="color:#2e7d32;">&#10003;</span>
-          {% else %}
-            <button type="button" data-action="pilot-ack" data-qid="{{ q.id }}"
-               style="background:#ffc107; color:#333; padding:.3rem .6rem; font-size:.85em; border:1px solid #e0a800; border-radius:4px; cursor:pointer;">Ack</button>
-          {% endif %}
-        </td>
+        <!-- Send (JS manages ack gate, manifest link, and send button state) -->
         <td>
-          {% if q.pilot_ack_signed_at %}
           <form method="post"
                 class="q-send-form"
                 data-tt="{{ q.travel_time or '' }}"
-                data-tail="{{ q.tail_number or '' }}"
+                data-pilot-ack-at="{{ q.pilot_ack_signed_at or '' }}"
                 action="{{ url_for('ramp.send_queued_flight', qid=q.id) }}"
                 onsubmit="return confirm('Aircraft {{ q.tail_number or '' }} has taken off?')">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" style="background:#2e7d32; color:#fff; padding:.3rem .6rem; border:none; border-radius:4px; cursor:pointer;">Send</button>
+            <button type="submit">Send</button>
           </form>
-          {% else %}
-            <button disabled style="background:#ccc; color:#666; padding:.3rem .6rem; border:none; border-radius:4px; font-size:.85em;">Ack first</button>
-          {% endif %}
         </td>
       </tr>
       {% endfor %}

@@ -1180,7 +1180,7 @@ def _generate_flights_csv_text(filters: dict | None = None) -> str:
 #   • Window filter: same as other exports (COMM_WINDOWS), based on flights.timestamp
 # ─────────────────────────────────────────────────────────────────────────────
 
-_CARGO_HEADERS = ["Timestamp","Tail#","Origin","Dest","Item","Qty","Weight"]
+_CARGO_HEADERS = ["Timestamp","Tail#","Origin","Dest","Item","Qty","Weight","Source"]
 
 def _first_history_ts(flight_id: int) -> str:
     """
@@ -1259,7 +1259,8 @@ def _rows_from_flight_cargo_table(fid: int) -> list[dict]:
                        WHEN weight_per_unit IS NOT NULL AND quantity IS NOT NULL
                        THEN weight_per_unit * quantity
                        ELSE NULL
-                     END)                    AS total_w
+                     END)                    AS total_w,
+            COALESCE(origin,'')              AS cargo_origin
             FROM flight_cargo
            WHERE flight_id=?
         """, (fid,))
@@ -1281,8 +1282,9 @@ def _rows_from_flight_cargo_table(fid: int) -> list[dict]:
             wpu_f = float(wpu) if wpu is not None else (tw/qty if qty else None)
         except Exception:
             wpu_f = None
+        cargo_origin = (r.get("cargo_origin") or "").strip()
         if name and qty > 0 and tw > 0:
-            out.append({"item": name, "qty": qty, "weight": round(tw, 1), "size_lb": (round(wpu_f,2) if wpu_f else None)})
+            out.append({"item": name, "qty": qty, "weight": round(tw, 1), "size_lb": (round(wpu_f,2) if wpu_f else None), "origin": cargo_origin})
     return out
 
 def _generate_flight_cargo_csv_text(filters: dict | None = None) -> str:
@@ -1337,6 +1339,7 @@ def _generate_flight_cargo_csv_text(filters: dict | None = None) -> str:
                 "Item":      _csv_safe(it["item"]),
                 "Qty":       it["qty"],
                 "Weight":    it["weight"],
+                "Source":    _csv_safe(it.get("origin") or ""),
             })
     return out.getvalue()
 
@@ -1981,7 +1984,7 @@ def _labels_for_flight(fid: int,
                 "destination": dest,
                 "date_sealed": date_sealed,
                 "weight_lb": weight_lb,
-                "contents": f"{name}" + (f" × {qty}" if qty else ""),
+                "contents": f"{name}" + (f" x {qty}" if qty else ""),
                 # structured fields (for templates/exports that prefer explicit keys)
                 "name": name,
                 "size_lb": size_lb,
