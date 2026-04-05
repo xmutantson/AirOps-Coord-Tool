@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import subprocess
+import threading
 from apscheduler.jobstores.base import JobLookupError
 from typing import List, Tuple
 
@@ -600,16 +601,13 @@ def winlink_compose():
             return render_template('winlink_compose.html',
                                    active='radio', locked=True, callsigns=callsigns)
 
-    # Handle compose form submission
+    # Handle compose form submission (AJAX or form POST)
     if request.method == 'POST' and 'to' in request.form:
-        import time as _time
-        _t0 = _time.monotonic()
         to_raw  = request.form.get('to', '').strip().upper()
         cc_raw  = request.form.get('cc', '').strip().upper()
         subject = request.form.get('subject', '').strip()
         body    = request.form.get('body', '').strip()
 
-        # Split comma-separated recipients
         to_list = [a.strip() for a in to_raw.split(',') if a.strip()]
         cc_list = [a.strip() for a in cc_raw.split(',') if a.strip()]
 
@@ -617,22 +615,18 @@ def winlink_compose():
             flash('To and Subject are required.', 'error')
             return redirect(url_for('winlink.winlink_compose'))
 
-        ok_any = False
-        for addr in to_list:
-            _ts = _time.monotonic()
-            ok_any = send_winlink_message(addr, subject, body) or ok_any
-            print(f"[compose] send_winlink_message({addr}) took {_time.monotonic()-_ts:.1f}s", flush=True)
-        for addr in cc_list:
-            _ts = _time.monotonic()
-            ok_any = send_winlink_message(addr, subject, body) or ok_any
-            print(f"[compose] send_winlink_message(CC:{addr}) took {_time.monotonic()-_ts:.1f}s", flush=True)
+        # Fire all sends in a background thread so the page returns instantly
+        all_addrs = to_list + cc_list
+        def _compose_bg():
+            for addr in all_addrs:
+                try:
+                    send_winlink_message(addr, subject, body)
+                except Exception:
+                    pass
+        threading.Thread(target=_compose_bg, daemon=True).start()
 
-        all_recips = ', '.join(to_list + cc_list)
-        if ok_any:
-            flash(f'Message queued to {all_recips} via PAT.', 'success')
-        else:
-            flash('Failed to send message via PAT.', 'error')
-        print(f"[compose] total POST took {_time.monotonic()-_t0:.1f}s", flush=True)
+        all_recips = ', '.join(all_addrs)
+        flash(f'Message queued to {all_recips}.', 'success')
         return redirect(url_for('winlink.winlink_compose'))
 
     # GET: show compose form + send log
