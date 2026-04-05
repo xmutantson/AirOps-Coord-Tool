@@ -61,14 +61,16 @@
         vertical-align: top;
       }
       thead th {
-        background: var(--soft);
+        background: #e8e8e8;
         text-align: left;
+        font-weight: 700;
+        color: #111;
       }
       .right { text-align: right; }
       .meta-table { border: 0; }
       .meta-table td { border: 0; padding: 1mm 0; }
       /* Keep a clean two-column look with clear separation */
-      .meta-table td.label  { width: 38%; white-space: nowrap; vertical-align: top; padding-right: 6mm; }
+      .meta-table td.label  { width: auto; white-space: nowrap; vertical-align: top; padding-right: 8mm; }
       .meta-table td.value  { width: auto; }
       .meta-table td.notes  {
         white-space: pre-wrap;
@@ -140,7 +142,21 @@
           <h2>Cargo</h2>
           <table class="meta-table">
             <tr><td class="label"><strong>Type</strong></td><td class="value">{{ q.cargo_type or '—' }}</td></tr>
-            <tr><td class="label"><strong>Notes</strong></td><td class="value notes">{{ q.remarks or '' }}</td></tr>
+            {% set _notes = (q.remarks or '') %}
+            {% if _notes and not _notes.lower().startswith('manifest:') %}
+            <tr><td class="label"><strong>Notes</strong></td><td class="value notes">{{ _notes }}</td></tr>
+            {% elif _notes and 'manifest:' in _notes.lower() %}
+            {# Strip manifest lines since tabular view shows them; keep non-manifest remarks #}
+            {% set _clean = [] %}
+            {% for part in _notes.split(';') %}
+              {% if part.strip() and 'manifest:' not in part.lower() and 'source:' not in part.lower() %}
+                {% if _clean.append(part.strip()) %}{% endif %}
+              {% endif %}
+            {% endfor %}
+            {% if _clean %}
+            <tr><td class="label"><strong>Notes</strong></td><td class="value notes">{{ _clean|join('; ') }}</td></tr>
+            {% endif %}
+            {% endif %}
           </table>
         </div>
       </div>
