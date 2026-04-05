@@ -3916,7 +3916,7 @@
       var slot = pill.querySelector('.val');
       if (slot) slot.textContent = n;
     }
-    // De-dupe chips by (sanitized_name, wpu).
+    // De-dupe chips by (sanitized_name, wpu, origin).
     // If merge===true, sum qty/total into the first chip and remove the rest.
     function dedupeChipsInDOM(merge){
       var root = document.querySelector('#adv-lines, #adv-chips, #adv-selected, .adv-chips, .manifest-chips');
@@ -3937,7 +3937,8 @@
         if (chip.dataset.delta === '1') {
           flag = 'Δ' + (chip.dataset.deltaSign === '-1' ? '-1' : '+1');
         }
-        return name + '|' + Number(wpu) + '|' + flag;
+        var origin = (chip.dataset.origin || '').trim().toLowerCase();
+        return name + '|' + Number(wpu) + '|' + origin + '|' + flag;
       }
       chips.forEach(function(chip){
         var key  = keyFor(chip);
