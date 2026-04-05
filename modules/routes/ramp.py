@@ -857,9 +857,8 @@ def queue_flight():
             remarks_txt = ("Manifest: " + "; ".join(
                 f"{r['name']} {_fmt_wpu(r['wpu'])} lbx{r['qty']}" for r in rows
             ) + ";") if rows else ""
-            origins = {r['origin'] for r in rows if r.get('origin')}
-            if origins:
-                remarks_txt += " Source: " + ", ".join(sorted(origins)) + ";"
+            # Origin tags are included per-item in the manifest text via [Origin]
+            # (no trailing Source: line — per-item is the canonical format)
             cats = {r['cat'] for r in rows}
             new_type = (cats.pop() if len(cats) == 1 else 'Mixed') if rows else ''
             # Only overwrite if the operator didn't supply a value
