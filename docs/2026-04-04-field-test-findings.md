@@ -122,5 +122,15 @@ Full setup and multi-user walkthrough of AirOps Coordination Tool. General feedb
 
 ### 12. Label Sizing Options
 **Description:** Label printing should support multiple paper sizes — regular printer (letter/A4) and Dymo-type shipping label printers. Users should be able to choose the format before printing.
-**Status:** Not yet implemented
+**Status:** Implemented (letter, 4x6 shipping, 1.1x3.5 address options in queue Labels dropdown)
+
+### 13. Unified Barcode System with Generated Inventory Tags
+**Description:** Two-tier label system using the same barcode:
+- **Inventory Tags** (small, address-size): Auto-generated barcode when item enters system without one. Printed immediately after adding items. Contains barcode + item name + weight. Operator sticks on physical items so everything becomes scannable.
+- **Shipping Labels** (4x6): Generated when cargo loads onto a flight. Same barcode + flight info + origin + destination + unit numbering.
+- System generates Code128 barcodes for items that don't have existing UPC/EAN codes
+- "Print inventory tags?" prompt after manual item entry
+- Items with existing barcodes (UPC from packaging) keep their original codes
+- Printer: Brother QL-820NWB (infrastructure WiFi mode, not WiFi Direct) or USB thermal
+**Status:** Not yet implemented — printer being ordered
 9. **Inventory source tracking** (#8) — deep change, implement last
