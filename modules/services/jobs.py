@@ -1405,30 +1405,37 @@ def poll_winlink_job():
                     saved_any = bool(new_files)
 
                     if saved_any:
-                        with sqlite3.connect(DB_FILE) as conn:
-                            MAX_BYTES = 15 * 1024 * 1024  # 15 MiB per file cap
-                            for fname in new_files:
-                                fp = os.path.join(dest_dir, fname)
-                                if not os.path.isfile(fp):
-                                    continue
+                        # Pre-stat all files OUTSIDE DB lock to avoid contention
+                        MAX_BYTES = 15 * 1024 * 1024  # 15 MiB per file cap
+                        file_meta = []
+                        for fname in new_files:
+                            fp = os.path.join(dest_dir, fname)
+                            if not os.path.isfile(fp):
+                                continue
+                            try:
                                 st = os.stat(fp)
-                                if st.st_size > MAX_BYTES:
-                                    try:
-                                        LOG.warning("Winlink skip oversize attachment (%d bytes): %s", st.st_size, fp)
-                                    except Exception:
-                                        pass
-                                    continue
-                                # Best-effort MIME sniff
+                            except Exception:
+                                continue
+                            if st.st_size > MAX_BYTES:
                                 try:
-                                    mime, _ = mimetypes.guess_type(fp)
+                                    LOG.warning("Winlink skip oversize attachment (%d bytes): %s", st.st_size, fp)
                                 except Exception:
-                                    mime = None
+                                    pass
+                                continue
+                            try:
+                                mime, _ = mimetypes.guess_type(fp)
+                            except Exception:
+                                mime = None
+                            file_meta.append((fname, mime, int(st.st_size), fp))
+
+                        # Brief DB lock for INSERTs only
+                        with sqlite3.connect(DB_FILE) as conn:
+                            for fname, mime, size, fp in file_meta:
                                 conn.execute("""
                                   INSERT OR IGNORE INTO winlink_message_files
                                     (message_id, filename, mime, size_bytes, saved_path)
                                   VALUES (?,?,?,?,?)
-                                """, (msg_id, fname, mime or None, int(st.st_size), fp))
-                            # Mark parent row with attachment_dir and has_attachments based on actual save
+                                """, (msg_id, fname, mime or None, size, fp))
                             conn.execute("""
                                 UPDATE winlink_messages
                                    SET has_attachments=?, attachment_dir=?
@@ -1556,7 +1563,7 @@ def poll_winlink_job():
                             now_iso = iso8601_ceil_utc()
                             try:
                                 with sqlite3.connect(DB_FILE) as conn:
-                                    conn.execute("PRAGMA busy_timeout=10000;")
+                                    # busy_timeout set globally in connect()
                                     # Assumes table weather_products exists with:
                                     # key TEXT PRIMARY KEY, display_name TEXT, mime TEXT, content BLOB,
                                     # content_hash TEXT, source TEXT, received_at_utc TEXT, updated_at_utc TEXT
@@ -1654,7 +1661,7 @@ def poll_winlink_job():
                                 now_iso = iso8601_ceil_utc()
                                 h = hashlib.sha256(data).hexdigest()
                                 with sqlite3.connect(DB_FILE) as conn:
-                                    conn.execute("PRAGMA busy_timeout=10000;")
+                                    # busy_timeout set globally in connect()
                                     conn.execute("""
                                     INSERT INTO weather_products
                                         (key, display_name, mime, content, content_hash, source, received_at_utc, updated_at_utc)
@@ -2630,13 +2637,13 @@ def cargo_request_reconciler():
       • Delete fully-satisfied lines (fulfilled_lb >= requested_lb).
       • Update last_processed_flight_id; idempotent across runs/restarts.
     """
+    BATCH_SIZE = 10
     try:
+        # Read state and flight list with a short-lived connection
         with sqlite3.connect(DB_FILE, timeout=30) as conn:
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA busy_timeout=30000;")
             self_alias_canons = _self_alias_canons()
 
-            # Guard: only run if cargo_requests table exists
             if not _table_exists(conn, "cargo_requests"):
                 try: LOG.info("cargo_request_reconciler: cargo_requests table not found; skipping.")
                 except Exception: pass
@@ -2648,7 +2655,6 @@ def cargo_request_reconciler():
             ).fetchone()
             last_id = int(state[0] or 0) if state else 0
 
-            # Consider only completed (landed) flights with id > last_id
             flights = conn.execute("""
               SELECT id,
                      airfield_takeoff,
@@ -2665,7 +2671,12 @@ def cargo_request_reconciler():
                 conn.execute("UPDATE cargo_reconciler_state SET last_run_utc=? WHERE id=1", (iso8601_ceil_utc(),))
                 return
 
-            for f in flights:
+        # Process in batches — release DB lock between batches
+        for batch_start in range(0, len(flights), BATCH_SIZE):
+          batch = flights[batch_start:batch_start + BATCH_SIZE]
+          with sqlite3.connect(DB_FILE, timeout=30) as conn:
+            conn.row_factory = sqlite3.Row
+            for f in batch:
                 fid  = int(f['id'])
                 takeoff = ((f['airfield_takeoff'] or '')).strip().upper()
                 dest    = ((f['airfield_landing'] or '')).strip().upper()
