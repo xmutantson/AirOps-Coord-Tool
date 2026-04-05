@@ -1397,8 +1397,15 @@ def delete_queued_flight(qid):
             #    NOTE: we do NOT touch pending rows here; the reaper owns that lifecycle.
 
             # 3a) baseline-only keys
+            logger.info("  base_net keys: %s", list(base_net.items()))
+            logger.info("  sess_net_by_key keys: %s", list(sess_net_by_key.items()))
+            logger.info("  sess_net_by_sid_key keys: %s", list(sess_net_by_sid_key.items()))
             for k, q in base_net.items():
-                if q == 0 or k in sess_net_by_key:
+                if q == 0:
+                    logger.info("  skip base %s: q=0", k)
+                    continue
+                if k in sess_net_by_key:
+                    logger.info("  skip base %s: in sess_net (will use session comp)", k)
                     continue
                 comp_dir = 'in' if q > 0 else 'out'
                 qty = abs(int(q))
@@ -1421,7 +1428,9 @@ def delete_queued_flight(qid):
 
             # 3b) session-backed keys (per session id)
             for sk, q in sess_net_by_sid_key.items():
+                logger.info("  sess comp: sk=%s q=%s", sk, q)
                 if q == 0:
+                    logger.info("    skip: q=0")
                     continue
                 sid, cat_id, key_name, wpu, _orig_lower = sk
                 k = (cat_id, key_name, wpu, _orig_lower)
