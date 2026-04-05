@@ -2523,9 +2523,14 @@ def api_manifest_delete_key(manifest_id: str):
         comp_id = cur.lastrowid
 
     # Report concise summary back to the client (session-only cancel).
-    return jsonify(ok=True, comp_id=comp_id, comp_dir=comp_dir,
-                   qty=qty, parts=[{'scope':'session','comp_dir':comp_dir,'qty':qty}],
-                   pending_committed=pending_committed), 200, {'Content-Type':'application/json'}
+    try:
+        return jsonify(ok=True, comp_id=comp_id, comp_dir=comp_dir,
+                       qty=qty, parts=[{'scope':'session','comp_dir':comp_dir,'qty':qty}],
+                       pending_committed=pending_committed), 200, {'Content-Type':'application/json'}
+    except UnboundLocalError:
+        # sess_total was 0 and fell through — shouldn't happen but guard it
+        return jsonify(ok=True, comp_id=None, comp_dir=None, qty=0,
+                       pending_committed=pending_committed), 200, {'Content-Type':'application/json'}
 
 @bp.post('/api/manifest/<manifest_id>/nudge')
 def api_manifest_nudge(manifest_id: str):

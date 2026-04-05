@@ -310,6 +310,34 @@
       e.target.closest('.mapping-row').remove();
     }
   });
+
+  // Validate airport codes on blur
+  let _validateTimer = null;
+  container.addEventListener('focusout', (e) => {
+    const inp = e.target.closest('.map-airport');
+    if (!inp) return;
+    const code = (inp.value || '').trim();
+    // Remove any previous warning
+    const prev = inp.parentElement.querySelector('.airport-warn');
+    if (prev) prev.remove();
+    inp.style.borderColor = '';
+    if (!code || code.length < 2) return;
+    clearTimeout(_validateTimer);
+    _validateTimer = setTimeout(async () => {
+      try {
+        const r = await fetch('/api/airport_exists/' + encodeURIComponent(code));
+        const j = await r.json();
+        if (!j.exists) {
+          inp.style.borderColor = '#e65100';
+          const warn = document.createElement('small');
+          warn.className = 'airport-warn';
+          warn.style.cssText = 'color:#e65100; display:block; margin-top:.15rem;';
+          warn.textContent = '"' + code + '" is not a known airport code';
+          inp.parentElement.appendChild(warn);
+        }
+      } catch(_){}
+    }, 200);
+  });
 })();
 </script>
 

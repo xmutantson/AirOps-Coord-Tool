@@ -552,14 +552,15 @@ document.addEventListener('DOMContentLoaded', function () {
 
   // Open on subject click
   document.getElementById('wl-inbox-table').addEventListener('click', function(ev){
-    const link = ev.target.closest('a.winlink-open-msg');
-    if (!link) return;
+    // Allow clicking anywhere on the row, not just the subject link
+    const row = ev.target.closest('tr[data-id]');
+    if (!row) return;
     ev.preventDefault();
-    const msg = wlMsgs.find(m => String(m.id) === String(link.dataset.msgId));
+    const msgId = row.dataset.id;
+    const msg = wlMsgs.find(m => String(m.id) === String(msgId));
     if (msg) {
       openMsgModal(msg);
       window.__wlCurrentMsg = msg;  // cache for Cargo Intake prefill
-      const row = link.closest('tr[data-id]');
       markRead(msg.id, row);
     }
   });
