@@ -170,8 +170,9 @@
       if (createEl) createEl.hidden = true;
       if (resultEl) resultEl.hidden = true;
 
-      // Move the captured burst to the scan box
+      // Clear scan box and place only the new burst
       if (kbd) {
+        clearScanBox();
         kbd.value = _burstField.buffer;
         kbd.focus();
         // Continue burst detection in the scan box from here
