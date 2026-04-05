@@ -1329,6 +1329,10 @@ def delete_queued_flight(qid):
               FROM flight_cargo
              WHERE queued_id=?
         """, (qid,)).fetchall()
+        logger.info("delete_queued_flight(%s): direction=%s, flight_cargo rows=%d", qid, direction, len(snap))
+        for _s in snap:
+            logger.info("  cargo: %s qty=%s dir=%s origin=%s sid=%s",
+                        _s['sanitized_name'], _s['quantity'], _s['direction'], _s['origin'], _s['session_id'])
 
         # Only compensate for OUTBOUND drafts. Inbound drafts are snapshots of inbound
         # receipts already committed by /api/apply_adv_manifest.
