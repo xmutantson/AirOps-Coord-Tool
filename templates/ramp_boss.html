@@ -2944,11 +2944,15 @@
         /* Do NOT prune while in snapshot mode — baseline chips must remain even
            when no new delta exists for a key. */
       } else {
-        items.forEach(it => {
+        console.debug('[_rbScanRefresh] NORMAL path, items:', items.length);
+        items.forEach((it, idx) => {
+          console.debug('  ['+idx+'] calling upsertScanChip:', it.sanitized_name, it.origin, it.qty);
           upsertScanChip(it);
           seen.add(keyOf(it.sanitized_name, it.weight_per_unit, (it.origin||'').trim()));
         });
+        console.debug('  seen keys:', [...seen]);
         pruneMissingScanChips(seen);
+        console.debug('  chips after prune:', document.querySelectorAll('.adv-chip').length);
       }
       rebuildTotalsAndRemarks();
       })();
