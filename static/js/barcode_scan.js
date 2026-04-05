@@ -122,72 +122,70 @@
     return (v === 'auto1') ? 'auto1' : 'prompt';
   }
 
-  // --- Scanner burst detection: even when a form field is focused ---------------
-  // Hand scanners type at inhuman speed (< 30ms between chars). When we detect
-  // such a burst while a form field is focused, close any open tool and redirect
-  // to the scan box so the barcode is captured correctly.
-  let _burstField = { chars: 0, lastTs: 0, field: null, buffer: '' };
-  const BURST_CHAR_GAP_MS = 40;  // max ms between chars to count as scanner
-  const BURST_MIN_CHARS   = 6;   // min chars in burst to trigger redirect
+  // --- Scanner burst detection: preempts typing into any focused field ----------
+  // Hand scanners type at inhuman speed (<40ms between chars). We detect the
+  // burst after just 3 fast chars, immediately redirect to the scan box, and
+  // let the rest of the barcode land there. Once redirected, the normal burst
+  // timer (120ms idle) handles lookup.
+  let _bf = { chars: 0, lastTs: 0, redirected: false, buf: '' };
+  const BURST_GAP_MS  = 40;  // max ms between chars to count as scanner
+  const BURST_TRIGGER = 3;   // chars needed to confirm scanner burst
 
   document.addEventListener('keydown', (e) => {
+    if (!kbd) return;
     const ae = document.activeElement;
-    if (!ae || ae === kbd) return; // already in scan box — handled by existing logic
-    if (!isTypingElement(ae)) return; // not in a form field — handled by existing redirect
+    // If already in the scan box, let the existing handler deal with it
+    if (ae === kbd) { _bf.redirected = false; _bf.buf = ''; return; }
 
     const key = e.key || '';
-    if (key.length !== 1 && key !== 'Enter') return; // only printable + enter
+    if (key.length !== 1 && key !== 'Enter') return;
 
     const now = performance.now();
-    const gap = now - _burstField.lastTs;
+    const gap = now - _bf.lastTs;
+    _bf.lastTs = now;
 
-    if (gap > BURST_CHAR_GAP_MS || ae !== _burstField.field) {
-      // New burst or different field — reset
-      _burstField = { chars: 1, lastTs: now, field: ae, buffer: key === 'Enter' ? '' : key };
+    if (gap > BURST_GAP_MS) {
+      // Gap too large — reset burst counter (could be human typing)
+      _bf.chars = 1;
+      _bf.buf = (key !== 'Enter') ? key : '';
+      _bf.redirected = false;
       return;
     }
 
-    _burstField.chars++;
-    _burstField.lastTs = now;
-    if (key !== 'Enter') _burstField.buffer += key;
+    _bf.chars++;
+    if (key !== 'Enter') _bf.buf += key;
 
-    if (_burstField.chars >= BURST_MIN_CHARS) {
-      // Scanner detected! Close any open tool and redirect to scan box.
+    // Already redirected — scanner chars are going to kbd, nothing to do
+    if (_bf.redirected) return;
+
+    if (_bf.chars >= BURST_TRIGGER) {
+      // Scanner confirmed. Redirect NOW.
+      _bf.redirected = true;
       e.preventDefault();
       e.stopPropagation();
 
-      // Undo what the scanner already typed into the focused field
-      if (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA') {
-        // Strip the burst chars from the end of the field value
-        const val = ae.value || '';
-        const buf = _burstField.buffer;
-        if (val.endsWith(buf.slice(0, -1))) {
-          ae.value = val.slice(0, val.length - (buf.length - 1));
-        }
+      // Undo what the scanner typed into the focused field
+      if (ae && isTypingElement(ae) && ae !== kbd) {
+        ae.value = '';
+        ae.blur();
       }
 
-      // Close open tools (unknown-item form, known-item card)
+      // Close any open scan tool
       if (createEl) createEl.hidden = true;
       if (resultEl) resultEl.hidden = true;
 
-      // Clear scan box and place only the new burst
-      if (kbd) {
-        clearScanBox();
-        kbd.value = _burstField.buffer;
-        kbd.focus();
-        // Continue burst detection in the scan box from here
-        burstChars = _burstField.chars;
-        clearTimeout(burstTimer);
-        burstTimer = setTimeout(() => {
-          if (burstChars >= 5) handleCode(kbd.value);
-          burstChars = 0;
-        }, 120);
-      }
-
-      _burstField = { chars: 0, lastTs: 0, field: null, buffer: '' };
-      return;
+      // Clear scan box, prepend captured chars, focus — rest of burst lands here
+      clearScanBox();
+      kbd.value = _bf.buf;
+      kbd.focus();
+      kbd.setSelectionRange(kbd.value.length, kbd.value.length);
+      // Kick the normal burst timer to handle lookup after scanner finishes
+      burstChars = _bf.chars;
+      clearTimeout(burstTimer);
+      burstTimer = setTimeout(() => { if (burstChars >= 5) handleCode(kbd.value); burstChars = 0; }, 120);
+      _bf.buf = '';
     }
-  }, true); // capture phase to intercept before field handlers
+  }, true); // capture phase — runs before field input handlers
 
   // --- Global redirect of scanner keystrokes when nothing is focused -----------
   function isTypingElement(el){
@@ -214,12 +212,17 @@
       e.preventDefault();
       return handleCode(kbd.value);
     }
+    // New burst starting? Clear stale data from previous scan.
+    if (burstChars === 0 && kbd.value.length > 0) {
+      clearScanBox();
+      // Close any open tool so the new scan starts fresh
+      if (createEl) createEl.hidden = true;
+      if (resultEl) resultEl.hidden = true;
+    }
     // Swallow this first key and inject it so the burst continues in the field.
     e.preventDefault();
-    const start = kbd.selectionStart ?? kbd.value.length;
-    const end   = kbd.selectionEnd   ?? kbd.value.length;
-    kbd.value = kbd.value.slice(0,start) + key + kbd.value.slice(end);
-    kbd.setSelectionRange(start+1, start+1);
+    kbd.value = kbd.value + key;
+    kbd.setSelectionRange(kbd.value.length, kbd.value.length);
     // Kick the existing burst-detection so “idle ≥120ms” triggers lookup.
     burstChars++; clearTimeout(burstTimer);
     burstTimer = setTimeout(() => { if (burstChars >= 5) handleCode(kbd.value); burstChars = 0; }, 120);
