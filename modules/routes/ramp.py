@@ -1346,7 +1346,7 @@ def delete_queued_flight(qid):
             sess_ids = set()
             for r in snap:
                 try:
-                    orig = (r.get('origin') or '').strip()
+                    orig = (r['origin'] or '').strip()
                     k = (int(r['category_id']),
                          (r['sanitized_name'] or '').strip().lower(),
                          float(r['weight_per_unit']),
@@ -1380,7 +1380,7 @@ def delete_queued_flight(qid):
                    GROUP BY session_id, category_id, LOWER(sanitized_name), CAST(weight_per_unit AS REAL), COALESCE(origin,'')
                 """, tuple(sess_ids)).fetchall()
                 for r in rows:
-                    orig = (r.get('origin') or '').strip()
+                    orig = (r['origin'] or '').strip()
                     k  = (int(r['cat']), (r['key_name'] or '').strip(), float(r['wpu']), orig.lower())
                     sk = (str(r['sid']),) + k
                     q  = int(r['net_qty'] or 0)
