@@ -389,7 +389,7 @@
     });
     return map;
   }
-  async function submitForServerPrintAndOpenNewTab(){
+  async function submitWaiverToServer(){
     if (!canPrintNow()) { guardPrint(); return; }
     const isPilot = !!document.getElementById('pilot');
     const endpoint = isPilot ? '/docs/waiver/pilot/print' : '/docs/waiver/volunteer/print';
@@ -416,47 +416,61 @@
     if (sig && sig.value) params.set(isPilot?'pilot_signature_b64':'volunteer_signature_b64', sig.value);
     if (wit && wit.value) params.set('witness_signature_b64', wit.value);
 
-    // Request print-mode HTML, then open in a NEW TAB so this page stays put.
-    const res = await fetch(endpoint, {
+    // Submit to server (persists PDF) but don't open new tab
+    await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8' },
       body: params.toString()
     });
-    const html = await res.text();
-    const w = window.open('', '_blank');
-    if (w) { w.document.write(html); w.document.close(); }
   }
   // Hook our dedicated button
   document.addEventListener('click', (e)=>{
     const btn = e.target.closest('#print-submit');
     if (!btn) return;
     e.preventDefault();
-    // First click: do the print in a new tab
-    submitForServerPrintAndOpenNewTab().catch(()=>{});
-    // Then transform this button based on which waiver we're on
+
+    // Ask if they want to print
+    const wantPrint = confirm('Do you want to print this waiver?');
+
+    // Submit to server (saves PDF regardless)
+    submitWaiverToServer().catch(()=>{});
+
+    if (wantPrint) {
+      // Print current page — no new tab
+      window.print();
+    }
+
+    // Transform button to "Complete — Return to Dashboard"
     try {
       const q = new URLSearchParams(location.search);
       const staffId = q.get('staff_id') || '';
-      // Determine section (already computed at top of file)
       const isPilot = (section === 'pilot');
-      let nextUrl, nextLabel;
-      if (isPilot) {
-        nextUrl   = staffId ? (`/aircraft/new?staff_id=${encodeURIComponent(staffId)}`) : '/aircraft';
-        nextLabel = 'Continue to Pilot & Aircraft Information';
-      } else {
-        // volunteers should go back to Duty Roster (match pai_print.html)
-        nextUrl   = '/supervisor/staff?window=all';
-        nextLabel = 'Return to Duty Roster';
-      }
 
-      // If a ?return=/path is present, prefer it (same-origin only, path-absolute)
+      // Default: return to dashboard
+      let nextUrl = '/';
+      let nextLabel = 'Complete — Return to Dashboard';
+
+      // If a ?return=/path is present, prefer it
       const ret = (q.get('return') || '').trim();
       if (ret && ret.startsWith('/')) {
         nextUrl = ret;
       }
 
+      // For pilots, offer aircraft info form
+      if (isPilot && !ret) {
+        nextUrl   = staffId ? (`/aircraft/new?staff_id=${encodeURIComponent(staffId)}`) : '/aircraft';
+        nextLabel = 'Continue to Pilot & Aircraft Information';
+
+        // Add a second button for "just go to dashboard"
+        const dashBtn = document.createElement('button');
+        dashBtn.className = 'button btn-secondary';
+        dashBtn.textContent = 'Return to Dashboard';
+        dashBtn.onclick = () => { window.location.href = '/'; };
+        btn.parentElement.appendChild(dashBtn);
+      }
+
       btn.textContent = nextLabel;
-      btn.id = 'continue-to-pai';
+      btn.id = 'continue-after-waiver';
       btn.classList.remove('btn-primary');
       btn.classList.add('btn-secondary');
       btn.disabled = false;
