@@ -2320,6 +2320,7 @@ def _api_manifest_delete_key_impl(manifest_id: str):
         data = request.get_json(silent=True) or {}
         name = (data.get('sanitized_name') or '').strip()
         wpu  = float(data.get('weight_per_unit'))
+        item_origin = (data.get('origin') or '').strip()
         # Optional hints so we can include baseline snapshot nets in compensation
         draft_id  = data.get('draft_id', None)    # queued draft baseline
         flight_id = data.get('flight_id', None)   # flight baseline
@@ -2492,8 +2493,8 @@ def _api_manifest_delete_key_impl(manifest_id: str):
                         cat_id = int(any_hist['category_id']) if any_hist and any_hist['category_id'] is not None else 1
                 cur = c.execute("""
                   INSERT INTO inventory_entries(category_id,raw_name,sanitized_name,weight_per_unit,quantity,total_weight,direction,timestamp,pending,pending_ts,session_id,source,origin)
-                  VALUES (?,?,?,?,?,?,?, ?,0,NULL,?, 'chip-delete/base-fallback', '')
-                """, (cat_id, name, name, wpu, base_qty, float(wpu)*base_qty, comp_dir, now, manifest_id))
+                  VALUES (?,?,?,?,?,?,?, ?,0,NULL,?, 'chip-delete/base-fallback', ?)
+                """, (cat_id, name, name, wpu, base_qty, float(wpu)*base_qty, comp_dir, now, manifest_id, item_origin))
                 comp_id = cur.lastrowid
                 return jsonify(ok=True, comp_id=comp_id, comp_dir=comp_dir, qty=base_qty, pending_committed=pending_committed), 200, {'Content-Type':'application/json'}
             return jsonify(ok=True, comp_id=None, comp_dir=None, qty=0, pending_committed=pending_committed)
@@ -2545,7 +2546,7 @@ def _api_manifest_delete_key_impl(manifest_id: str):
           cat_id, name, name,
           wpu, qty, float(wpu) * qty,
           comp_dir, now, 0, None,
-          manifest_id, 'chip-delete-all/sess-total', ''
+          manifest_id, 'chip-delete-all/sess-total', item_origin
         ))
         comp_id = cur.lastrowid
 

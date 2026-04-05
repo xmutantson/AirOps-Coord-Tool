@@ -2150,6 +2150,7 @@
         body: JSON.stringify({
           sanitized_name: name,
           weight_per_unit: Number(wpu),
+          origin: origin || '',
           draft_id: (typeof draftId !== 'undefined' ? draftId : null),
           flight_id: (typeof flightId !== 'undefined' ? flightId : null),
           // explicit: do NOT let server mint compensators
@@ -2177,7 +2178,8 @@
         name:        name,
         weight:      String(Number(wpu)),
         wunit:       'lbs',
-        qty:         String(compInboundQty)
+        qty:         String(compInboundQty),
+        origin:      origin || ''
       });
       let ok = false;
       try { console.debug?.('[X-delete] inbound compensator', { name, wpu:Number(wpu), qty:compInboundQty, category_id:catId, baseQty, inSnapshot }); } catch(_){}
