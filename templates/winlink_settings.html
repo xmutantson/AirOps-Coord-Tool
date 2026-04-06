@@ -36,11 +36,12 @@
     <button type="button" id="add-mapping" class="block-btn">+ Add mapping</button>
 
     <h3 style="margin-top:2em;">WinLink CC Addresses</h3>
-    <div class="cc-row">
+    <div style="display:flex; flex-direction:column; gap:.5rem;">
       {% for idx in [1,2,3] %}
         <input name="winlink_cc_{{ idx }}" class="map-cc"
                value="{{ (winlink_cc_1,winlink_cc_2,winlink_cc_3)[idx-1] }}"
                placeholder="CC Address #{{ idx }}"
+               style="width:100%;"
                oninput="this.value=this.value.toUpperCase()">
       {% endfor %}
     </div>

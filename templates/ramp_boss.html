@@ -284,7 +284,7 @@
       <input id="pilot" name="pilot_name" style="min-width:10ch"
              value="{{ d.get('pilot_name','') }}">
 
-      <label for="pax">PAX #</label>
+      <label for="pax">Passengers (PAX) #</label>
       <input id="pax" name="pax_count" placeholder="e.g. 3" style="min-width:10ch"
              value="{{ d.get('pax_count','') }}">
 
@@ -324,16 +324,16 @@
         </div>
       {% else %}
         <div class="cargo-tools-toggle" style="display:flex; gap:.5rem;">
-          <button type="button" id="open-adv" title="Cargo Entry" style="flex:1;">
-            Cargo Entry
-          </button>
           <button type="button" id="open-cw-tools" title="Running Total" style="flex:0 0 auto;">
             Running Total
+          </button>
+          <button type="button" id="open-adv" title="Cargo Entry" style="flex:1;">
+            Cargo Entry
           </button>
         </div>
       {% endif %}
 
-      <label for="cargo_type" style="color:#888;">Cargo Type <small class="muted">(autofilled from Cargo Entry)</small></label>
+      <label for="cargo_type" style="color:#888;">Cargo Type <small class="muted">(autofilled)</small></label>
       <input id="cargo_type" name="cargo_type" style="min-width:10ch; color:#666;"
              placeholder="Autofilled"
              value="{{ d.get('cargo_type','') }}">
@@ -1109,7 +1109,6 @@
           if (ap.ok) {
             try {
               const j = await ap.json();
-              console.debug('apply_adv_manifest result', j);
             } catch(_){}
             closeDetectModal();
             // small toast
@@ -1292,7 +1291,6 @@
                     const d = findDeltaChip(dn, dw, dorg);
                     if (d) d.remove();
                     // baseline chip was already updated above from effective_qty
-                    console.debug('[nudge] suppressed Δ− in snapshot mode', { dn, dw });
                   } catch(_) {}
                   return res;
                 }
@@ -1396,7 +1394,6 @@
         try {
           const k = `${normName(name)}|${Number(wpu)}|`;
           (window.__RB_SNAPSHOT_BASE = window.__RB_SNAPSHOT_BASE || new Map()).set(k, Number(qty));
-          console.debug?.('[RB-SNAPSHOT:BASE]', { key:k, baseQty: qty });
         } catch(_) {}
         if (typeof window._rbUpsertChip === 'function') {
           window._rbUpsertChip({ sanitized_name: name, weight_per_unit: wpu, qty, total: tot });
@@ -2670,15 +2667,12 @@
       const qty  = Number(item.qty||0);
       const tot  = Math.round(wpu * qty * 100) / 100;
       const _dbgKey = `${name}|${wpu}|${origin}`;
-      console.debug('[upsertScanChip]', _dbgKey, 'qty='+qty);
       // Prefer a baseline chip; if only a delta chip exists, rehydrate it to baseline
       let chip   = (typeof window.findBaselineChip === 'function')
                      ? window.findBaselineChip(name, wpu, origin)
                      : null;
-      console.debug('  findBaselineChip:', chip ? 'FOUND' : 'null');
       if (!chip && typeof window.findDeltaChip === 'function') {
         const d = window.findDeltaChip(name, wpu, origin);
-        console.debug('  findDeltaChip:', d ? 'FOUND' : 'null');
         if (d) {
           try {
             // strip delta markers so CSS no longer hides it
@@ -2691,7 +2685,6 @@
       }
       // Fallback: no chip at all — create a fresh baseline chip
       if (!chip) chip = findChipByKey(name, wpu, origin);
-      console.debug('  findChipByKey:', chip ? ('FOUND key='+chip.dataset.key) : 'null -> CREATING');
       // Try to carry a category for this chip so Cargo Type can be derived later.
       // Prefer server-provided category_name, else infer from local inventory map.
       const catName = (item.category_name || item.category || _guessCatForItem(name) || '');
@@ -2926,7 +2919,6 @@
           }   /* !baseChip */
           // Helpful trace: show what we're merging for this key
           try {
-            console.debug('[RB-SNAPSHOT] merge', {
               name, wpu,
               baseQty: baseChip ? (baseChip.dataset.qty || '') : '',
               baseEffective: baseChip ? (baseChip.dataset.effective || '') : '',
@@ -2945,15 +2937,11 @@
         /* Do NOT prune while in snapshot mode — baseline chips must remain even
            when no new delta exists for a key. */
       } else {
-        console.debug('[_rbScanRefresh] NORMAL path, items:', items.length);
         items.forEach((it, idx) => {
-          console.debug('  ['+idx+'] calling upsertScanChip:', it.sanitized_name, it.origin, it.qty);
           upsertScanChip(it);
           seen.add(keyOf(it.sanitized_name, it.weight_per_unit, (it.origin||'').trim()));
         });
-        console.debug('  seen keys:', [...seen]);
         pruneMissingScanChips(seen);
-        console.debug('  chips after prune:', document.querySelectorAll('.adv-chip').length);
       }
       rebuildTotalsAndRemarks();
       })();
@@ -3031,7 +3019,6 @@
         });
         try { j = await resp.clone().json(); } catch(_){}
         try {
-          console.debug(
             useNudge ? '[RB-SCAN->NUDGE]' : '[RB-SCAN]',
             {
               endpoint,
@@ -3186,7 +3173,6 @@
         if (mode === 'add' && changedKNet && deltaNet > 0) {
           (window.__RB_ZEROED = window.__RB_ZEROED || new Set()).delete(changedKNet);
           // Do NOT delete from __RB_SNAPSHOT_BASE here; it is the echo guard.
-          console.debug?.('[RB-GUARDS] cleared ZEROED for add', { key: changedKNet });
         }
       } catch(_) {}
 
@@ -3220,7 +3206,6 @@
               await fetchInventory();
             }
             try {
-              console.debug('rb-scan gate', {
                 key: k, beforeQty, afterQty, delta, availSnapshot,
                 remaining: SESSION_AVAIL_CAPS.get(k)
               });
@@ -3374,7 +3359,6 @@
         // Also reset local clamp offsets & barcode map for a fresh session
         if (window.__RB_CLAMP_OFFSETS) window.__RB_CLAMP_OFFSETS.clear();
         if (window.__RB_BARCODE_MAP)   window.__RB_BARCODE_MAP.clear();
-        console.debug?.('[RB-GUARDS] reset on startAdvanced');
       } catch(_) {}
       const dir = document.querySelector('input[name="direction"]:checked')?.value || 'outbound';
       // ── 1) Reuse the session id if we already generated one earlier ──
