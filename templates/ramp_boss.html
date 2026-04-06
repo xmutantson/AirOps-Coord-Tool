@@ -366,11 +366,11 @@
           <!-- Persistent Print Labels button (enabled once a flight_id is known) -->
           <a id="rb-print-labels"
              href="#"
-             target="_blank" rel="noopener"
+             onclick="event.preventDefault();if(this.href&&this.href!=='#')printViaIframe(this.href);"
              class="btn-secondary"
              title="Print cargo labels"
              data-force-hidden="1" hidden aria-hidden="true" aria-disabled="true"
-             style="margin-left:auto; display:none; opacity:.5; pointer-events:none;">📦 Print Labels</a>
+             style="margin-left:auto; display:none; opacity:.5; pointer-events:none; cursor:pointer;">📦 Print Labels</a>
           {# ───── Pilot Ack gating UI (only in edit-draft mode) ───── #}
           {% set _acked = d.get('pilot_ack_at') %}
           <div id="rb-ack-row"
@@ -379,7 +379,7 @@
                style="display:none; gap:.5rem; align-items:center;">
             <a id="rb-manifest" class="btn-secondary"
                href="{{ url_for('ramp.view_manifest_pdf', queue_id=d.id) }}"
-               target="_blank"
+               onclick="event.preventDefault();printViaIframe(this.href);"
                {% if not _acked %}style="display:none"{% endif %}>View Manifest PDF</a>
             <small class="muted">Ack: <span id="rb-ack-ts">{% if _acked %}{{ _acked }}{% else %}—{% endif %}</span></small>
           </div>
@@ -401,11 +401,11 @@
           <!-- Persistent Print Labels button (enabled once a flight_id is known) -->
           <a id="rb-print-labels"
              href="#"
-             target="_blank" rel="noopener"
+             onclick="event.preventDefault();if(this.href&&this.href!=='#')printViaIframe(this.href);"
              class="btn-secondary is-hidden"
              title="Print cargo labels"
              data-force-hidden="1" hidden aria-hidden="true" aria-disabled="true"
-             style="margin-left:auto; display:none; opacity:.5; pointer-events:none;">📦 Print Labels</a>
+             style="margin-left:auto; display:none; opacity:.5; pointer-events:none; cursor:pointer;">📦 Print Labels</a>
         {% endif %}
       </div>
     </form>
@@ -1571,7 +1571,7 @@
       if (!url || url === '#') return;
       try {
         // Many builds allow simple HTML in toasts — if not, we drop a small inline link below.
-        window.showToast(`Labels ready — <a href="${url}" target="_blank" rel="noopener">Print</a>`, 'success');
+        window.showToast(`Labels ready — <a href="${url}" onclick="event.preventDefault();printViaIframe(this.href);" style="cursor:pointer;">Print</a>`, 'success');
       } catch(_){}
       // Fallback inline link for environments where toast strips HTML:
       try {
@@ -1579,7 +1579,7 @@
         const div = document.createElement('div');
         div.className = 'muted';
         div.style.marginTop = '.5rem';
-        div.innerHTML = `Labels ready — <a href="${url}" target="_blank" rel="noopener">Print</a>`;
+        div.innerHTML = `Labels ready — <a href="${url}" onclick="event.preventDefault();printViaIframe(this.href);" style="cursor:pointer;">Print</a>`;
         box.appendChild(div);
         setTimeout(()=>{ try{div.remove();}catch(_){} }, 8000);
       } catch(_){}

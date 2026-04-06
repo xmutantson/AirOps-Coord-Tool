@@ -407,8 +407,25 @@
       @media print { body { margin: 0; } }
       .labels-page { display: grid; grid-template-columns: 1fr 1fr; gap: 4mm; margin-bottom: 4mm; }
       .label-card { font-size: 9px; }
+    {% elif ls == '4x6' %}
+      /* 4x6 shipping label: fixed-size divs for standard 4"x6" label printers */
+      @page { size: 4in 6in; margin: 0; }
+      @media print { body { margin: 0; padding: 0; } }
+      .labels-page { display: block; }
+      .label-card {
+        width: 3.75in;    /* 4in minus small margins */
+        height: 5.5in;    /* 6in minus margins -- content won't overflow */
+        max-height: 5.5in;
+        margin: 0 auto;
+        page-break-after: always;
+        font-size: 11px;
+        padding: 0.125in;
+      }
+      .label-card h3 { font-size: 14px; margin-bottom: 2mm; }
+      .label-card td { font-size: 11px; padding: 1mm 2mm; }
+      .label-card td:first-child { width: 22%; }
     {% elif ls == 'shipping' %}
-      /* 4x6 shipping: one label per page, sized to fit 62mm wide continuous tape */
+      /* 62mm tape shipping: one label per cut, sized for Brother QL DK-2205 */
       @page { size: 62mm auto; margin: 2mm; }
       @media print { body { margin: 0; width: 62mm; } }
       .labels-page { display: block; }
@@ -449,7 +466,9 @@
   </style>
 
   <div class="label-size-hint">
-    {% if ls == 'shipping' %}
+    {% if ls == '4x6' %}
+      Printing for <strong>4x6 shipping labels</strong>. Select your label printer and set paper size to 4"x6" in the print dialog.
+    {% elif ls == 'shipping' %}
       Printing for <strong>62mm continuous tape</strong> (Brother QL, DK-2205). Select your label printer in the print dialog.
     {% elif ls == 'address' %}
       Printing <strong>compact tags</strong> for <strong>62mm tape</strong> (Brother QL, DK-2205). Shorter cut length for inventory tags.
@@ -458,13 +477,14 @@
     {% endif %}
   </div>
 
-  {% set batch_size = 1 if ls in ('shipping','address') else 4 %}
+  {% set batch_size = 1 if ls in ('shipping','address','4x6') else 4 %}
   {% for page in labels|batch(batch_size, fill_with=None) %}
   <section class="labels-page">
     <span id="labels-dart" hidden></span>
     {% for label in page if label %}
       <div class="label-card">
         <h3>CARGO ID{% if label.unit_label %} <span style="float:right;">{{ label.unit_label }}</span>{% endif %}</h3>
+        {% if label.barcode %}<div style="text-align:center;margin:1mm 0;"><svg class="js-barcode" data-barcode="{{ label.barcode }}"></svg></div>{% endif %}
         <table>
           <tr><td>Mission:</td><td>{{ mission_number or label.mission or "" }}</td></tr>
           {% if label.tail %}<tr><td>Tail #:</td><td>{{ label.tail }}</td></tr>{% endif %}
@@ -479,6 +499,132 @@
     {% endfor %}
   </section>
   {% endfor %}
+  {# Render barcodes on cargo labels if any have barcode data #}
+  <script src="{{ url_for('static', filename='js/jsbarcode.min.js') }}"></script>
+  <script>
+    document.querySelectorAll('.label-card .js-barcode').forEach(function(el) {
+      try {
+        var ls = '{{ label_size|default("letter") }}';
+        JsBarcode(el, el.dataset.barcode, {
+          format: 'CODE128',
+          width: (ls === 'shipping' || ls === 'address') ? 1 : (ls === '4x6' ? 1.5 : 1.2),
+          height: (ls === 'shipping' || ls === 'address') ? 20 : (ls === '4x6' ? 35 : 25),
+          displayValue: true,
+          fontSize: (ls === 'shipping' || ls === 'address') ? 8 : 10,
+          margin: 1,
+          textMargin: 0
+        });
+      } catch(e) {
+        el.textContent = el.dataset.barcode;
+      }
+    });
+  </script>
+  {% endif %}
+
+  {# ============== INVENTORY TAG LABELS (with barcode) ============== #}
+  {% if _section == "inventory_tags" %}
+  {% set ls = label_size|default('address') %}
+  <style>
+    .inv-tag {
+      border: 1px solid #333;
+      border-radius: 3px;
+      box-sizing: border-box;
+      page-break-inside: avoid;
+      text-align: center;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    }
+    .inv-tag .tag-barcode svg { display: block; margin: 0 auto; }
+    .inv-tag .tag-name { font-weight: 700; margin: 1mm 0 0; }
+    .inv-tag .tag-meta { color: #444; }
+    .inv-tag .tag-unit { font-size: 0.85em; color: #666; }
+
+    {% if ls == 'letter' %}
+      @page { size: letter; margin: 10mm; }
+      @media print { body { margin: 0; } }
+      .inv-tags-page { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4mm; margin-bottom: 4mm; }
+      .inv-tag { padding: 3mm; font-size: 9px; }
+      .inv-tag .tag-name { font-size: 11px; }
+      .inv-tag .tag-meta { font-size: 9px; }
+    {% elif ls == '4x6' %}
+      @page { size: 4in 6in; margin: 0; }
+      @media print { body { margin: 0; padding: 0; } }
+      .inv-tags-page { display: block; }
+      .inv-tag {
+        width: 3.75in; margin: 0 auto; padding: 0.125in;
+        page-break-after: always; font-size: 12px;
+      }
+      .inv-tag .tag-name { font-size: 16px; }
+      .inv-tag .tag-meta { font-size: 12px; }
+    {% elif ls == 'shipping' %}
+      @page { size: 62mm auto; margin: 2mm; }
+      @media print { body { margin: 0; width: 62mm; } }
+      .inv-tags-page { display: block; }
+      .inv-tag {
+        width: 58mm; margin: 0 auto 2mm; padding: 2mm;
+        page-break-after: always; font-size: 8px;
+      }
+      .inv-tag .tag-name { font-size: 9px; }
+      .inv-tag .tag-meta { font-size: 7px; }
+    {% else %}{# address (default) #}
+      @page { size: 62mm auto; margin: 1mm; }
+      @media print { body { margin: 0; width: 62mm; } }
+      .inv-tags-page { display: block; }
+      .inv-tag {
+        width: 58mm; margin: 0 auto 1mm; padding: 1.5mm;
+        page-break-after: always; font-size: 7px;
+      }
+      .inv-tag .tag-name { font-size: 8px; }
+      .inv-tag .tag-meta { font-size: 6px; }
+    {% endif %}
+
+    @media screen {
+      .inv-tag-hint {
+        background: #d4edda; border: 1px solid #28a745; border-radius: 4px;
+        padding: 8px 12px; margin-bottom: 10px; font-size: 13px;
+      }
+    }
+    @media print { .inv-tag-hint { display: none; } }
+  </style>
+
+  <div class="inv-tag-hint">
+    Printing <strong>inventory tags</strong> with barcodes.
+    {% if ls in ('shipping','address') %} Sized for <strong>62mm tape</strong> (Brother QL, DK-2205).{% endif %}
+    {% if ls == '4x6' %} Sized for <strong>4x6 labels</strong>.{% endif %}
+    {% if ls == 'letter' %} Sized for <strong>Letter/A4</strong> (cut apart).{% endif %}
+  </div>
+
+  {% set batch_size = 1 if ls in ('shipping','address','4x6') else 6 %}
+  {% for page in inv_tags|batch(batch_size, fill_with=None) %}
+  <section class="inv-tags-page">
+    {% for tag in page if tag %}
+      <div class="inv-tag">
+        <div class="tag-barcode"><svg class="js-barcode" data-barcode="{{ tag.barcode }}"></svg></div>
+        <div class="tag-name">{{ tag.name }}</div>
+        <div class="tag-meta">{{ tag.weight_lb }} lb{% if tag.origin %} | {{ tag.origin }}{% endif %}</div>
+        {% if tag.unit_label %}<div class="tag-unit">{{ tag.unit_label }}</div>{% endif %}
+      </div>
+    {% endfor %}
+  </section>
+  {% endfor %}
+
+  <script src="{{ url_for('static', filename='js/jsbarcode.min.js') }}"></script>
+  <script>
+    document.querySelectorAll('.js-barcode').forEach(function(el) {
+      try {
+        JsBarcode(el, el.dataset.barcode, {
+          format: 'CODE128',
+          width: {% if ls in ('shipping','address') %}1{% elif ls == '4x6' %}2{% else %}1.5{% endif %},
+          height: {% if ls in ('shipping','address') %}25{% elif ls == '4x6' %}50{% else %}35{% endif %},
+          displayValue: true,
+          fontSize: {% if ls in ('shipping','address') %}10{% elif ls == '4x6' %}14{% else %}11{% endif %},
+          margin: 2,
+          textMargin: 1
+        });
+      } catch(e) {
+        el.textContent = el.dataset.barcode;
+      }
+    });
+  </script>
   {% endif %}
 </div>
 {% endblock %}
@@ -489,10 +635,13 @@
 {% if print_mode %}
 <script>
   // In print mode, open the print dialog once after layout settles.
-  window.addEventListener('load', () => {
-    const kick = () => { try { window.focus(); window.print(); } catch(_) {} };
-    requestAnimationFrame(() => setTimeout(kick, 0));
-  });
+  // Skip if loaded inside a hidden iframe (parent handles print via printViaIframe).
+  if (window.self === window.top) {
+    window.addEventListener('load', () => {
+      const kick = () => { try { window.focus(); window.print(); } catch(_) {} };
+      requestAnimationFrame(() => setTimeout(kick, 0));
+    });
+  }
 </script>
 {% endif %}
 {% endblock %}

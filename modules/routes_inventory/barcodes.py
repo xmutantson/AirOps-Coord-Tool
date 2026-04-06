@@ -1,5 +1,6 @@
 # modules/routes_inventory/barcodes.py
 import csv
+import hashlib
 import io
 import sqlite3
 from datetime import datetime
@@ -366,6 +367,90 @@ def api_save_barcode_mapping():
         "barcode": barcode, "category_id": cid, "sanitized_name": name,
         "raw_name": (raw_in or name), "weight_per_unit": wpu
     }})
+
+
+def _generate_barcode_id(category_id, sanitized_name, weight_per_unit):
+    """Generate a deterministic Code128-safe barcode: AOT-{cat}-{6-char hash}."""
+    key = f"{category_id}|{sanitized_name}|{weight_per_unit:.4f}"
+    h = hashlib.sha256(key.encode()).hexdigest()[:6].upper()
+    return f"AOT-{category_id}-{h}"
+
+
+@bp.route("/api/generate_barcode", methods=["POST"])
+def api_generate_barcode():
+    """Generate (or return existing) barcode for an item that lacks one.
+
+    Body (JSON or form):
+      category_id      (int, required)
+      name             (str, required)
+      weight_per_unit  (float, required)
+      raw_name         (str, optional)
+
+    Returns: {status, barcode, item, created}
+    """
+    _ensure_barcode_schema()
+    d = request.get_json(silent=True) or request.form
+    name_in = (d.get("name") or "").strip()
+    raw_in = (d.get("raw_name") or "").strip()
+    try:
+        cid = int(d.get("category_id") or 0)
+    except Exception:
+        cid = 0
+    try:
+        wpu = float(d.get("weight_per_unit") or 0)
+    except Exception:
+        wpu = 0.0
+    if not (name_in and cid > 0 and wpu > 0):
+        return jsonify({"status": "error", "message": "Missing or invalid fields"}), 400
+    name = sanitize_name(name_in)
+
+    # Check if this item already has a barcode
+    with sqlite3.connect(DB_FILE) as c:
+        c.row_factory = sqlite3.Row
+        existing = c.execute(
+            """SELECT barcode FROM inventory_barcodes
+               WHERE category_id=? AND sanitized_name=?
+                 AND ABS(weight_per_unit - ?) < 0.001
+                 AND (deleted=0 OR deleted IS NULL)
+               LIMIT 1""",
+            (cid, name, wpu),
+        ).fetchone()
+        if existing:
+            return jsonify({
+                "status": "ok", "barcode": existing["barcode"],
+                "item": {"barcode": existing["barcode"], "category_id": cid,
+                         "sanitized_name": name, "weight_per_unit": wpu},
+                "created": False,
+            })
+
+        # Generate a new deterministic barcode
+        barcode = _generate_barcode_id(cid, name, wpu)
+        # Handle unlikely collision (append suffix)
+        collision = c.execute(
+            "SELECT 1 FROM inventory_barcodes WHERE barcode=?", (barcode,)
+        ).fetchone()
+        if collision:
+            barcode = barcode + "-" + hashlib.sha256(
+                f"{barcode}{datetime.utcnow().isoformat()}".encode()
+            ).hexdigest()[:4].upper()
+
+        now = datetime.utcnow().isoformat()
+        c.execute(
+            """INSERT INTO inventory_barcodes(barcode, category_id, sanitized_name,
+                 raw_name, weight_per_unit, created_at, updated_at, deleted)
+               VALUES (?,?,?,?,?,?,?,0)""",
+            (barcode, cid, name, raw_in or name, wpu, now, now),
+        )
+        c.commit()
+
+    return jsonify({
+        "status": "ok", "barcode": barcode,
+        "item": {"barcode": barcode, "category_id": cid,
+                 "sanitized_name": name, "raw_name": raw_in or name,
+                 "weight_per_unit": wpu},
+        "created": True,
+    })
+
 
 @bp.route("/api/scan_barcode", methods=["POST"])
 def api_scan_barcode():

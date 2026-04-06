@@ -9,6 +9,28 @@
     ← Back to Overview
   </button>
 
+  {# ── Inventory tag print prompt (shown after manual inbound entry) ── #}
+  {% if request.args.get('tag_barcode') %}
+  <div id="tag-print-prompt"
+       style="background:#d4edda; border:1px solid #28a745; border-radius:6px; padding:10px 14px; margin:8px 0; display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+    <strong>Barcode assigned:</strong>
+    <code>{{ request.args.get('tag_barcode') }}</code>
+    — <em>{{ request.args.get('tag_name','') }}</em>
+    ({{ request.args.get('tag_wpu','') }} lb x {{ request.args.get('tag_qty','1') }})
+    <button type="button" class="btn-primary" style="padding:4px 12px;"
+            onclick="printViaIframe('/docs/labels/inventory?barcode={{ request.args.get('tag_barcode')|urlencode }}&name={{ request.args.get('tag_name','')|urlencode }}&weight_per_unit={{ request.args.get('tag_wpu','')|urlencode }}&qty={{ request.args.get('tag_qty','1')|urlencode }}&origin={{ request.args.get('tag_origin','')|urlencode }}&label_size=address');">
+      Print Inventory Tags (62mm)
+    </button>
+    <button type="button" class="btn-secondary" style="padding:4px 12px;"
+            onclick="printViaIframe('/docs/labels/inventory?barcode={{ request.args.get('tag_barcode')|urlencode }}&name={{ request.args.get('tag_name','')|urlencode }}&weight_per_unit={{ request.args.get('tag_wpu','')|urlencode }}&qty={{ request.args.get('tag_qty','1')|urlencode }}&origin={{ request.args.get('tag_origin','')|urlencode }}&label_size=letter');">
+      Print Tags (Letter)
+    </button>
+    <button type="button" style="background:none; border:none; cursor:pointer; font-size:1.2em;"
+            onclick="this.closest('#tag-print-prompt').remove(); history.replaceState(null,'',location.pathname);"
+            title="Dismiss">x</button>
+  </div>
+  {% endif %}
+
   <!-- Direction (ALWAYS visible; lives above scanner; submits with inventory-form via form=) -->
   <div class="ramp-form-container" id="scan-dir-wrap"
        style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">

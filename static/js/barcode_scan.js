@@ -800,8 +800,18 @@
       if (!r.ok) { setStatus('Save failed','err'); return; }
       const data = await r.json();
       createEl.hidden = true;
-      setStatus('Mapping saved ✓','ok'); // no beep here; beep only on scan
+      setStatus('Mapping saved','ok'); // no beep here; beep only on scan
       if (data.item) showKnown(data.item, payload.barcode, null); // prefill + show quick-post card
+      // Offer to print inventory tags for the newly mapped item
+      if (data.item && window.printViaIframe) {
+        var bc = encodeURIComponent(payload.barcode);
+        var nm = encodeURIComponent(payload.name);
+        var wp = encodeURIComponent(payload.weight_per_unit);
+        var tagUrl = '/docs/labels/inventory?barcode=' + bc + '&name=' + nm + '&weight_per_unit=' + wp + '&label_size=address';
+        if (confirm('Print inventory tags for ' + payload.name + '?')) {
+          window.printViaIframe(tagUrl);
+        }
+      }
     };
     if (cancelBtn) cancelBtn.onclick = resetAll; // cancel = reset the scanner UI
   }

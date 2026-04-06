@@ -49,22 +49,24 @@
             <div style="position:absolute; right:0; bottom:100%; z-index:9999; background:#fff; border:1px solid #ccc; border-radius:6px; padding:.5rem; box-shadow:0 4px 12px rgba(0,0,0,.15); white-space:nowrap; font-size:.85em; margin-bottom:4px;">
               <div style="font-weight:600; margin-bottom:.3rem;">Labels</div>
               <a href="/docs/labels/cargo?queued_id={{ q.id }}&scope=all"
-                 target="_blank" rel="noopener" style="display:block; padding:.2rem 0;">Summary (Letter)</a>
+                 onclick="event.preventDefault();printViaIframe(this.href);" style="display:block; padding:.2rem 0; cursor:pointer;">Summary (Letter)</a>
               <a href="/docs/labels/cargo?queued_id={{ q.id }}&scope=all&unit_labels=1&label_size=letter"
-                 target="_blank" rel="noopener" style="display:block; padding:.2rem 0;">Unit Labels (Letter)</a>
+                 onclick="event.preventDefault();printViaIframe(this.href);" style="display:block; padding:.2rem 0; cursor:pointer;">Unit Labels (Letter)</a>
+              <a href="/docs/labels/cargo?queued_id={{ q.id }}&scope=all&unit_labels=1&label_size=4x6"
+                 onclick="event.preventDefault();printViaIframe(this.href);" style="display:block; padding:.2rem 0; cursor:pointer;">Unit Labels (4x6)</a>
               <a href="/docs/labels/cargo?queued_id={{ q.id }}&scope=all&unit_labels=1&label_size=shipping"
-                 target="_blank" rel="noopener" style="display:block; padding:.2rem 0;">Unit Labels (62mm Tape)</a>
+                 onclick="event.preventDefault();printViaIframe(this.href);" style="display:block; padding:.2rem 0; cursor:pointer;">Unit Labels (62mm Tape)</a>
               <a href="/docs/labels/cargo?queued_id={{ q.id }}&scope=all&unit_labels=1&label_size=address"
-                 target="_blank" rel="noopener" style="display:block; padding:.2rem 0;">Inventory Tags (62mm Tape)</a>
+                 onclick="event.preventDefault();printViaIframe(this.href);" style="display:block; padding:.2rem 0; cursor:pointer;">Inventory Tags (62mm Tape)</a>
             </div>
           </details>
         </td>
         <!-- Manifest PDF -->
         <td style="text-align:center;">
           <a href="{{ url_for('ramp.view_manifest_pdf', queue_id=q.id) }}"
-             target="_blank" rel="noopener"
+             onclick="event.preventDefault();printViaIframe(this.href);"
              title="View Manifest PDF"
-             class="icon-btn">📄</a>
+             class="icon-btn" style="cursor:pointer;">📄</a>
         </td>
         <!-- Send -->
         <td style="white-space:nowrap;">

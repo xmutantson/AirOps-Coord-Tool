@@ -479,6 +479,33 @@ if (typeof window.showToast !== 'function') {
 </script>
 
 <script>
+// ── Iframe print helper: print a URL without opening a new tab ──
+window.printViaIframe = function(url) {
+  var id = 'print-iframe-hidden';
+  var old = document.getElementById(id);
+  if (old) old.remove();
+  var iframe = document.createElement('iframe');
+  iframe.id = id;
+  iframe.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:0;height:0;border:none;';
+  iframe.src = url;
+  document.body.appendChild(iframe);
+  iframe.onload = function() {
+    try {
+      // Remove auto-print script inside the iframe (it targets the iframe window, not parent)
+      // Just call print on the iframe content window
+      iframe.contentWindow.focus();
+      iframe.contentWindow.print();
+    } catch(e) {
+      // Cross-origin fallback: open in new tab as last resort
+      window.open(url, '_blank');
+    }
+    // Clean up after print dialog closes (slight delay)
+    setTimeout(function() { try { iframe.remove(); } catch(_) {} }, 2000);
+  };
+};
+</script>
+
+<script>
   // Auto‐expand all <details> for printing, then collapse afterwards.
   function _togglePrintDetails(open) {
     document.querySelectorAll('details').forEach(d => d.open = open);

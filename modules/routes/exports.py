@@ -2038,6 +2038,31 @@ def docs_labels_cargo():
     if not labels:
         abort(404, description="No labels could be generated for this request.")
 
+    # Enrich labels with barcodes from inventory_barcodes (best-effort)
+    try:
+        with sqlite3.connect(DB_FILE) as c:
+            c.row_factory = sqlite3.Row
+            for lbl in labels:
+                name = (lbl.get("name") or "").strip().lower()
+                size = lbl.get("size_lb") or ""
+                if not name:
+                    continue
+                try:
+                    wpu = float(size)
+                except Exception:
+                    continue
+                row = c.execute(
+                    """SELECT barcode FROM inventory_barcodes
+                       WHERE LOWER(sanitized_name)=? AND ABS(weight_per_unit - ?) < 0.001
+                         AND (deleted=0 OR deleted IS NULL)
+                       LIMIT 1""",
+                    (name, wpu),
+                ).fetchone()
+                if row:
+                    lbl["barcode"] = row["barcode"]
+    except Exception:
+        pass  # non-critical enrichment
+
     label_size = (request.args.get("label_size") or "letter").strip().lower()
     ctx = {
         "section": "labels",
@@ -2046,5 +2071,56 @@ def docs_labels_cargo():
         "print_mode": True,
         "auto_print": True,
         "active": "supervisor",
+    }
+    return render_template("waivers.html", **ctx)
+
+
+@bp.get("/docs/labels/inventory")
+def docs_labels_inventory():
+    """Render inventory tag labels with barcode images.
+
+    Query params:
+      barcode          (str, required) -- the barcode value
+      name             (str, required) -- item display name
+      weight_per_unit  (float, required)
+      qty              (int, default 1) -- how many tags to print
+      label_size       (str, default 'address') -- letter|shipping|address|4x6
+      origin           (str, optional) -- source/origin
+    """
+    barcode = (request.args.get("barcode") or "").strip()
+    name = (request.args.get("name") or "").strip()
+    try:
+        wpu = float(request.args.get("weight_per_unit") or 0)
+    except Exception:
+        wpu = 0.0
+    if not (barcode and name and wpu > 0):
+        abort(400, description="Missing ?barcode, ?name, or ?weight_per_unit")
+
+    try:
+        qty = max(1, int(request.args.get("qty") or 1))
+    except Exception:
+        qty = 1
+    qty = min(qty, 200)  # safety cap
+
+    origin = (request.args.get("origin") or "").strip()
+    label_size = (request.args.get("label_size") or "address").strip().lower()
+
+    labels = []
+    for i in range(qty):
+        labels.append({
+            "barcode": barcode,
+            "name": name,
+            "weight_lb": f"{wpu:.1f}",
+            "origin": origin,
+            "unit_label": f"{i+1}/{qty}" if qty > 1 else "",
+        })
+
+    ctx = {
+        "section": "inventory_tags",
+        "inv_tags": labels,
+        "label_size": label_size,
+        "print_mode": True,
+        "auto_print": True,
+        "active": "inventory",
     }
     return render_template("waivers.html", **ctx)

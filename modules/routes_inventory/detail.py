@@ -1,4 +1,5 @@
 # rebuilt clean by fix_inventory_routes_rewrite.py
+import hashlib
 import sqlite3
 from datetime import datetime
 
@@ -167,7 +168,51 @@ def inventory_detail():
         except Exception:
             pass
 
-        return redirect(url_for("inventory.inventory_detail"))
+        # ---- Auto-generate barcode for inbound items that lack one ----
+        gen_barcode = None
+        if dirn == "in":
+            try:
+                from modules.routes_inventory.barcodes import _generate_barcode_id, _ensure_barcode_schema
+                _ensure_barcode_schema()
+                with sqlite3.connect(DB_FILE) as c:
+                    c.row_factory = sqlite3.Row
+                    existing = c.execute(
+                        """SELECT barcode FROM inventory_barcodes
+                           WHERE category_id=? AND sanitized_name=?
+                             AND ABS(weight_per_unit - ?) < 0.001
+                             AND (deleted=0 OR deleted IS NULL)
+                           LIMIT 1""",
+                        (cat_id, noun, wpu_lbs),
+                    ).fetchone()
+                    if existing:
+                        gen_barcode = existing["barcode"]
+                    else:
+                        gen_barcode = _generate_barcode_id(cat_id, noun, wpu_lbs)
+                        now_bc = datetime.utcnow().isoformat()
+                        c.execute(
+                            """INSERT INTO inventory_barcodes(barcode, category_id,
+                                 sanitized_name, raw_name, weight_per_unit,
+                                 created_at, updated_at, deleted)
+                               VALUES (?,?,?,?,?,?,?,0)""",
+                            (gen_barcode, cat_id, noun, raw, wpu_lbs, now_bc, now_bc),
+                        )
+                        c.commit()
+            except Exception as e:
+                logger.warning("Auto-barcode generation failed: %s", e)
+
+        # Redirect with tag print prompt params if barcode was generated/found
+        redir_url = url_for("inventory.inventory_detail")
+        if gen_barcode:
+            import urllib.parse
+            params = urllib.parse.urlencode({
+                "tag_barcode": gen_barcode,
+                "tag_name": noun,
+                "tag_wpu": f"{wpu_lbs:.2f}",
+                "tag_qty": str(qty),
+                "tag_origin": origin or "",
+            })
+            redir_url = redir_url + "?" + params
+        return redirect(redir_url)
 
     # ---- GET: build categories + advanced_data for initial render ----
     categories = dict_rows("SELECT id, display_name FROM inventory_categories")
