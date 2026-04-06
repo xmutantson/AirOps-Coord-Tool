@@ -315,24 +315,7 @@
       <input id="destination" name="destination" required style="min-width:10ch" class="force-upper"
              value="{{ d.get('airfield_landing','') }}">
 
-      <label for="cargo_type">Cargo Type</label>
-      <input id="cargo_type" name="cargo_type" style="min-width:10ch"
-             value="{{ d.get('cargo_type','') }}">
-
-      <label for="cargo_weight">Cargo Weight</label>
-      <div class="lookup-row">
-      <input id="cargo_weight"
-             name="cargo_weight"
-             placeholder="e.g. 300"
-             style="flex:1; min-width:10ch"
-             value="{{ d.get('cargo_weight','') }}">
-        <select name="weight_unit" tabindex="-1" style="min-width:10ch">
-          <option value="lbs" selected>lbs</option>
-          <option value="kg">kg</option>
-        </select>
-      </div>
-
-      <!-- Cargo / Manifest buttons -->
+      <!-- Cargo Entry button + running total above cargo fields -->
       {% if draft %}
         <div class="cargo-tools-toggle">
           <button type="button" id="edit-manifest" style="width:100%">
@@ -340,15 +323,33 @@
           </button>
         </div>
       {% else %}
-        <div class="cargo-tools-toggle">
-          <button type="button" id="open-cw-tools" title="Cargo Weight Tools">
-            Running Total
+        <div class="cargo-tools-toggle" style="display:flex; gap:.5rem;">
+          <button type="button" id="open-adv" title="Cargo Entry" style="flex:1;">
+            Cargo Entry
           </button>
-          <button type="button" id="open-adv" title="Advanced Cargo Entry">
-            Adv. Cargo Entry
+          <button type="button" id="open-cw-tools" title="Running Total" style="flex:0 0 auto;">
+            Running Total
           </button>
         </div>
       {% endif %}
+
+      <label for="cargo_type" style="color:#888;">Cargo Type <small class="muted">(autofilled from Cargo Entry)</small></label>
+      <input id="cargo_type" name="cargo_type" style="min-width:10ch; color:#666;"
+             placeholder="Autofilled"
+             value="{{ d.get('cargo_type','') }}">
+
+      <label for="cargo_weight" style="color:#888;">Cargo Weight <small class="muted">(autofilled)</small></label>
+      <div class="lookup-row">
+      <input id="cargo_weight"
+             name="cargo_weight"
+             placeholder="Autofilled"
+             style="flex:1; min-width:10ch; color:#666;"
+             value="{{ d.get('cargo_weight','') }}">
+        <select name="weight_unit" tabindex="-1" style="min-width:10ch">
+          <option value="lbs" selected>lbs</option>
+          <option value="kg">kg</option>
+        </select>
+      </div>
 
       <label for="remarks">Remarks</label>
       <input id="remarks" name="remarks" style="min-width:10ch"
