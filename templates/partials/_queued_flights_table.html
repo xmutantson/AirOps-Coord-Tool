@@ -13,6 +13,7 @@
         <th>Remarks</th>
         <th>Queued At</th>
         <th>Labels</th>
+        <th>Manifest</th>
         <th>Send</th>
       </tr>
     </thead>
@@ -57,6 +58,13 @@
                  target="_blank" rel="noopener" style="display:block; padding:.2rem 0;">Unit Labels (Address)</a>
             </div>
           </details>
+        </td>
+        <!-- Manifest PDF -->
+        <td style="text-align:center;">
+          <a href="{{ url_for('ramp.view_manifest_pdf', queue_id=q.id) }}"
+             target="_blank" rel="noopener"
+             title="View Manifest PDF"
+             class="icon-btn">📄</a>
         </td>
         <!-- Send + Ack (JS manages ack gate via data-pilot-ack-at) -->
         <td>
