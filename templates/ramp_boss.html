@@ -18,7 +18,6 @@
     try{
       if (window.__RB_SHIM_INSTALLED) return;
       window.__RB_SHIM_INSTALLED = true;
-      try { console.debug('[RB-SHIM] installing early XHR interceptor'); } catch(_){}
 
       /* ---------------- shared helpers ---------------- */
       function isScanUrl(u){
@@ -119,7 +118,6 @@
               // A) structured -> build full /nudge body
               if (name && wpu>0){
                 const newInit = Object.assign({}, init, { method:'POST', body: makeNudgeBody(name,wpu,qty), headers });
-                try{ console.debug('[RB-SHIM:f] /scan -> /nudge', {name, wpu, qty}); }catch(_){}
                 return _origFetch.call(this, newUrl, newInit);
               }
               // B) barcode-only -> let backend resolve barcode for /nudge
@@ -134,7 +132,6 @@
                     draft_id: (typeof window.draftId === 'number' ? window.draftId : null)
                   })
                 });
-                try{ console.debug('[RB-SHIM:f] /scan -> /nudge (barcode)', { barcode: obj.barcode }); }catch(_){}
                 return _origFetch.call(this, newUrl, bInit);
               }
               // C) hard-stop unsafe remove fallthrough (no name/wpu and no barcode)
@@ -201,7 +198,6 @@
               // A) structured
               if (name && wpu>0){
                 body = makeNudgeBody(name, wpu, qty);
-                try { console.debug('[RB-SHIM:x] /scan -> /nudge', {name, wpu, qty}); } catch(_){}
               }
               // B) barcode-only
               else if (parsed && parsed.barcode){
@@ -211,7 +207,6 @@
                   qty: qty || 1,
                   draft_id: (typeof window.draftId === 'number' ? window.draftId : null)
                 });
-                try { console.debug('[RB-SHIM:x] /scan -> /nudge (barcode)', { barcode: parsed.barcode }); } catch(_){}
               }
             }
           }
@@ -219,7 +214,6 @@
         return origSend.call(this, body);
       };
 
-      try { console.debug('[RB-SHIM] installed'); } catch(_){}
     }catch(e){
       try { console.warn('[RB-SHIM] failed to install', e); } catch(_){}
     }
@@ -757,10 +751,8 @@
     const travelHInp  = document.getElementById('travel_h');
     const travelMInp  = document.getElementById('travel_m');
     /* Ensure logs are visible while editing a queued flight.
-       Some browsers/devtools hide console.debug by default; in non-draft
        modes keep normal behavior. */
     try {
-      if (isDraft && !console.__rb_forceInfo) { console.__rb_forceInfo = true; console.debug = console.log.bind(console); }
     } catch(_) {}
     const travelRow   = document.getElementById('travel_row');
     const travelLabel = document.getElementById('travel_label');
@@ -1098,7 +1090,6 @@
           // Apply to inventory (committed inbound entries)
           const payload = { manifest_id: manifestId.value, items };
           // Helpful console breadcrumb while we're stabilizing
-          try { console.debug('apply_adv_manifest payload', payload); } catch(_) {}
           const ap = await fetch('/api/apply_adv_manifest', {
             method: 'POST',
             headers: {
@@ -2180,7 +2171,6 @@
         origin:      origin || ''
       });
       let ok = false;
-      try { console.debug?.('[X-delete] inbound compensator', { name, wpu:Number(wpu), qty:compInboundQty, category_id:catId, baseQty, inSnapshot }); } catch(_){}
       try {
         const addRes = await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
           method: 'POST',
@@ -2207,7 +2197,6 @@
     else if (net < 0){
       // We brought |net| IN -> take it back OUT via /nudge (structured remove).
       const qty = Math.abs(net);
-      try { console.debug?.('[X-delete] outbound compensator (nudge)', { name, wpu:Number(wpu), qty }); } catch(_){}
       try{
         const r = await fetch(`/api/manifest/${encodeURIComponent(mid)}/nudge`, {
           method: 'POST',
@@ -2896,8 +2885,7 @@
                   const paint = Math.max(0, basePaint - ((window.__RB_CLAMP_OFFSETS && window.__RB_CLAMP_OFFSETS.get(_k)) || 0));
                   REH.add(_k);
                   upsertScanChip({ ...it, qty: paint, total: Math.round(paint * wpu * 100)/100 });
-                  try { console.debug('[RB-SNAPSHOT] rehydrated after recent add (clamped)', { name, wpu, paint, sessionQty }); } catch(_){}
-                  return;
+                      return;
                 }
                 console.warn?.('[RB-SNAPSHOT] suppress respawn after zero', { name, wpu, sessionQty });
                 return;
@@ -2913,18 +2901,9 @@
               } catch(_) {}
               // 4) No chip at all -> create a visible baseline chip for the net session qty
               upsertScanChip({ ...it, qty: visQty, total: Math.round(visQty * wpu * 100)/100 });
-              try { console.debug('[RB-SNAPSHOT] no baseline; painted session chip', { name, wpu, sessionQty }); } catch(_){}
               return;
             } /* !baseChip after Δ rehydrate */
           }   /* !baseChip */
-          // Helpful trace: show what we're merging for this key
-          try {
-              name, wpu,
-              baseQty: baseChip ? (baseChip.dataset.qty || '') : '',
-              baseEffective: baseChip ? (baseChip.dataset.effective || '') : '',
-              sessionQty
-            });
-          } catch(_){}
           /* Update the visible baseline chip to show NET (session) qty,
              keep baseline immutable, and drop any Δ chip for this key. */
           try {
