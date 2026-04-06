@@ -19,7 +19,7 @@
     </thead>
     <tbody>
       {% for q in queued %}
-      <tr>
+      <tr data-qid="{{ q.id }}">
         <td>
           {{ q.id }}
           <a href="{{ url_for('ramp.edit_queued_flight', qid=q.id) }}"
@@ -66,17 +66,34 @@
              title="View Manifest PDF"
              class="icon-btn">📄</a>
         </td>
-        <!-- Send + Ack (JS manages ack gate via data-pilot-ack-at) -->
-        <td>
-          <form method="post"
-                class="q-send-form"
-                data-tt="{{ q.travel_time or '' }}"
-                data-pilot-ack-at="{{ q.pilot_ack_signed_at or '' }}"
-                action="{{ url_for('ramp.send_queued_flight', qid=q.id) }}"
-                onsubmit="return confirm('Aircraft {{ q.tail_number or '' }} has taken off?')">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit">Send</button>
-          </form>
+        <!-- Send -->
+        <td style="white-space:nowrap;">
+          {% if q.pilot_ack_signed_at %}
+            <form method="post"
+                  class="q-send-form"
+                  data-tt="{{ q.travel_time or '' }}"
+                  data-pilot-ack-at="{{ q.pilot_ack_signed_at }}"
+                  action="{{ url_for('ramp.send_queued_flight', qid=q.id) }}"
+                  onsubmit="return confirm('Aircraft {{ q.tail_number or '' }} has taken off?')">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" style="background:#e8a317; color:#fff; border:none; padding:.4rem .8rem; border-radius:4px; cursor:pointer;">Send</button>
+            </form>
+          {% else %}
+            <button type="button" class="q-ack-btn"
+                    data-qid="{{ q.id }}"
+                    style="background:#ffc107; color:#333; border:1px solid #e0a800; padding:.4rem .8rem; border-radius:4px; cursor:pointer;"
+                    onclick="(async()=>{
+                      const name=prompt('Pilot name (digital signature):','');
+                      if(!name) return;
+                      const r=await fetch('/ramp/pilot_ack/'+this.dataset.qid,{
+                        method:'POST',
+                        headers:{'X-Requested-With':'XMLHttpRequest','Content-Type':'application/x-www-form-urlencoded'},
+                        body:'typed_name='+encodeURIComponent(name)
+                      });
+                      if(r.ok){ window.location.reload(); }
+                      else { alert('Ack failed'); }
+                    })()">Pilot Ack</button>
+          {% endif %}
         </td>
       </tr>
       {% endfor %}
