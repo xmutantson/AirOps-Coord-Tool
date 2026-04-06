@@ -570,6 +570,36 @@ def ramp_boss():
                 except Exception:
                     pass
 
+                # Auto-extract cargo from remarks into inventory (if no manifest session was used)
+                mid_used = request.form.get('manifest_id', '').strip()
+                if not mid_used and data.get('remarks'):
+                    try:
+                        parsed_items = parse_adv_manifest(data['remarks'])
+                        if parsed_items:
+                            now_iso = datetime.utcnow().isoformat()
+                            auto_mid = new_manifest_session_id()
+                            with sqlite3.connect(DB_FILE) as c2:
+                                for it in parsed_items:
+                                    sname = sanitize_name(it['name'])
+                                    cat_id = guess_category_id_for_name(sname) or 1
+                                    wpu = float(it['size_lb'])
+                                    qty = int(it['qty'])
+                                    origin = it.get('origin', '')
+                                    c2.execute("""
+                                      INSERT INTO inventory_entries(
+                                        category_id, raw_name, sanitized_name,
+                                        weight_per_unit, quantity, total_weight,
+                                        direction, timestamp, pending, session_id, source, origin
+                                      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                                    """, (
+                                      cat_id, it['name'], sname,
+                                      wpu, qty, wpu * qty,
+                                      'in', now_iso, 0, auto_mid, 'arrival-auto', origin
+                                    ))
+                            logger.info("Auto-extracted %d cargo items from arrival remarks (flight %s)", len(parsed_items), fid)
+                    except Exception:
+                        logger.debug("Auto-extract from remarks failed for flight %s", fid, exc_info=True)
+
         # ── at this point we have `fid` of the row we inserted/updated ──
         # fetch it back in full
         row = dict_rows("SELECT * FROM flights WHERE id=?", (fid,))[0]
