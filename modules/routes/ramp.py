@@ -2096,8 +2096,9 @@ def view_manifest_pdf(queue_id: int):
     if not row:
         abort(404)
     pdf_path = (row.get('manifest_pdf_path') or '').strip()
-    if not pdf_path or not os.path.isfile(pdf_path):
-        # lazily rebuild and persist
+    has_ack = bool((row.get('pilot_ack_signed_at') or '').strip())
+    if not pdf_path or not os.path.isfile(pdf_path) or has_ack:
+        # Rebuild: always regenerate if pilot has acked (ensures signature is included)
         try:
             from modules.utils.manifest import build_manifest_pdf as _build_pdf
             _, pdf_path = _build_pdf(current_app, row)

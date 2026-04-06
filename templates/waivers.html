@@ -385,33 +385,86 @@
 
   {# ============== DART MATERIAL IDENTIFICATION LABELS ============== #}
   {% if _section == "labels" %}
-  {# Label sizing CSS: letter (default 4-up), shipping (4x6, 1-up), address (1.1x3.5, 1-up) #}
   {% set ls = label_size|default('letter') %}
   <style>
-    {% if ls == 'shipping' %}
-      @page { size: 4in 6in; margin: 3mm; }
+    /* Label card sizing by format */
+    .label-card {
+      border: 1px solid #333;
+      border-radius: 3px;
+      padding: 3mm;
+      box-sizing: border-box;
+      page-break-inside: avoid;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    }
+    .label-card h3 { margin: 0 0 1mm; font-size: 10px; border-bottom: 1px solid #999; padding-bottom: 1mm; }
+    .label-card table { width: 100%; border-collapse: collapse; }
+    .label-card td { padding: 0.5mm 1mm; font-size: 9px; vertical-align: top; }
+    .label-card td:first-child { font-weight: 600; white-space: nowrap; width: 25%; }
+
+    {% if ls == 'letter' %}
+      /* Letter: 4-up grid, cut along borders */
+      @page { size: letter; margin: 10mm; }
+      @media print { body { margin: 0; } }
+      .labels-page { display: grid; grid-template-columns: 1fr 1fr; gap: 4mm; margin-bottom: 4mm; }
+      .label-card { font-size: 9px; }
+    {% elif ls == 'shipping' %}
+      /* 4x6 shipping: one label per page, sized to fit 62mm wide continuous tape */
+      @page { size: 62mm auto; margin: 2mm; }
+      @media print { body { margin: 0; width: 62mm; } }
       .labels-page { display: block; }
-      .label-card { width: 100%; page-break-after: always; font-size: 11px; padding: 2mm; }
-      .label-card h3 { font-size: 12px; margin: 0 0 1mm; }
-      .label-card table { font-size: 10px; }
-      .label-card td { padding: 1mm 2mm; }
+      .label-card {
+        width: 58mm; /* 62mm tape minus margins */
+        margin: 0 auto 2mm;
+        page-break-after: always;
+        font-size: 8px;
+        padding: 2mm;
+      }
+      .label-card h3 { font-size: 9px; }
+      .label-card td { font-size: 8px; padding: 0.3mm 1mm; }
     {% elif ls == 'address' %}
-      @page { size: 3.5in 1.1in; margin: 1mm; }
+      /* Compact inventory tag: 62mm wide (DK-2205), short cut length */
+      @page { size: 62mm auto; margin: 1mm; }
+      @media print { body { margin: 0; width: 62mm; } }
       .labels-page { display: block; }
-      .label-card { width: 100%; page-break-after: always; font-size: 7px; padding: 1mm; }
-      .label-card h3 { font-size: 8px; margin: 0; }
-      .label-card table { font-size: 7px; }
-      .label-card td { padding: 0.5mm 1mm; }
-      .label-lines div { display: none; }
+      .label-card {
+        width: 58mm;
+        margin: 0 auto 1mm;
+        page-break-after: always;
+        font-size: 7px;
+        padding: 1.5mm;
+      }
+      .label-card h3 { font-size: 8px; }
+      .label-card td { font-size: 7px; padding: 0.3mm 1mm; }
+      .label-lines { display: none; }
     {% endif %}
+
+    /* Screen preview: show a hint about print sizing */
+    @media screen {
+      .label-size-hint {
+        background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px;
+        padding: 8px 12px; margin-bottom: 10px; font-size: 13px;
+      }
+    }
+    @media print { .label-size-hint { display: none; } }
   </style>
+
+  <div class="label-size-hint">
+    {% if ls == 'shipping' %}
+      Printing for <strong>62mm continuous tape</strong> (Brother QL, DK-2205). Select your label printer in the print dialog.
+    {% elif ls == 'address' %}
+      Printing <strong>compact tags</strong> for <strong>62mm tape</strong> (Brother QL, DK-2205). Shorter cut length for inventory tags.
+    {% else %}
+      Printing on <strong>Letter/A4</strong>. Cut along borders after printing.
+    {% endif %}
+  </div>
+
   {% set batch_size = 1 if ls in ('shipping','address') else 4 %}
   {% for page in labels|batch(batch_size, fill_with=None) %}
-  <section id="labels" class="labels-page">
+  <section class="labels-page">
     <span id="labels-dart" hidden></span>
     {% for label in page if label %}
       <div class="label-card">
-        <h3>CARGO IDENTIFICATION LABEL{% if label.unit_label %} <span style="float:right;">{{ label.unit_label }}</span>{% endif %}</h3>
+        <h3>CARGO ID{% if label.unit_label %} <span style="float:right;">{{ label.unit_label }}</span>{% endif %}</h3>
         <table>
           <tr><td>Mission:</td><td>{{ mission_number or label.mission or "" }}</td></tr>
           {% if label.tail %}<tr><td>Tail #:</td><td>{{ label.tail }}</td></tr>{% endif %}
@@ -421,13 +474,6 @@
           <tr><td>Item:</td><td>{{ label.contents or "" }}</td></tr>
           {% if label.cargo_origin %}<tr><td>Source:</td><td>{{ label.cargo_origin }}</td></tr>{% endif %}
           <tr><td>Weight:</td><td>{{ label.weight_lb or "" }} lb</td></tr>
-          {% if not label.unit_label %}
-          <tr>
-            <td colspan="2" class="label-lines">
-              <div></div><div></div><div></div>
-            </td>
-          </tr>
-          {% endif %}
         </table>
       </div>
     {% endfor %}
