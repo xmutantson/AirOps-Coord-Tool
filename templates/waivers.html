@@ -534,17 +534,20 @@
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
     }
     .inv-tag .tag-barcode svg { display: block; margin: 0 auto; }
-    .inv-tag .tag-name { font-weight: 700; margin: 1mm 0 0; }
-    .inv-tag .tag-meta { color: #444; }
-    .inv-tag .tag-unit { font-size: 0.85em; color: #666; }
+    .inv-tag .tag-name { font-weight: 700; margin: 1mm 0 0.5mm; }
+    .inv-tag .tag-weight { color: #222; }
+    .inv-tag .tag-origin { color: #555; }
+    .inv-tag .tag-unit { font-weight: 600; margin-top: 0.5mm; }
 
     {% if ls == 'letter' %}
       @page { size: letter; margin: 10mm; }
       @media print { body { margin: 0; } }
       .inv-tags-page { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4mm; margin-bottom: 4mm; }
       .inv-tag { padding: 3mm; font-size: 9px; }
-      .inv-tag .tag-name { font-size: 11px; }
-      .inv-tag .tag-meta { font-size: 9px; }
+      .inv-tag .tag-name { font-size: 12px; }
+      .inv-tag .tag-weight { font-size: 10px; }
+      .inv-tag .tag-origin { font-size: 9px; }
+      .inv-tag .tag-unit { font-size: 10px; }
     {% elif ls == '4x6' %}
       @page { size: 4in 6in; margin: 0; }
       @media print { body { margin: 0; padding: 0; } }
@@ -554,28 +557,34 @@
         margin: 0 auto; padding: 0.125in; overflow: hidden;
         page-break-after: always; font-size: 12px;
       }
-      .inv-tag .tag-name { font-size: 16px; }
-      .inv-tag .tag-meta { font-size: 12px; }
+      .inv-tag .tag-name { font-size: 18px; }
+      .inv-tag .tag-weight { font-size: 14px; }
+      .inv-tag .tag-origin { font-size: 12px; }
+      .inv-tag .tag-unit { font-size: 14px; }
     {% elif ls == 'shipping' %}
       @page { size: 62mm auto; margin: 2mm; }
       @media print { body { margin: 0; width: 62mm; } }
       .inv-tags-page { display: block; }
       .inv-tag {
-        width: 58mm; margin: 0 auto 2mm; padding: 2mm;
-        page-break-after: always; font-size: 8px;
+        width: 58mm; margin: 0 auto 2mm; padding: 3mm;
+        page-break-after: always; font-size: 9px;
       }
-      .inv-tag .tag-name { font-size: 9px; }
-      .inv-tag .tag-meta { font-size: 7px; }
+      .inv-tag .tag-name { font-size: 11px; }
+      .inv-tag .tag-weight { font-size: 9px; }
+      .inv-tag .tag-origin { font-size: 8px; }
+      .inv-tag .tag-unit { font-size: 10px; }
     {% else %}{# address (default) #}
       @page { size: 62mm auto; margin: 1mm; }
       @media print { body { margin: 0; width: 62mm; } }
       .inv-tags-page { display: block; }
       .inv-tag {
-        width: 58mm; margin: 0 auto 1mm; padding: 1.5mm;
-        page-break-after: always; font-size: 7px;
+        width: 58mm; margin: 0 auto 1mm; padding: 2.5mm;
+        page-break-after: always; font-size: 8px;
       }
-      .inv-tag .tag-name { font-size: 8px; }
-      .inv-tag .tag-meta { font-size: 6px; }
+      .inv-tag .tag-name { font-size: 10px; }
+      .inv-tag .tag-weight { font-size: 8px; }
+      .inv-tag .tag-origin { font-size: 7px; }
+      .inv-tag .tag-unit { font-size: 9px; }
     {% endif %}
 
     @media screen {
@@ -601,8 +610,9 @@
       <div class="inv-tag">
         <div class="tag-barcode"><svg class="js-barcode" data-barcode="{{ tag.barcode }}"></svg></div>
         <div class="tag-name">{{ tag.name }}</div>
-        <div class="tag-meta">{{ tag.weight_lb }} lb{% if tag.origin %} | {{ tag.origin }}{% endif %}</div>
-        {% if tag.unit_label %}<div class="tag-unit">{{ tag.unit_label }}</div>{% endif %}
+        <div class="tag-weight">{{ tag.weight_lb }} lb per unit</div>
+        {% if tag.origin %}<div class="tag-origin">{{ tag.origin }}</div>{% endif %}
+        {% if tag.unit_label %}<div class="tag-unit">Unit {{ tag.unit_label }}</div>{% endif %}
       </div>
     {% endfor %}
   </section>
@@ -614,12 +624,12 @@
       try {
         JsBarcode(el, el.dataset.barcode, {
           format: 'CODE128',
-          width: {% if ls in ('shipping','address') %}1{% elif ls == '4x6' %}2{% else %}1.5{% endif %},
-          height: {% if ls in ('shipping','address') %}25{% elif ls == '4x6' %}50{% else %}35{% endif %},
+          width: {% if ls == 'address' %}0.8{% elif ls == 'shipping' %}1{% elif ls == '4x6' %}2{% else %}1.5{% endif %},
+          height: {% if ls == 'address' %}18{% elif ls == 'shipping' %}22{% elif ls == '4x6' %}50{% else %}35{% endif %},
           displayValue: true,
-          fontSize: {% if ls in ('shipping','address') %}10{% elif ls == '4x6' %}14{% else %}11{% endif %},
-          margin: 2,
-          textMargin: 1
+          fontSize: {% if ls == 'address' %}8{% elif ls == 'shipping' %}9{% elif ls == '4x6' %}14{% else %}11{% endif %},
+          margin: 1,
+          textMargin: 0
         });
       } catch(e) {
         el.textContent = el.dataset.barcode;

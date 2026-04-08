@@ -2044,20 +2044,32 @@ def docs_labels_cargo():
             c.row_factory = sqlite3.Row
             for lbl in labels:
                 name = (lbl.get("name") or "").strip().lower()
-                size = lbl.get("size_lb") or ""
                 if not name:
                     continue
+                size = lbl.get("size_lb") or ""
+                # Try exact match first (name + weight)
+                row = None
                 try:
                     wpu = float(size)
+                    row = c.execute(
+                        """SELECT barcode FROM inventory_barcodes
+                           WHERE LOWER(sanitized_name)=? AND ABS(weight_per_unit - ?) < 0.001
+                             AND (deleted=0 OR deleted IS NULL)
+                           LIMIT 1""",
+                        (name, wpu),
+                    ).fetchone()
                 except Exception:
-                    continue
-                row = c.execute(
-                    """SELECT barcode FROM inventory_barcodes
-                       WHERE LOWER(sanitized_name)=? AND ABS(weight_per_unit - ?) < 0.001
-                         AND (deleted=0 OR deleted IS NULL)
-                       LIMIT 1""",
-                    (name, wpu),
-                ).fetchone()
+                    pass
+                # Fallback: match by name only (different weight variants)
+                if not row:
+                    row = c.execute(
+                        """SELECT barcode FROM inventory_barcodes
+                           WHERE LOWER(sanitized_name)=?
+                             AND (deleted=0 OR deleted IS NULL)
+                           ORDER BY seen_count DESC
+                           LIMIT 1""",
+                        (name,),
+                    ).fetchone()
                 if row:
                     lbl["barcode"] = row["barcode"]
     except Exception:
