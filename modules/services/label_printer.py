@@ -63,14 +63,40 @@ def render_label_png(html_string, base_url):
     """
     from weasyprint import HTML, CSS
 
-    # Force 62mm page width for consistent rendering
+    # Force 62mm page width with a tall fixed height (content gets cropped later)
     override_css = CSS(string="""
-        @page { size: 62mm auto; margin: 2mm; }
-        body { margin: 0; width: 62mm; }
+        @page { size: 62mm 200mm; margin: 2mm; }
+        body { margin: 0; width: 58mm; }
     """)
-    png_bytes = HTML(
+
+    # WeasyPrint 60+ removed write_png(); render PDF then convert via Pillow
+    pdf_bytes = HTML(
         string=html_string, base_url=base_url
-    ).write_png(stylesheets=[override_css])
+    ).write_pdf(stylesheets=[override_css])
+
+    # PDF -> PNG via pypdfium2 (bundled with WeasyPrint) or fitz fallback
+    try:
+        import pypdfium2 as pdfium
+        pdf = pdfium.PdfDocument(pdf_bytes)
+        page = pdf[0]
+        # Render at 300 DPI (scale = 300/72 = 4.167)
+        bitmap = page.render(scale=300 / 72)
+        pil_img = bitmap.to_pil()
+        png_buf = io.BytesIO()
+        pil_img.save(png_buf, format="PNG")
+        png_bytes = png_buf.getvalue()
+    except ImportError:
+        try:
+            import fitz  # PyMuPDF
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            page = doc[0]
+            pix = page.get_pixmap(dpi=300)
+            png_bytes = pix.tobytes("png")
+        except ImportError:
+            # Last resort: use pdf2image / Pillow with ghostscript
+            raise RuntimeError(
+                "No PDF-to-PNG converter available. Install pypdfium2 or PyMuPDF."
+            )
 
     img = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
 
