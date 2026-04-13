@@ -185,8 +185,11 @@ def discover_printer(timeout=5):
             info = zc.get_service_info(stype, name)
             if info and info.parsed_addresses():
                 low = name.lower()
-                if "brother" in low or "ql" in low:
+                # Only match QL-series label printers, not other Brother devices
+                if "ql" in low or "ql-820" in low or "ql-800" in low:
                     found[name] = info.parsed_addresses()[0]
+                elif "brother" in low:
+                    logger.debug("Skipping non-QL Brother device: %s", name)
 
         def remove_service(self, zc, stype, name):
             pass
