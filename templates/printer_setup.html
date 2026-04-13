@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block title %}Label Printer Setup – Aircraft Ops{% endblock %}
+
+{% block content %}
+<h2>Label Printer Setup</h2>
+<button type="button" class="back-button" onclick="history.back()">← Back</button>
+
+<div class="ramp-form-container" style="max-width:720px; margin:1rem auto;">
+
+  <p>The Air Ops tool prints inventory tags and cargo labels to a
+  <strong>Brother QL-820NWB</strong> label printer using 62mm (DK-2205) continuous tape.
+  Follow these steps to set up your computer.</p>
+
+  <hr>
+
+  <h3>Step 1: Install the printer driver</h3>
+  <p>Windows does not include the Brother QL driver by default. Download and run the
+  installer, then follow the prompts.</p>
+  <a href="{{ url_for('static', filename='downloads/Brother_QL820NWB_Driver.exe') }}"
+     class="button button-primary"
+     download
+     style="display:inline-block; margin:.5rem 0;">
+    Download Brother QL-820NWB Driver (Windows)
+  </a>
+  <p class="muted" style="font-size:.85em;">
+    34 MB &middot; Also available from
+    <a href="https://support.brother.com/g/b/downloadtop.aspx?c=us&lang=en&prod=lpql820nwbeus"
+       target="_blank" rel="noopener">Brother support site</a>
+  </p>
+
+  <ol>
+    <li>Run the downloaded <code>Brother_QL820NWB_Driver.exe</code></li>
+    <li>Accept the license agreement and click <strong>Install</strong></li>
+    <li>When prompted for connection type, choose <strong>Network (Wi-Fi)</strong></li>
+    <li>The installer should auto-detect the printer on the network</li>
+    <li>If it does not, enter the printer IP manually (ask your Ramp Boss)</li>
+    <li>Finish the installer and print a test page to confirm</li>
+  </ol>
+
+  <hr>
+
+  <h3>Step 2: Configure printer defaults</h3>
+  <p>After installing, you need to set the correct paper size so labels print
+  at the right dimensions. This only needs to be done once.</p>
+
+  <ol>
+    <li>Open <strong>Settings → Bluetooth & devices → Printers & scanners</strong></li>
+    <li>Click <strong>Brother QL-820NWB</strong></li>
+    <li>Click <strong>Printing preferences</strong></li>
+    <li>On the <strong>Basic</strong> tab, set these values:
+
+      <table style="margin:.5rem 0; border-collapse:collapse; width:100%;">
+        <thead>
+          <tr style="background:#f0f0f0;">
+            <th style="text-align:left; padding:4px 8px; border:1px solid #ccc;">Setting</th>
+            <th style="text-align:left; padding:4px 8px; border:1px solid #ccc;">Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:4px 8px; border:1px solid #ccc;"><strong>Paper Size</strong></td>
+            <td style="padding:4px 8px; border:1px solid #ccc;">62mm (pick any length — the app controls cut length)</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 8px; border:1px solid #ccc;"><strong>Width</strong></td>
+            <td style="padding:4px 8px; border:1px solid #ccc;">2.4" (62mm)</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 8px; border:1px solid #ccc;"><strong>Orientation</strong></td>
+            <td style="padding:4px 8px; border:1px solid #ccc;"><strong>Landscape</strong></td>
+          </tr>
+          <tr>
+            <td style="padding:4px 8px; border:1px solid #ccc;"><strong>Quality</strong></td>
+            <td style="padding:4px 8px; border:1px solid #ccc;">Give priority to print speed</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 8px; border:1px solid #ccc;"><strong>Cut Every</strong></td>
+            <td style="padding:4px 8px; border:1px solid #ccc;">Checked, 1 labels</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 8px; border:1px solid #ccc;"><strong>Cut at end</strong></td>
+            <td style="padding:4px 8px; border:1px solid #ccc;">Checked</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 8px; border:1px solid #ccc;"><strong>Trim tape after data</strong></td>
+            <td style="padding:4px 8px; border:1px solid #ccc;">Unchecked</td>
+          </tr>
+        </tbody>
+      </table>
+    </li>
+    <li>Click <strong>Apply</strong>, then <strong>OK</strong></li>
+  </ol>
+
+  <hr>
+
+  <h3>Step 3: Printing from Air Ops</h3>
+  <p>When you click a label print button in Air Ops, a print dialog will open.
+  Make sure you select <strong>Brother QL-820NWB</strong> as the printer.</p>
+
+  <ol>
+    <li>In the print dialog, select <strong>Brother QL-820NWB</strong> from the printer list</li>
+    <li>The label content is already sized correctly by the app — do not change
+    scaling or margins in the print dialog</li>
+    <li>Set <strong>Scale</strong> or <strong>Fit to page</strong> to <strong>100% / Actual size</strong>
+    (not "Fit to printable area")</li>
+    <li>Set <strong>Margins</strong> to <strong>None</strong> if the option is available</li>
+    <li>Click <strong>Print</strong></li>
+  </ol>
+
+  <div style="background:#fff3cd; border:1px solid #ffc107; border-radius:6px; padding:10px 14px; margin-top:1rem;">
+    <strong>Tip:</strong> Most browsers remember the last printer you selected.
+    After choosing the Brother QL once, it should stay selected for future prints.
+  </div>
+
+  <hr>
+
+  <h3>Troubleshooting</h3>
+  <dl style="margin:0;">
+    <dt style="font-weight:600; margin-top:.5rem;">Printer not found during install</dt>
+    <dd>Make sure you are on the same Wi-Fi network as the printer.
+    The QL-820NWB is configured in wireless infrastructure mode and should appear
+    on the same subnet.</dd>
+
+    <dt style="font-weight:600; margin-top:.5rem;">Labels print too small or too large</dt>
+    <dd>Check that the print dialog scale is set to 100% (not "Fit to page").
+    Also verify the Paper Size in printer preferences is set to 62mm.</dd>
+
+    <dt style="font-weight:600; margin-top:.5rem;">Labels cut in the wrong place</dt>
+    <dd>Ensure "Cut Every 1 labels" and "Cut at end" are both checked in
+    printer preferences. The Feed value should be around 0.12".</dd>
+
+    <dt style="font-weight:600; margin-top:.5rem;">Barcode won't scan after printing</dt>
+    <dd>Set Quality to "Give priority to print speed" (300x300 DPI).
+    Higher quality modes can cause barcode lines to bleed together on thermal tape.</dd>
+  </dl>
+
+</div>
+{% endblock %}

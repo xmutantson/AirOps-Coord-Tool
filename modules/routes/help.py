@@ -212,6 +212,12 @@ def _bootstrap_help_once():
 def _bootstrap_hook():
     _bootstrap_help_once()
 
+@bp.get("/printer-setup")
+def printer_setup():
+    from flask import render_template
+    return render_template("printer_setup.html", active="help")
+
+
 @bp.get("/api/article")
 def api_get_article():
     _bootstrap_help_once()  # extra safety; idempotent
