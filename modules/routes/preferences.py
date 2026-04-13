@@ -429,5 +429,5 @@ def preferences():
         scan_adv_pref=scan_adv_pref,
         # Label Printer
         printer_ip=(get_preference('printer_ip') or ''),
-        direct_print_pref=(get_preference('direct_print_enabled') or 'no'),
+        direct_print_pref=(get_preference('direct_print_enabled') or 'yes'),
     )

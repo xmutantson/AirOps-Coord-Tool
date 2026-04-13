@@ -696,7 +696,7 @@ def _inject_global_nav_flags():
         'enable_1090_distances': enable_1090,
         'admin_unlocked': admin_unlocked,
         'current_year': datetime.utcnow().year,
-        'direct_print_enabled': (get_preference('direct_print_enabled') or 'no') == 'yes',
+        'direct_print_enabled': (get_preference('direct_print_enabled') or 'yes') == 'yes',
     }
 
 # Jinja2 global: server-side barcode SVG rendering (for direct printing path)
@@ -854,6 +854,19 @@ except Exception as e:
         logger.warning("GPS_TIME: start failed: %s", e)
     except Exception:
         pass
+
+# Auto-discover Brother QL label printer on LAN (background, non-blocking)
+try:
+    import threading as _threading
+    def _printer_discover():
+        try:
+            from modules.services.label_printer import auto_configure_printer
+            auto_configure_printer()
+        except Exception as e:
+            logger.warning("Printer auto-discovery failed: %s", e)
+    _threading.Thread(target=_printer_discover, daemon=True).start()
+except Exception:
+    pass
 
 # ──────────────────────────────────────────────────────────────────────────────
 # App state & constants

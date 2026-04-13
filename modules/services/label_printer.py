@@ -163,6 +163,111 @@ def check_printer_status(printer_ip):
         return {"reachable": False, "ip": printer_ip}
 
 
+# ── mDNS / Zeroconf auto-discovery ────────────────────────────────────
+
+_discovered_ip = None  # module-level cache
+
+
+def discover_printer(timeout=5):
+    """Scan the LAN for a Brother QL printer via mDNS.
+
+    Looks for _pdl-datastream._tcp.local. and _printer._tcp.local. services
+    whose name contains 'Brother' or 'QL'. Returns the IP address string
+    or None if not found.
+    """
+    global _discovered_ip
+    from zeroconf import Zeroconf, ServiceBrowser
+
+    found = {}
+
+    class _Listener:
+        def add_service(self, zc, stype, name):
+            info = zc.get_service_info(stype, name)
+            if info and info.parsed_addresses():
+                low = name.lower()
+                if "brother" in low or "ql" in low:
+                    found[name] = info.parsed_addresses()[0]
+
+        def remove_service(self, zc, stype, name):
+            pass
+
+        def update_service(self, zc, stype, name):
+            pass
+
+    zc = Zeroconf()
+    listener = _Listener()
+    browsers = []
+    for stype in ("_pdl-datastream._tcp.local.", "_printer._tcp.local.", "_ipp._tcp.local."):
+        browsers.append(ServiceBrowser(zc, stype, listener))
+
+    import time
+    time.sleep(timeout)
+    for b in browsers:
+        b.cancel()
+    zc.close()
+
+    if found:
+        ip = list(found.values())[0]
+        _discovered_ip = ip
+        logger.info("Auto-discovered Brother printer at %s (%s)", ip, list(found.keys())[0])
+        return ip
+
+    logger.info("No Brother printer found via mDNS")
+    return None
+
+
+def get_printer_ip():
+    """Return the configured or auto-discovered printer IP.
+
+    Priority: preference > cached discovery > fresh discovery scan.
+    """
+    try:
+        from modules.utils.common import get_preference
+        ip = (get_preference("printer_ip") or "").strip()
+        if ip:
+            return ip
+    except Exception:
+        pass
+
+    if _discovered_ip:
+        return _discovered_ip
+
+    return discover_printer(timeout=3)
+
+
+def auto_configure_printer():
+    """Run at startup: discover printer and set preferences if not already configured.
+
+    Sets printer_ip and direct_print_enabled=yes when a printer is found
+    and no IP is configured yet.
+    """
+    try:
+        from modules.utils.common import get_preference, set_preference
+        existing_ip = (get_preference("printer_ip") or "").strip()
+        if existing_ip:
+            logger.info("Printer IP already configured: %s", existing_ip)
+            # Still default direct printing to on if not explicitly set
+            if get_preference("direct_print_enabled") is None:
+                set_preference("direct_print_enabled", "yes")
+            return existing_ip
+
+        ip = discover_printer(timeout=5)
+        if ip:
+            set_preference("printer_ip", ip)
+            set_preference("direct_print_enabled", "yes")
+            logger.info("Auto-configured printer at %s, direct printing enabled", ip)
+            return ip
+        else:
+            # No printer found — still default direct_print to yes so it works
+            # when a printer appears later
+            if get_preference("direct_print_enabled") is None:
+                set_preference("direct_print_enabled", "yes")
+            return None
+    except Exception as e:
+        logger.warning("Auto-configure printer failed: %s", e)
+        return None
+
+
 def print_label_async(html_string, base_url, printer_ip):
     """Render label HTML and send to printer in a background thread.
 

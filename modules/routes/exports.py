@@ -2143,11 +2143,11 @@ def docs_labels_inventory():
 @bp.get("/api/print/status")
 def api_print_status():
     """Return printer configuration and reachability."""
-    enabled = (get_preference("direct_print_enabled") or "no") == "yes"
-    printer_ip = (get_preference("printer_ip") or "").strip()
+    enabled = (get_preference("direct_print_enabled") or "yes") == "yes"
+    from modules.services.label_printer import get_printer_ip, check_printer_status
+    printer_ip = get_printer_ip()
     if not enabled or not printer_ip:
-        return jsonify({"enabled": enabled, "printer_ip": printer_ip, "reachable": False})
-    from modules.services.label_printer import check_printer_status
+        return jsonify({"enabled": enabled, "printer_ip": printer_ip or "", "reachable": False})
     status = check_printer_status(printer_ip)
     return jsonify({"enabled": True, "printer_ip": printer_ip, "reachable": status["reachable"]})
 
@@ -2160,11 +2160,12 @@ def api_print_label():
       print_type: "cargo" | "inventory"
       params: dict of URL query params (same as GET label routes)
     """
-    if (get_preference("direct_print_enabled") or "no") != "yes":
+    if (get_preference("direct_print_enabled") or "yes") != "yes":
         return jsonify({"ok": False, "error": "Direct printing is not enabled"}), 400
-    printer_ip = (get_preference("printer_ip") or "").strip()
+    from modules.services.label_printer import get_printer_ip
+    printer_ip = get_printer_ip()
     if not printer_ip:
-        return jsonify({"ok": False, "error": "Printer IP not configured"}), 400
+        return jsonify({"ok": False, "error": "No printer found (configure IP in Preferences or check printer is on)"}), 400
 
     data = request.get_json(silent=True) or {}
     print_type = (data.get("print_type") or "").strip().lower()
