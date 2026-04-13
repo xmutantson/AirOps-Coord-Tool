@@ -2162,10 +2162,13 @@ def api_print_label():
     """
     if (get_preference("direct_print_enabled") or "yes") != "yes":
         return jsonify({"ok": False, "error": "Direct printing is not enabled"}), 400
-    from modules.services.label_printer import get_printer_ip
+    from modules.services.label_printer import get_printer_ip, check_printer_status
     printer_ip = get_printer_ip()
     if not printer_ip:
         return jsonify({"ok": False, "error": "No printer found (configure IP in Preferences or check printer is on)"}), 400
+    status = check_printer_status(printer_ip)
+    if not status["reachable"]:
+        return jsonify({"ok": False, "error": f"Printer at {printer_ip} is not reachable"}), 503
 
     data = request.get_json(silent=True) or {}
     print_type = (data.get("print_type") or "").strip().lower()

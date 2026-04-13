@@ -517,31 +517,49 @@ window.printLabel = function(url) {
   var params = {};
   u.searchParams.forEach(function(v, k) { params[k] = v; });
 
+  // Only use direct printing for 62mm tape formats (shipping/address)
+  // Letter and 4x6 go through the browser print dialog
+  var labelSize = (params.label_size || '').toLowerCase();
+  if (labelSize && labelSize !== 'shipping' && labelSize !== 'address') {
+    return window.printViaIframe(url);
+  }
+
   var printType = 'cargo';
   if (path.indexOf('/labels/inventory') !== -1) printType = 'inventory';
 
+  // Check printer status first, then send
   var csrf = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
-  fetch('/api/print/label', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Requested-With': 'XMLHttpRequest',
-      'X-CSRFToken': csrf
-    },
-    body: JSON.stringify({ print_type: printType, params: params })
-  }).then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
-    .then(function(res) {
-      if (res.ok && res.data.ok) {
-        if (window.showToast) window.showToast(res.data.message || 'Sent to printer', 'success');
-      } else {
-        var msg = (res.data && res.data.error) || 'Print failed';
-        if (window.showToast) window.showToast('Printer: ' + msg + ' (using browser)', 'error');
-        window.printViaIframe(url);
-      }
-    }).catch(function(e) {
+  fetch('/api/print/status').then(function(r) { return r.json(); }).then(function(st) {
+    if (!st.reachable) {
       if (window.showToast) window.showToast('Printer unreachable (using browser)', 'error');
       window.printViaIframe(url);
-    });
+      return;
+    }
+    fetch('/api/print/label', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest',
+        'X-CSRFToken': csrf
+      },
+      body: JSON.stringify({ print_type: printType, params: params })
+    }).then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+      .then(function(res) {
+        if (res.ok && res.data.ok) {
+          if (window.showToast) window.showToast(res.data.message || 'Sent to printer', 'success');
+        } else {
+          var msg = (res.data && res.data.error) || 'Print failed';
+          if (window.showToast) window.showToast('Printer: ' + msg + ' (using browser)', 'error');
+          window.printViaIframe(url);
+        }
+      }).catch(function(e) {
+        if (window.showToast) window.showToast('Print error (using browser)', 'error');
+        window.printViaIframe(url);
+      });
+  }).catch(function() {
+    if (window.showToast) window.showToast('Printer unreachable (using browser)', 'error');
+    window.printViaIframe(url);
+  });
 };
 </script>
 
