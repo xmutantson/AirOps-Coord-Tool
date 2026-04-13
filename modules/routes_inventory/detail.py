@@ -168,9 +168,9 @@ def inventory_detail():
         except Exception:
             pass
 
-        # ---- Auto-generate barcode for inbound items that lack one ----
+        # ---- Auto-generate barcode for items that lack one ----
         gen_barcode = None
-        if dirn == "in":
+        if True:  # generate for both inbound and outbound
             try:
                 from modules.routes_inventory.barcodes import _generate_barcode_id, _ensure_barcode_schema
                 _ensure_barcode_schema()
@@ -201,6 +201,7 @@ def inventory_detail():
                 logger.warning("Auto-barcode generation failed: %s", e)
 
         # Redirect with tag print prompt params if barcode was generated/found
+        logger.info("Inventory entry: dirn=%s, item=%s, gen_barcode=%s", dirn, noun, gen_barcode)
         redir_url = url_for("inventory.inventory_detail")
         if gen_barcode:
             import urllib.parse
