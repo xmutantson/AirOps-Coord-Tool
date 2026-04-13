@@ -64,15 +64,23 @@ def render_label_png(html_string, base_url):
     from weasyprint import HTML, CSS
 
     # Force 62mm page width with a tall fixed height (content gets cropped later)
+    # Also hide all non-print elements (nav, header, sidebar, buttons)
     override_css = CSS(string="""
         @page { size: 62mm 200mm; margin: 2mm; }
         body { margin: 0; width: 58mm; }
+        header, nav, .sidebar, .hide-on-print, .main-nav,
+        button, .button, input, select, textarea,
+        .label-size-hint, .inv-tag-hint,
+        .print-page, #toast-container, .hamburger-container,
+        #nav-dropdown, #nav-backdrop, footer,
+        .initialize-btn { display: none !important; }
     """)
 
     # WeasyPrint 60+ removed write_png(); render PDF then convert via Pillow
+    # Use media_type='print' so @media print rules apply
     pdf_bytes = HTML(
         string=html_string, base_url=base_url
-    ).write_pdf(stylesheets=[override_css])
+    ).write_pdf(stylesheets=[override_css], presentational_hints=True)
 
     # PDF -> PNG via pypdfium2 (bundled with WeasyPrint) or fitz fallback
     try:
@@ -158,9 +166,13 @@ def send_to_printer(image_bytes, printer_ip, cut=True):
             backend_identifier="network",
         )
 
-        if result.get("did_print"):
+        if result is None:
+            # Network backend often returns None but still prints
             return {"ok": True}
-        return {"ok": False, "error": result.get("printer_state", {}).get("errors", ["Unknown error"])}
+        if result.get("did_print") or result.get("instructions_sent"):
+            return {"ok": True}
+        errors = (result.get("printer_state") or {}).get("errors", ["Unknown error"])
+        return {"ok": False, "error": str(errors)}
 
     except ConnectionRefusedError:
         msg = f"Printer at {printer_ip} refused connection (is it on?)"
