@@ -1,0 +1,15 @@
+[Unit]
+Description=AirOps Coordination Tool
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/pi/docker/aoct
+ExecStart=/home/pi/docker/aoct/start.sh
+ExecStop=/usr/bin/docker compose -f /home/pi/docker/aoct/docker-compose.yml -f /home/pi/docker/aoct/docker-compose.override.yml down
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

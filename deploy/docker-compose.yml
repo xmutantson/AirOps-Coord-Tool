@@ -1,0 +1,71 @@
+services:
+  aircraft_ops_tool:
+    image: ghcr.io/xmutantson/aircraft_ops_tool:latest
+    network_mode: host
+    volumes:
+    - ./data:/app/data
+    - flask_secret:/run/secrets
+    device_cgroup_rules:
+    - c 189:* rwm
+    - c 116:* rwm
+    - c 81:* rwm
+    privileged: false
+    group_add:
+    - audio
+    cap_add:
+    - SYS_TIME
+    - NET_RAW
+    environment:
+      AOCT_SET_HOST_TIME: '1'
+      AOCT_TIME_DRIFT_MS: '300000'
+      AOCT_TIME_MAX_ADJUST_SEC: '0'
+      AOCT_GPS_TIME_ENABLE: '1'
+      AOCT_GPSD_HOST: 127.0.0.1
+      AOCT_GPSD_PORT: '2947'
+      AOCT_GPS_POLL_SEC: '1.0'
+      AOCT_GPS_CONF_SECS: '3.0'
+      WAITRESS_LISTEN: 0.0.0.0:5150
+      WAITRESS_THREADS: '32'
+      WAITRESS_CONNECTION_LIMIT: '200'
+      WAITRESS_CHANNEL_TIMEOUT: '120'
+      DIGIRIG_ENABLE: '1'
+      DIGIRIG_PTT: /dev/digrig-ptt
+      AX25_CALLSIGN: KG7VSN-10
+      AX25_RX_DEVICE: plughw:CARD=Device,DEV=0
+      AX25_TX_DEVICE: plughw:CARD=Device,DEV=0
+      AX25_DEST: AOCTDB
+      AX25_PATH: ''
+      MYCALL: KG7VSN-10
+      KISS_HOST: 127.0.0.1
+      KISS_PORT: '8001'
+      KISS_VERBOSE: '0'
+      CHUNK_BYTES: '200'
+      PACE_MS: '350'
+      BURST_SIZE: '6'
+      BURST_PAUSE_MS: '750'
+      KISS_WARMUP_MS: '250'
+      FULL_INTERVAL_SEC: '900'
+      DIFF_INTERVAL_SEC: '30'
+      COMPRESS: '1'
+      ENCODING: B91
+      AOCT_SQL_SLOW_MS: '50'
+      AOCT_SQL_EXPLAIN: '1'
+      AOCT_SQL_LOG: '0'
+      AOCT_SQL_TRACE: '1'
+      AOCT_SQL_TRACE_EXPANDED: '0'
+      PYTHONUNBUFFERED: '1'
+      AOCT_SAME_ENABLE: '1'
+      AOCT_SAME_MODE: airband
+      AOCT_SAME_SERIAL: '978'
+      AOCT_SAME_INDEX: ''
+      AOCT_SAME_GAIN: '38.6'
+      AOCT_SAME_FREQ: '162.550'
+      AOCT_SAME_UDP_BASE: '5551'
+      AOCT_SAME_UDP_RATE: '16000'
+      AOCT_SAME_DEDUPE_SEC: '60'
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 8192
+volumes:
+  flask_secret: null
