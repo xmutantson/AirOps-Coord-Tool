@@ -33,6 +33,7 @@
       <tr>
         <th>Select</th>
         <th>Item</th>
+        <th>Source</th>
         <th>Size ({{ mass_pref }})</th>
         <th>Avail</th>
         <th>Total ({{ mass_pref }})</th>
@@ -49,13 +50,14 @@
                  data-size-lbs="{{ '%.6f' % (it.wpu_lbs if it.wpu_lbs is not none else 0) }}">
         </td>
         <td>{{ it.noun }}</td>
+        <td class="muted" style="font-size:.85em;">{{ it.origin or "" }}</td>
         <td>{{ it.size }}</td>
         <td>{{ it.qty }}</td>
         <td>{{ it.total|round(1) }}</td>
         <td style="white-space:nowrap;">
           {% if it.barcode %}
           <button type="button" style="padding:2px 8px; font-size:.8em; cursor:pointer;"
-                  onclick="var n=prompt('How many tags?','1'); if(n&&!isNaN(n)&&n>0) printLabel('/docs/labels/inventory?barcode={{ it.barcode|urlencode }}&name={{ it.noun|urlencode }}&weight_per_unit={{ it.wpu_lbs }}&qty='+n+'&label_size=address');">
+                  onclick="var n=prompt('How many tags?','1'); if(n&&!isNaN(n)&&n>0) printLabel('/docs/labels/inventory?barcode={{ it.barcode|urlencode }}&name={{ it.noun|urlencode }}&weight_per_unit={{ it.wpu_lbs }}&qty='+n+'&origin={{ it.origin|urlencode }}&label_size=address');">
             Print Tags
           </button>
           {% else %}

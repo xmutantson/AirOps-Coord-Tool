@@ -15,6 +15,7 @@ def inventory_stock():
       SELECT c.display_name AS category,
              e.sanitized_name      AS noun,
              e.weight_per_unit     AS wpu,
+             COALESCE(e.origin, '') AS origin,
              SUM(CASE
                    WHEN e.direction='in'  THEN  e.quantity
                    WHEN e.direction='out' THEN -e.quantity
@@ -22,9 +23,9 @@ def inventory_stock():
         FROM inventory_entries e
         JOIN inventory_categories c ON c.id = e.category_id
        WHERE e.pending = 0
-       GROUP BY e.category_id, e.sanitized_name, e.weight_per_unit
+       GROUP BY e.category_id, e.sanitized_name, e.weight_per_unit, e.origin
        HAVING qty > 0
-       ORDER BY c.display_name, e.sanitized_name, e.weight_per_unit
+       ORDER BY c.display_name, e.sanitized_name, e.weight_per_unit, e.origin
     """)
 
     # Look up barcodes for each item
@@ -52,6 +53,7 @@ def inventory_stock():
           'qty'  : r['qty'],
           'total': r['wpu'] * r['qty'],
           'barcode': barcode_map.get(key, ''),
+          'origin': r['origin'],
         }
         stock.setdefault(cat, []).append(entry)
 
