@@ -54,20 +54,22 @@ def generate_barcode_svg(value):
 
 
 def render_label_png(label_data, label_type="inventory"):
-    """Render a label directly to a PNG using Pillow.
+    """Render a label as a rotated PNG for 62mm continuous tape.
 
-    Draws at 696px wide (62mm @ 300 DPI) for the Brother QL.
-    If content needs more width, renders wider and rotates 90 degrees.
+    Draws in landscape (height = 696px = tape width), then rotates 90
+    degrees clockwise so the label feeds lengthwise. This gives maximum
+    text size — the full 2.4" tape width is used for text height.
 
-    Returns PNG bytes.
+    Returns PNG bytes (696px wide after rotation, variable length).
     """
     from PIL import ImageDraw, ImageFont
 
-    W = _NATIVE_WIDTH_PX  # 696
-    PAD = 24
-    LINE_GAP = 6
+    TAPE_PX = _NATIVE_WIDTH_PX  # 696px = 62mm @ 300 DPI
+    PAD = 20
+    LINE_GAP = 4
+    # Available height for content (before rotation, this is the image height)
+    CONTENT_H = TAPE_PX - 2 * PAD
 
-    # Font loader with fallback chain
     _fc = {}
     def font(size):
         if size not in _fc:
@@ -83,7 +85,7 @@ def render_label_png(label_data, label_type="inventory"):
                 _fc[size] = ImageFont.load_default(size=size)
         return _fc[size]
 
-    # Get real mission number from preferences
+    # Get real mission number
     mission_num = ""
     try:
         from modules.utils.common import get_preference
@@ -93,22 +95,21 @@ def render_label_png(label_data, label_type="inventory"):
 
     # ── Build content rows: list of (text, font_size) ──
     rows = []
+    bc_val = label_data.get("barcode", "")
 
     if label_type == "inventory":
-        rows.append((label_data.get("name", ""), 38))
-        rows.append((f'{label_data.get("weight_lb", "")} lb per unit', 28))
+        rows.append((label_data.get("name", ""), 48))
+        rows.append((f'{label_data.get("weight_lb", "")} lb per unit', 36))
         if label_data.get("origin"):
-            rows.append((label_data["origin"], 24))
+            rows.append((label_data["origin"], 30))
         if label_data.get("unit_label"):
-            rows.append((f'Unit {label_data["unit_label"]}', 30))
-
+            rows.append((f'Unit {label_data["unit_label"]}', 40))
     else:  # cargo
         title = "CARGO ID"
         if label_data.get("unit_label"):
             title += f'  {label_data["unit_label"]}'
-        rows.append((title, 32))
+        rows.append((title, 40))
 
-        # Use real mission number, fall back to label data
         m = mission_num or label_data.get("mission", "")
         kv = []
         if m:
@@ -122,41 +123,48 @@ def render_label_png(label_data, label_type="inventory"):
         wt = label_data.get("weight_lb", "")
         if wt:
             kv.append(("Weight", f"{wt} lb"))
-
         for k, v in kv:
-            rows.append((f"{k}: {v}", 24))
+            rows.append((f"{k}: {v}", 30))
 
-    # ── Calculate dimensions ──
-    total_h = PAD
+    # ── Calculate width needed (this becomes label length after rotation) ──
+    # Barcode block width
+    bc_block_w = 0
+    if bc_val:
+        bc_block_w = 350  # approximate; will be exact after rendering
+
+    # Text block width: measure each row
+    text_block_w = 0
     for text, sz in rows:
-        total_h += sz + LINE_GAP
-    # Add space for barcode
-    bc_val = label_data.get("barcode", "")
-    bc_block_h = 0
-    if bc_val:
-        bc_block_h = 100
-        total_h += bc_block_h + LINE_GAP
-    total_h += PAD
+        f = font(sz)
+        bbox = ImageDraw.Draw(Image.new("RGB", (1, 1))).textbbox((0, 0), text, font=f)
+        tw = bbox[2] - bbox[0]
+        text_block_w = max(text_block_w, tw)
 
-    # ── Draw ──
-    img = Image.new("RGB", (W, total_h), "white")
+    # Total width: barcode + gap + text (side by side) or stacked
+    # Use side-by-side layout: barcode on left, text on right
+    if bc_val:
+        total_w = PAD + bc_block_w + PAD + text_block_w + PAD
+    else:
+        total_w = PAD + text_block_w + PAD
+    total_w = max(total_w, 400)  # minimum length
+
+    # ── Draw in landscape: width = label length, height = tape width (696px) ──
+    img = Image.new("RGB", (total_w, TAPE_PX), "white")
     draw = ImageDraw.Draw(img)
-    draw.rectangle([3, 3, W - 4, total_h - 4], outline="black", width=2)
+    draw.rectangle([3, 3, total_w - 4, TAPE_PX - 4], outline="black", width=2)
 
-    y = PAD
-
-    # Barcode at top
     if bc_val:
+        # Barcode on the left side, vertically centered
         try:
             import barcode as bc_lib
             from barcode.writer import ImageWriter
             writer = ImageWriter()
             writer.set_options({
-                "module_width": 0.35,
-                "module_height": 10.0,
-                "font_size": 12,
-                "text_distance": 1.5,
-                "quiet_zone": 3.0,
+                "module_width": 0.45,
+                "module_height": 15.0,
+                "font_size": 16,
+                "text_distance": 2.0,
+                "quiet_zone": 4.0,
                 "write_text": True,
                 "dpi": 300,
             })
@@ -164,46 +172,40 @@ def render_label_png(label_data, label_type="inventory"):
             bc_buf = io.BytesIO()
             code.write(bc_buf)
             bc_img = Image.open(bc_buf).convert("RGB")
-            # Scale to fit width
-            max_w = W - 2 * PAD
-            if bc_img.width > max_w:
-                r = max_w / bc_img.width
-                bc_img = bc_img.resize((max_w, int(bc_img.height * r)), Image.LANCZOS)
-            # Center
-            img.paste(bc_img, ((W - bc_img.width) // 2, y))
-            y += bc_img.height + LINE_GAP
+            # Scale barcode to fit in left column
+            max_bc_w = bc_block_w - 20
+            max_bc_h = CONTENT_H
+            r = min(max_bc_w / max(1, bc_img.width), max_bc_h / max(1, bc_img.height))
+            if r < 1:
+                bc_img = bc_img.resize((int(bc_img.width * r), int(bc_img.height * r)), Image.LANCZOS)
+            bc_x = PAD + (bc_block_w - bc_img.width) // 2
+            bc_y = (TAPE_PX - bc_img.height) // 2
+            img.paste(bc_img, (bc_x, bc_y))
         except Exception as e:
             logger.warning("Barcode render failed: %s", e)
-            draw.text((PAD, y), bc_val, fill="black", font=font(18))
-            y += 24
+            draw.text((PAD, TAPE_PX // 2), bc_val, fill="black", font=font(20))
 
-    # Separator line after barcode
-    if bc_val:
-        draw.line([(PAD, y), (W - PAD, y)], fill="gray", width=1)
-        y += LINE_GAP
+        # Vertical separator
+        sep_x = PAD + bc_block_w
+        draw.line([(sep_x, PAD), (sep_x, TAPE_PX - PAD)], fill="gray", width=1)
 
-    # Text rows
+        # Text starts after barcode column
+        text_x = sep_x + PAD
+    else:
+        text_x = PAD
+
+    # Draw text rows, vertically centered in the tape height
+    total_text_h = sum(sz + LINE_GAP for _, sz in rows) - LINE_GAP
+    y = max(PAD, (TAPE_PX - total_text_h) // 2)
+
     for text, sz in rows:
         f = font(sz)
-        # Center inventory labels, left-align cargo
-        if label_type == "inventory":
-            bbox = draw.textbbox((0, 0), text, font=f)
-            tw = bbox[2] - bbox[0]
-            x = max(PAD, (W - tw) // 2)
-        else:
-            x = PAD
-        draw.text((x, y), text, fill="black", font=f)
+        draw.text((text_x, y), text, fill="black", font=f)
         y += sz + LINE_GAP
 
-    # Crop to content
-    y += PAD
-    img = img.crop((0, 0, W, min(y, img.height)))
-
-    # Convert to RGB (safety)
-    if img.mode != "RGB":
-        bg = Image.new("RGB", img.size, (255, 255, 255))
-        bg.paste(img)
-        img = bg
+    # ── Rotate 90 degrees clockwise ──
+    # After rotation: width=696 (tape width), height=label length
+    img = img.rotate(-90, expand=True)
 
     out = io.BytesIO()
     img.save(out, format="PNG")
