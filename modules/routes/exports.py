@@ -2277,33 +2277,12 @@ def _dispatch_label_prints(labels, section, label_size, printer_ip):
     import threading
     from modules.services.label_printer import render_label_png, send_to_printer
 
-    base_url = os.path.dirname(os.path.abspath(__file__)) + "/../../"
+    label_type = "inventory" if section == "inventory_tags" else "cargo"
 
     for lbl in labels:
-        if section == "labels":
-            ctx = {
-                "section": "labels",
-                "labels": [lbl],
-                "label_size": label_size,
-                "print_mode": False,
-                "auto_print": False,
-                "server_render": True,
-            }
-        else:
-            ctx = {
-                "section": "inventory_tags",
-                "inv_tags": [lbl],
-                "label_size": label_size,
-                "print_mode": False,
-                "auto_print": False,
-                "server_render": True,
-            }
-
-        html = render_template("waivers.html", **ctx)
-
-        def _print_job(html_str=html, ip=printer_ip):
+        def _print_job(data=lbl, lt=label_type, ip=printer_ip):
             try:
-                png = render_label_png(html_str, base_url)
+                png = render_label_png(data, label_type=lt)
                 result = send_to_printer(png, ip)
                 if not result["ok"]:
                     import logging

@@ -53,100 +53,131 @@ def generate_barcode_svg(value):
     return svg_str.strip()
 
 
-def render_label_png(html_string, base_url):
-    """Render label HTML to a cropped PNG sized for 62mm tape.
+def render_label_png(label_data, label_type="inventory"):
+    """Render a label directly to a 696px-wide PNG using Pillow.
 
-    Uses WeasyPrint to render HTML -> PNG, then Pillow to crop trailing
-    whitespace and resize to 696px wide (62mm at 300 DPI).
+    Bypasses WeasyPrint entirely — draws text and barcodes directly for
+    predictable output at 300 DPI on the Brother QL 62mm tape.
 
-    Returns PNG bytes.
+    Args:
+        label_data: dict with label fields (barcode, name, weight_lb, origin,
+                    unit_label for inventory; or mission, tail, origin, destination,
+                    date_sealed, contents, cargo_origin, weight_lb, barcode,
+                    unit_label for cargo)
+        label_type: "inventory" or "cargo"
+
+    Returns PNG bytes (696px wide, variable height).
     """
-    from weasyprint import HTML, CSS
+    from PIL import ImageDraw, ImageFont
 
-    # Render at a size where CSS pixels map to 300 DPI print pixels.
-    # 62mm at 300 DPI = 696px. At PDF's 72 DPI that's 696*(72/300) = 166.9pt.
-    # But we want fonts to look right, so we render the page at a wider pt size
-    # and then rasterize at a higher DPI to hit 696px final width.
-    # Strategy: 250pt wide page (~88mm), render PDF at 200 DPI → ~694px.
-    # This makes CSS px fonts ~2.8x larger than the 62mm approach.
-    override_css = CSS(string="""
-        @page { size: 250pt 800pt; margin: 6pt; }
-        body { margin: 0; width: 238pt; font-size: 14pt; }
-        header, nav, .sidebar, .hide-on-print, .main-nav,
-        button, .button, input, select, textarea,
-        .label-size-hint, .inv-tag-hint,
-        .print-page, #toast-container, .hamburger-container,
-        #nav-dropdown, #nav-backdrop, footer,
-        .initialize-btn { display: none !important; }
-        /* Scale up label fonts for thermal print readability */
-        .inv-tag .tag-name { font-size: 16pt !important; }
-        .inv-tag .tag-weight { font-size: 12pt !important; }
-        .inv-tag .tag-origin { font-size: 10pt !important; }
-        .inv-tag .tag-unit { font-size: 13pt !important; font-weight: 700 !important; }
-        .label-card h3 { font-size: 14pt !important; }
-        .label-card td { font-size: 11pt !important; padding: 2pt 4pt !important; }
-        .label-card td:first-child { font-weight: 700; }
-    """)
+    W = _NATIVE_WIDTH_PX  # 696
+    MARGIN = 20
+    TEXT_W = W - 2 * MARGIN
+    y = MARGIN
 
-    # WeasyPrint 60+ removed write_png(); render PDF then convert via Pillow
-    pdf_bytes = HTML(
-        string=html_string, base_url=base_url
-    ).write_pdf(stylesheets=[override_css], presentational_hints=True)
+    # Try to load a decent font; fall back to default
+    font_cache = {}
+    def get_font(size):
+        if size not in font_cache:
+            for name in ("DejaVuSans.ttf", "LiberationSans-Regular.ttf",
+                         "FreeSans.ttf", "arial.ttf", "Helvetica.ttf"):
+                try:
+                    font_cache[size] = ImageFont.truetype(name, size)
+                    break
+                except (OSError, IOError):
+                    continue
+            else:
+                font_cache[size] = ImageFont.load_default(size=size)
+        return font_cache[size]
 
-    # PDF -> PNG via pypdfium2 or fitz fallback
-    # Render at 200 DPI: 250pt * (200/72) ≈ 694px wide (close to 696 target)
-    try:
-        import pypdfium2 as pdfium
-        pdf = pdfium.PdfDocument(pdf_bytes)
-        page = pdf[0]
-        bitmap = page.render(scale=200 / 72)
-        pil_img = bitmap.to_pil()
-        png_buf = io.BytesIO()
-        pil_img.save(png_buf, format="PNG")
-        png_bytes = png_buf.getvalue()
-    except ImportError:
+    font_title = get_font(36)
+    font_large = get_font(28)
+    font_med   = get_font(22)
+    font_small = get_font(18)
+    font_label = get_font(16)
+
+    # First pass: calculate height
+    lines = []  # (font, text, bold)
+
+    if label_type == "inventory":
+        lines.append((font_title, label_data.get("name", ""), True))
+        lines.append((font_large, f"{label_data.get('weight_lb', '')} lb per unit", False))
+        if label_data.get("origin"):
+            lines.append((font_med, label_data["origin"], False))
+        if label_data.get("unit_label"):
+            lines.append((font_large, f"Unit {label_data['unit_label']}", True))
+    else:  # cargo
+        lines.append((font_title, "CARGO ID", True))
+        if label_data.get("unit_label"):
+            lines[-1] = (font_title, f"CARGO ID  {label_data['unit_label']}", True)
+        for label_key, display in [("mission", "Mission"), ("tail", "Tail #"),
+                                    ("origin", "From"), ("destination", "To"),
+                                    ("date_sealed", "Date"), ("contents", "Item"),
+                                    ("cargo_origin", "Source"), ("weight_lb", "Weight")]:
+            val = label_data.get(label_key, "")
+            if not val:
+                continue
+            if label_key == "weight_lb":
+                val = f"{val} lb"
+            lines.append((font_label, f"{display}:", True))
+            lines.append((font_med, f"  {val}", False))
+
+    # Calculate total height
+    barcode_height = 80 if label_data.get("barcode") else 0
+    text_height = sum(f.size + 8 for f, _, _ in lines)
+    total_h = MARGIN + barcode_height + 10 + text_height + MARGIN
+
+    # Create image
+    img = Image.new("RGB", (W, total_h), "white")
+    draw = ImageDraw.Draw(img)
+
+    # Draw border
+    draw.rectangle([4, 4, W - 5, total_h - 5], outline="black", width=2)
+
+    y = MARGIN
+
+    # Draw barcode if present
+    bc_val = label_data.get("barcode", "")
+    if bc_val:
         try:
-            import fitz  # PyMuPDF
-            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-            page = doc[0]
-            pix = page.get_pixmap(dpi=300)
-            png_bytes = pix.tobytes("png")
-        except ImportError:
-            # Last resort: use pdf2image / Pillow with ghostscript
-            raise RuntimeError(
-                "No PDF-to-PNG converter available. Install pypdfium2 or PyMuPDF."
-            )
+            import barcode as bc_lib
+            from barcode.writer import ImageWriter
+            writer = ImageWriter()
+            writer.set_options({
+                "module_width": 0.4,
+                "module_height": 12.0,
+                "font_size": 14,
+                "text_distance": 2.0,
+                "quiet_zone": 4.0,
+                "write_text": True,
+                "dpi": 300,
+            })
+            code = bc_lib.get("code128", bc_val, writer=writer)
+            bc_buf = io.BytesIO()
+            code.write(bc_buf)
+            bc_img = Image.open(bc_buf)
+            # Scale barcode to fit width
+            bc_w = min(TEXT_W, bc_img.width)
+            ratio = bc_w / bc_img.width
+            bc_h = int(bc_img.height * ratio)
+            bc_img = bc_img.resize((bc_w, bc_h), Image.LANCZOS)
+            # Center barcode
+            x_offset = (W - bc_w) // 2
+            img.paste(bc_img, (x_offset, y))
+            y += bc_h + 8
+        except Exception as e:
+            logger.warning("Barcode render failed: %s", e)
+            draw.text((MARGIN, y), bc_val, fill="black", font=font_small)
+            y += 24
 
-    img = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+    # Draw text lines
+    for font, text, bold in lines:
+        draw.text((MARGIN, y), text, fill="black", font=font)
+        y += font.size + 8
 
-    # Crop trailing whitespace: find last non-white row
-    # Convert to grayscale, find bounding box of non-white content
-    gray = img.convert("L")
-    bbox = gray.getbbox()  # (left, upper, right, lower)
-    if bbox:
-        # Keep full width, crop height to content + 20px padding
-        bottom = min(bbox[3] + 20, img.height)
-        img = img.crop((0, 0, img.width, bottom))
-
-    # If the image is wider than tall (landscape), rotate 90° so it feeds
-    # correctly on the 62mm tape (tape width = image width)
-    if img.width > img.height:
-        img = img.rotate(90, expand=True)
-
-    # Resize to native 62mm width (696px at 300 DPI)
-    if img.width != _NATIVE_WIDTH_PX:
-        ratio = _NATIVE_WIDTH_PX / img.width
-        new_h = max(1, int(img.height * ratio))
-        img = img.resize((_NATIVE_WIDTH_PX, new_h), Image.LANCZOS)
-
-    # Convert to RGB (brother_ql expects no alpha channel)
-    if img.mode != "RGB":
-        bg = Image.new("RGB", img.size, (255, 255, 255))
-        if img.mode == "RGBA":
-            bg.paste(img, mask=img.split()[3])
-        else:
-            bg.paste(img)
-        img = bg
+    # Crop to actual content
+    y += MARGIN
+    img = img.crop((0, 0, W, min(y, img.height)))
 
     out = io.BytesIO()
     img.save(out, format="PNG")
