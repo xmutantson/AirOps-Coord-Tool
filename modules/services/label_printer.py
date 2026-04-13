@@ -56,19 +56,22 @@ def generate_barcode_svg(value):
 def render_label_png(label_data, label_type="inventory"):
     """Render a label as a rotated PNG for 62mm continuous tape.
 
-    Draws in landscape (height = 696px = tape width), then rotates 90
-    degrees clockwise so the label feeds lengthwise. This gives maximum
-    text size — the full 2.4" tape width is used for text height.
+    Layout (before final rotation):
+    - Image width = label length (along tape), height = 696px (tape width)
+    - Barcode rendered separately, rotated 90 deg left so its bars span
+      the full tape width (696px) — placed on the left side of the label
+    - Text fills the right side, auto-scaled to use available height
+    - n/N unit counter in top-right corner
+    - Final image rotated 90 deg CW so width=696 for brother_ql
 
-    Returns PNG bytes (696px wide after rotation, variable length).
+    Returns PNG bytes (696px wide, variable height).
     """
     from PIL import ImageDraw, ImageFont
 
-    TAPE_PX = _NATIVE_WIDTH_PX  # 696px = 62mm @ 300 DPI
+    TAPE_PX = _NATIVE_WIDTH_PX  # 696
     PAD = 20
     LINE_GAP = 4
-    # Available height for content (before rotation, this is the image height)
-    CONTENT_H = TAPE_PX - 2 * PAD
+    CONTENT_H = TAPE_PX - 2 * PAD  # 656px usable
 
     _fc = {}
     def font(size):
@@ -93,88 +96,73 @@ def render_label_png(label_data, label_type="inventory"):
     except Exception:
         pass
 
-    # ── Build content rows: list of (text, relative_weight) ──
-    # Weights are relative — actual px sizes are computed to fill tape height
-    raw_rows = []
     bc_val = label_data.get("barcode", "")
+    unit_label = label_data.get("unit_label", "")  # e.g. "2/5"
+
+    # ── Build text rows: (text, relative_weight) ──
+    raw_rows = []
 
     if label_type == "inventory":
         raw_rows.append((label_data.get("name", ""), 5))
-        raw_rows.append((f'{label_data.get("weight_lb", "")} lb per unit', 4))
+        raw_rows.append((f'{label_data.get("weight_lb", "")} lb/unit', 4))
         if label_data.get("origin"):
             raw_rows.append((label_data["origin"], 3))
-        if label_data.get("unit_label"):
-            raw_rows.append((f'Unit {label_data["unit_label"]}', 4))
     else:  # cargo
-        title = "CARGO ID"
-        if label_data.get("unit_label"):
-            title += f'  {label_data["unit_label"]}'
-        raw_rows.append((title, 4))
-
+        raw_rows.append(("CARGO ID", 4))
         m = mission_num or label_data.get("mission", "")
-        kv = []
         if m:
-            kv.append(("Mission", m))
-        for key, display in [("tail", "Tail"), ("origin", "From"),
-                              ("destination", "To"), ("date_sealed", "Date"),
-                              ("contents", "Item"), ("cargo_origin", "Source")]:
-            v = label_data.get(key, "")
-            if v:
-                kv.append((display, str(v)))
+            raw_rows.append((f"Mission: {m}", 3))
+        if label_data.get("tail"):
+            raw_rows.append((f"Tail: {label_data['tail']}", 3))
+        # From -> To on one line with arrow
+        orig = label_data.get("origin", "")
+        dest = label_data.get("destination", "")
+        if orig and dest:
+            raw_rows.append((f"{orig} -> {dest}", 3))
+        elif orig:
+            raw_rows.append((f"From: {orig}", 3))
+        elif dest:
+            raw_rows.append((f"To: {dest}", 3))
+        if label_data.get("date_sealed"):
+            raw_rows.append((f"Date: {label_data['date_sealed']}", 3))
+        # Item name (no category prefix — just the item)
+        contents = label_data.get("contents", "")
+        if contents:
+            # Strip "Category: " prefix if present
+            if ": " in contents:
+                parts = contents.split(": ", 1)
+                # If first part looks like a category name, drop it
+                if len(parts[0]) < 30:
+                    contents = parts[1]
+            raw_rows.append((f"Item: {contents}", 3))
+        if label_data.get("cargo_origin"):
+            raw_rows.append((f"Source: {label_data['cargo_origin']}", 3))
         wt = label_data.get("weight_lb", "")
         if wt:
-            kv.append(("Weight", f"{wt} lb"))
-        for k, v in kv:
-            raw_rows.append((f"{k}: {v}", 3))
+            raw_rows.append((f"Weight: {wt} lb", 3))
 
-    # ── Scale font sizes to fill the tape height (696px) ──
+    # ── Scale fonts to fill tape height ──
     total_weight = sum(w for _, w in raw_rows)
     num_gaps = len(raw_rows) - 1
-    available_h = CONTENT_H  # 696 - 2*PAD = 656px
-    # Each weight unit gets: available_h / (total_weight + gap_allowance)
-    px_per_weight = available_h / (total_weight + num_gaps * 0.3)
+    px_per_weight = CONTENT_H / (total_weight + num_gaps * 0.3)
     rows = []
     for text, weight in raw_rows:
         sz = max(20, min(80, int(px_per_weight * weight)))
         rows.append((text, sz))
 
-    # ── Calculate width needed (this becomes label length after rotation) ──
-    # Barcode block width
+    # ── Render barcode as a separate image, rotated 90 deg left ──
+    # This makes barcode bars span the full tape width
     bc_block_w = 0
+    bc_img_final = None
     if bc_val:
-        bc_block_w = 350  # approximate; will be exact after rendering
-
-    # Text block width: measure each row
-    text_block_w = 0
-    for text, sz in rows:
-        f = font(sz)
-        bbox = ImageDraw.Draw(Image.new("RGB", (1, 1))).textbbox((0, 0), text, font=f)
-        tw = bbox[2] - bbox[0]
-        text_block_w = max(text_block_w, tw)
-
-    # Total width: barcode + gap + text (side by side) or stacked
-    # Use side-by-side layout: barcode on left, text on right
-    if bc_val:
-        total_w = PAD + bc_block_w + PAD + text_block_w + PAD
-    else:
-        total_w = PAD + text_block_w + PAD
-    total_w = max(total_w, 400)  # minimum length
-
-    # ── Draw in landscape: width = label length, height = tape width (696px) ──
-    img = Image.new("RGB", (total_w, TAPE_PX), "white")
-    draw = ImageDraw.Draw(img)
-    draw.rectangle([3, 3, total_w - 4, TAPE_PX - 4], outline="black", width=2)
-
-    if bc_val:
-        # Barcode on the left side, vertically centered
         try:
             import barcode as bc_lib
             from barcode.writer import ImageWriter
             writer = ImageWriter()
             writer.set_options({
-                "module_width": 0.45,
+                "module_width": 0.5,
                 "module_height": 15.0,
-                "font_size": 16,
+                "font_size": 14,
                 "text_distance": 2.0,
                 "quiet_zone": 4.0,
                 "write_text": True,
@@ -183,40 +171,68 @@ def render_label_png(label_data, label_type="inventory"):
             code = bc_lib.get("code128", bc_val, writer=writer)
             bc_buf = io.BytesIO()
             code.write(bc_buf)
-            bc_img = Image.open(bc_buf).convert("RGB")
-            # Scale barcode to fit in left column
-            max_bc_w = bc_block_w - 20
-            max_bc_h = CONTENT_H
-            r = min(max_bc_w / max(1, bc_img.width), max_bc_h / max(1, bc_img.height))
-            if r < 1:
-                bc_img = bc_img.resize((int(bc_img.width * r), int(bc_img.height * r)), Image.LANCZOS)
-            bc_x = PAD + (bc_block_w - bc_img.width) // 2
-            bc_y = (TAPE_PX - bc_img.height) // 2
-            img.paste(bc_img, (bc_x, bc_y))
+            bc_raw = Image.open(bc_buf).convert("RGB")
+            # Rotate barcode 90 deg left so bars span tape width
+            bc_rotated = bc_raw.rotate(90, expand=True)
+            # Scale height (was width) to fit tape height
+            if bc_rotated.height > CONTENT_H:
+                r = CONTENT_H / bc_rotated.height
+                bc_rotated = bc_rotated.resize(
+                    (int(bc_rotated.width * r), int(bc_rotated.height * r)),
+                    Image.LANCZOS)
+            bc_img_final = bc_rotated
+            bc_block_w = bc_rotated.width + PAD
         except Exception as e:
             logger.warning("Barcode render failed: %s", e)
-            draw.text((PAD, TAPE_PX // 2), bc_val, fill="black", font=font(20))
 
+    # ── Measure text width ──
+    _measure = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    text_block_w = 0
+    for text, sz in rows:
+        bbox = _measure.textbbox((0, 0), text, font=font(sz))
+        text_block_w = max(text_block_w, bbox[2] - bbox[0])
+
+    # Unit label space (top-right corner)
+    unit_w = 0
+    if unit_label:
+        ubbox = _measure.textbbox((0, 0), unit_label, font=font(36))
+        unit_w = ubbox[2] - ubbox[0] + PAD
+
+    total_w = PAD + bc_block_w + max(text_block_w, unit_w) + PAD
+    total_w = max(total_w, 400)
+
+    # ── Draw ──
+    img = Image.new("RGB", (total_w, TAPE_PX), "white")
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([3, 3, total_w - 4, TAPE_PX - 4], outline="black", width=2)
+
+    # Barcode on left (already rotated 90 deg)
+    if bc_img_final:
+        bc_x = PAD
+        bc_y = (TAPE_PX - bc_img_final.height) // 2
+        img.paste(bc_img_final, (bc_x, bc_y))
         # Vertical separator
-        sep_x = PAD + bc_block_w
-        draw.line([(sep_x, PAD), (sep_x, TAPE_PX - PAD)], fill="gray", width=1)
+        sep_x = PAD + bc_block_w - PAD // 2
+        draw.line([(sep_x, PAD), (sep_x, TAPE_PX - PAD)], fill="#999999", width=1)
 
-        # Text starts after barcode column
-        text_x = sep_x + PAD
-    else:
-        text_x = PAD
+    text_x = PAD + bc_block_w
 
-    # Draw text rows, vertically centered in the tape height
+    # Unit label in top-right corner
+    if unit_label:
+        uf = font(36)
+        ubbox = draw.textbbox((0, 0), unit_label, font=uf)
+        uw = ubbox[2] - ubbox[0]
+        draw.text((total_w - PAD - uw, PAD), unit_label, fill="black", font=uf)
+
+    # Text rows, vertically centered
     total_text_h = sum(sz + LINE_GAP for _, sz in rows) - LINE_GAP
     y = max(PAD, (TAPE_PX - total_text_h) // 2)
 
     for text, sz in rows:
-        f = font(sz)
-        draw.text((text_x, y), text, fill="black", font=f)
+        draw.text((text_x, y), text, fill="black", font=font(sz))
         y += sz + LINE_GAP
 
-    # ── Rotate 90 degrees clockwise ──
-    # After rotation: width=696 (tape width), height=label length
+    # ── Rotate 90 degrees clockwise for tape feed ──
     img = img.rotate(-90, expand=True)
 
     out = io.BytesIO()
@@ -394,6 +410,63 @@ def auto_configure_printer():
     except Exception as e:
         logger.warning("Auto-configure printer failed: %s", e)
         return None
+
+
+def backfill_barcodes():
+    """Generate barcodes for inventory items that predate the barcode system.
+
+    Finds distinct (category_id, sanitized_name, weight_per_unit) combos in
+    inventory_entries that have no matching row in inventory_barcodes, and
+    creates AOT-{cat}-{hash} barcodes for them.
+    """
+    try:
+        import sqlite3
+        import hashlib
+        from datetime import datetime
+        from app import DB_FILE
+        from modules.routes_inventory.barcodes import _generate_barcode_id, _ensure_barcode_schema
+
+        _ensure_barcode_schema()
+        count = 0
+        with sqlite3.connect(DB_FILE) as c:
+            c.row_factory = sqlite3.Row
+            # Find items with no barcode
+            rows = c.execute("""
+                SELECT DISTINCT e.category_id, e.sanitized_name, e.weight_per_unit, e.raw_name
+                  FROM inventory_entries e
+                 WHERE e.sanitized_name IS NOT NULL
+                   AND e.weight_per_unit > 0
+                   AND NOT EXISTS (
+                     SELECT 1 FROM inventory_barcodes b
+                      WHERE b.category_id = e.category_id
+                        AND b.sanitized_name = e.sanitized_name
+                        AND ABS(b.weight_per_unit - e.weight_per_unit) < 0.001
+                        AND (b.deleted = 0 OR b.deleted IS NULL)
+                   )
+            """).fetchall()
+
+            now = datetime.utcnow().isoformat()
+            for r in rows:
+                bc = _generate_barcode_id(r["category_id"], r["sanitized_name"], r["weight_per_unit"])
+                # Check for collision
+                existing = c.execute("SELECT 1 FROM inventory_barcodes WHERE barcode=?", (bc,)).fetchone()
+                if existing:
+                    bc = bc + "-" + hashlib.sha256(
+                        f"{bc}{now}".encode()
+                    ).hexdigest()[:4].upper()
+                c.execute(
+                    """INSERT INTO inventory_barcodes(barcode, category_id, sanitized_name,
+                         raw_name, weight_per_unit, created_at, updated_at, deleted)
+                       VALUES (?,?,?,?,?,?,?,0)""",
+                    (bc, r["category_id"], r["sanitized_name"],
+                     r["raw_name"] or r["sanitized_name"], r["weight_per_unit"], now, now),
+                )
+                count += 1
+            if count:
+                c.commit()
+                logger.info("Backfilled %d barcodes for pre-existing inventory items", count)
+    except Exception as e:
+        logger.warning("Barcode backfill failed: %s", e)
 
 
 def print_label_async(html_string, base_url, printer_ip):

@@ -860,8 +860,9 @@ try:
     import threading as _threading
     def _printer_discover():
         try:
-            from modules.services.label_printer import auto_configure_printer
+            from modules.services.label_printer import auto_configure_printer, backfill_barcodes
             auto_configure_printer()
+            backfill_barcodes()
         except Exception as e:
             logger.warning("Printer auto-discovery failed: %s", e)
     _threading.Thread(target=_printer_discover, daemon=True).start()
