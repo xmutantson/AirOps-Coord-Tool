@@ -3850,6 +3850,8 @@ def _parse_manifest(manifest: str):
     Source tag 'Source: X, Y;' at the end is parsed and applied to items missing origin.
     """
     items = []
+    # Strip "Flight Code: ..." suffix (gets appended when Winlink flattens the message)
+    manifest = re.sub(r'\s*Flight\s+Code:\s*\S+\s*$', '', manifest or '', flags=re.I).strip()
     # Extract trailing "Source: X, Y;" before splitting on semicolons
     source_default = ''
     source_m = re.search(r'\bSource:\s*(.+?)(?:;|$)', manifest or '', re.I)
