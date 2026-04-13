@@ -508,7 +508,7 @@ window.printViaIframe = function(url) {
 // ── Direct print: send label to server-side printer, fall back to iframe ──
 window.printLabel = function(url) {
   // If direct printing is off, go straight to browser print
-  if (!{{ 'true' if direct_print_enabled else 'false' }}) {
+  if (!{{ 'true' if direct_print_enabled is defined and direct_print_enabled else 'false' }}) {
     return window.printViaIframe(url);
   }
   // Parse URL to extract print_type and params

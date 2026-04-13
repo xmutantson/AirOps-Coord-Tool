@@ -2997,16 +2997,6 @@
           body: JSON.stringify(payload)
         });
         try { j = await resp.clone().json(); } catch(_){}
-        try {
-            useNudge ? '[RB-SCAN->NUDGE]' : '[RB-SCAN]',
-            {
-              endpoint,
-              barcode,
-              forceSnapshot: !!window.__RB_FORCE_SNAPSHOT,
-              mode
-            }
-          );
-        } catch(_){}
       }catch(_){ /* network error */ }
       if (!resp){
         setFB('Scan failed (network)', 'scan-err', 1500); scanBusy = false;
