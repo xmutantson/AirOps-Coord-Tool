@@ -1,7 +1,7 @@
 # modules/services/label_printer.py
 """Direct printing to Brother QL-820NWB via TCP (brother_ql library).
 
-Renders label HTML to a cropped PNG, then sends raster data to the printer
+Renders labels as PNG images via Pillow, sends raster data to the printer
 over the network. No driver installation needed on workstations.
 """
 
@@ -21,11 +21,7 @@ _NATIVE_WIDTH_PX = 696      # 62mm at 300 DPI
 
 
 def generate_barcode_svg(value):
-    """Generate a Code128 barcode as inline SVG markup.
-
-    Returns raw SVG string (no XML declaration) for embedding in HTML.
-    Used for server-side rendering where JsBarcode is unavailable.
-    """
+    """Generate a Code128 barcode as inline SVG markup."""
     import barcode
     from barcode.writer import SVGWriter
 
@@ -43,7 +39,6 @@ def generate_barcode_svg(value):
     code.write(buf, options={"compress": False})
     svg_bytes = buf.getvalue()
     svg_str = svg_bytes.decode("utf-8")
-    # Strip XML declaration and doctype — we want bare <svg>...</svg>
     for marker in ("<?xml", "<!DOCTYPE"):
         idx = svg_str.find(marker)
         if idx >= 0:
@@ -53,40 +48,171 @@ def generate_barcode_svg(value):
     return svg_str.strip()
 
 
-def render_label_png(label_data, label_type="inventory"):
-    """Render a label as a rotated PNG for 62mm continuous tape.
+def _load_font(size, _cache={}):
+    """Load a TrueType font with fallback chain."""
+    from PIL import ImageFont
+    if size not in _cache:
+        for n in ("DejaVuSans-Bold.ttf", "DejaVuSans.ttf",
+                  "LiberationSans-Bold.ttf", "LiberationSans-Regular.ttf",
+                  "FreeSans.ttf", "arial.ttf"):
+            try:
+                _cache[size] = ImageFont.truetype(n, size)
+                break
+            except (OSError, IOError):
+                continue
+        else:
+            _cache[size] = ImageFont.load_default(size=size)
+    return _cache[size]
 
-    Layout (before final rotation):
-    - Image width = label length (along tape), height = 696px (tape width)
-    - Barcode rendered separately, rotated 90 deg left so its bars span
-      the full tape width (696px) — placed on the left side of the label
-    - Text fills the right side, auto-scaled to use available height
-    - n/N unit counter in top-right corner
-    - Final image rotated 90 deg CW so width=696 for brother_ql
 
-    Returns PNG bytes (696px wide, variable height).
+def _render_barcode_image(bc_val, target_width=None, target_height=None):
+    """Render a Code128 barcode as a Pillow Image."""
+    import barcode as bc_lib
+    from barcode.writer import ImageWriter
+    writer = ImageWriter()
+    writer.set_options({
+        "module_width": 0.5,
+        "module_height": 15.0,
+        "font_size": 14,
+        "text_distance": 2.0,
+        "quiet_zone": 4.0,
+        "write_text": True,
+        "dpi": 300,
+    })
+    code = bc_lib.get("code128", bc_val, writer=writer)
+    buf = io.BytesIO()
+    code.write(buf)
+    img = Image.open(buf).convert("RGB")
+    # Scale to fit target dimensions if specified
+    if target_width and img.width > target_width:
+        r = target_width / img.width
+        img = img.resize((target_width, int(img.height * r)), Image.LANCZOS)
+    if target_height and img.height > target_height:
+        r = target_height / img.height
+        img = img.resize((int(img.width * r), target_height), Image.LANCZOS)
+    return img
+
+
+def render_label_png(label_data, label_type="inventory_tag"):
+    """Render a label to a 696px-wide PNG for 62mm continuous tape.
+
+    label_type:
+      "inventory_tag" — compact portrait: barcode across full width + name + weight.
+                        Minimal tape. Purpose: slap a barcode on an item.
+      "cargo"         — full shipping label: rotated landscape with barcode on left,
+                        all flight info on right, uses full 2.4" tape width for text.
+
+    Returns PNG bytes (always 696px wide).
     """
-    from PIL import ImageDraw, ImageFont
+    from PIL import ImageDraw
+
+    W = _NATIVE_WIDTH_PX  # 696
+    PAD = 20
+
+    bc_val = label_data.get("barcode", "")
+    unit_label = label_data.get("unit_label", "")
+
+    if label_type == "inventory_tag":
+        return _render_inventory_tag(label_data, bc_val, unit_label)
+    else:
+        return _render_cargo_label(label_data, bc_val, unit_label)
+
+
+def _render_inventory_tag(label_data, bc_val, unit_label):
+    """Compact portrait label: barcode + name + weight. Minimal tape usage."""
+    from PIL import ImageDraw
+
+    W = _NATIVE_WIDTH_PX
+    PAD = 16
+    LINE_GAP = 6
+
+    # Content
+    name = label_data.get("name", "")
+    weight = f'{label_data.get("weight_lb", "")} lb/unit'
+    origin = label_data.get("origin", "")
+
+    # Calculate height
+    y = PAD
+    bc_h = 0
+    if bc_val:
+        try:
+            bc_img = _render_barcode_image(bc_val, target_width=W - 2 * PAD)
+            bc_h = bc_img.height
+        except Exception:
+            bc_h = 30
+    y += bc_h + LINE_GAP if bc_val else 0
+
+    # Text sizes — fit across 696px width, don't need to be huge
+    name_sz = min(40, max(24, (W - 2 * PAD) // max(1, len(name)) * 2))
+    wt_sz = 24
+    origin_sz = 20
+
+    y += name_sz + LINE_GAP
+    y += wt_sz + LINE_GAP
+    if origin:
+        y += origin_sz + LINE_GAP
+    if unit_label:
+        y += 22 + LINE_GAP
+    y += PAD
+
+    # Draw
+    img = Image.new("RGB", (W, y), "white")
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([2, 2, W - 3, y - 3], outline="black", width=2)
+
+    cy = PAD
+
+    # Unit label top-right
+    if unit_label:
+        uf = _load_font(22)
+        ubbox = draw.textbbox((0, 0), unit_label, font=uf)
+        draw.text((W - PAD - (ubbox[2] - ubbox[0]), cy), unit_label, fill="black", font=uf)
+
+    # Barcode across full width
+    if bc_val:
+        try:
+            bc_img = _render_barcode_image(bc_val, target_width=W - 2 * PAD)
+            img.paste(bc_img, ((W - bc_img.width) // 2, cy))
+            cy += bc_img.height + LINE_GAP
+        except Exception as e:
+            logger.warning("Barcode render failed: %s", e)
+            draw.text((PAD, cy), bc_val, fill="black", font=_load_font(16))
+            cy += 22
+
+    # Name centered
+    f = _load_font(name_sz)
+    bbox = draw.textbbox((0, 0), name, font=f)
+    tw = bbox[2] - bbox[0]
+    draw.text((max(PAD, (W - tw) // 2), cy), name, fill="black", font=f)
+    cy += name_sz + LINE_GAP
+
+    # Weight centered
+    f = _load_font(wt_sz)
+    bbox = draw.textbbox((0, 0), weight, font=f)
+    tw = bbox[2] - bbox[0]
+    draw.text((max(PAD, (W - tw) // 2), cy), weight, fill="black", font=f)
+    cy += wt_sz + LINE_GAP
+
+    # Origin centered
+    if origin:
+        f = _load_font(origin_sz)
+        bbox = draw.textbbox((0, 0), origin, font=f)
+        tw = bbox[2] - bbox[0]
+        draw.text((max(PAD, (W - tw) // 2), cy), origin, fill="black", font=f)
+
+    out = io.BytesIO()
+    img.save(out, format="PNG")
+    return out.getvalue()
+
+
+def _render_cargo_label(label_data, bc_val, unit_label):
+    """Full shipping label: landscape draw, rotated 90 deg for tape feed."""
+    from PIL import ImageDraw
 
     TAPE_PX = _NATIVE_WIDTH_PX  # 696
     PAD = 20
     LINE_GAP = 4
-    CONTENT_H = TAPE_PX - 2 * PAD  # 656px usable
-
-    _fc = {}
-    def font(size):
-        if size not in _fc:
-            for n in ("DejaVuSans-Bold.ttf", "DejaVuSans.ttf",
-                      "LiberationSans-Bold.ttf", "LiberationSans-Regular.ttf",
-                      "FreeSans.ttf", "arial.ttf"):
-                try:
-                    _fc[size] = ImageFont.truetype(n, size)
-                    break
-                except (OSError, IOError):
-                    continue
-            else:
-                _fc[size] = ImageFont.load_default(size=size)
-        return _fc[size]
+    CONTENT_H = TAPE_PX - 2 * PAD
 
     # Get real mission number
     mission_num = ""
@@ -96,85 +222,50 @@ def render_label_png(label_data, label_type="inventory"):
     except Exception:
         pass
 
-    bc_val = label_data.get("barcode", "")
-    unit_label = label_data.get("unit_label", "")  # e.g. "2/5"
-
-    # ── Build text rows: (text, relative_weight) ──
+    # Build text rows: (text, relative_weight)
     raw_rows = []
+    raw_rows.append(("CARGO ID", 4))
+    m = mission_num or label_data.get("mission", "")
+    if m:
+        raw_rows.append((f"Mission: {m}", 3))
+    if label_data.get("tail"):
+        raw_rows.append((f"Tail: {label_data['tail']}", 3))
+    orig = label_data.get("origin", "")
+    dest = label_data.get("destination", "")
+    if orig and dest:
+        raw_rows.append((f"{orig} -> {dest}", 3))
+    elif orig:
+        raw_rows.append((f"From: {orig}", 3))
+    elif dest:
+        raw_rows.append((f"To: {dest}", 3))
+    if label_data.get("date_sealed"):
+        raw_rows.append((f"Date: {label_data['date_sealed']}", 3))
+    contents = label_data.get("contents", "")
+    if contents:
+        if ": " in contents:
+            parts = contents.split(": ", 1)
+            if len(parts[0]) < 30:
+                contents = parts[1]
+        raw_rows.append((f"Item: {contents}", 3))
+    if label_data.get("cargo_origin"):
+        raw_rows.append((f"Source: {label_data['cargo_origin']}", 3))
+    wt = label_data.get("weight_lb", "")
+    if wt:
+        raw_rows.append((f"Weight: {wt} lb", 3))
 
-    if label_type == "inventory":
-        raw_rows.append((label_data.get("name", ""), 5))
-        raw_rows.append((f'{label_data.get("weight_lb", "")} lb/unit', 4))
-        if label_data.get("origin"):
-            raw_rows.append((label_data["origin"], 3))
-    else:  # cargo
-        raw_rows.append(("CARGO ID", 4))
-        m = mission_num or label_data.get("mission", "")
-        if m:
-            raw_rows.append((f"Mission: {m}", 3))
-        if label_data.get("tail"):
-            raw_rows.append((f"Tail: {label_data['tail']}", 3))
-        # From -> To on one line with arrow
-        orig = label_data.get("origin", "")
-        dest = label_data.get("destination", "")
-        if orig and dest:
-            raw_rows.append((f"{orig} -> {dest}", 3))
-        elif orig:
-            raw_rows.append((f"From: {orig}", 3))
-        elif dest:
-            raw_rows.append((f"To: {dest}", 3))
-        if label_data.get("date_sealed"):
-            raw_rows.append((f"Date: {label_data['date_sealed']}", 3))
-        # Item name (no category prefix — just the item)
-        contents = label_data.get("contents", "")
-        if contents:
-            # Strip "Category: " prefix if present
-            if ": " in contents:
-                parts = contents.split(": ", 1)
-                # If first part looks like a category name, drop it
-                if len(parts[0]) < 30:
-                    contents = parts[1]
-            raw_rows.append((f"Item: {contents}", 3))
-        if label_data.get("cargo_origin"):
-            raw_rows.append((f"Source: {label_data['cargo_origin']}", 3))
-        wt = label_data.get("weight_lb", "")
-        if wt:
-            raw_rows.append((f"Weight: {wt} lb", 3))
-
-    # ── Scale fonts to fill tape height ──
+    # Scale fonts to fill tape height
     total_weight = sum(w for _, w in raw_rows)
     num_gaps = len(raw_rows) - 1
     px_per_weight = CONTENT_H / (total_weight + num_gaps * 0.3)
-    rows = []
-    for text, weight in raw_rows:
-        sz = max(20, min(80, int(px_per_weight * weight)))
-        rows.append((text, sz))
+    rows = [(text, max(20, min(80, int(px_per_weight * w)))) for text, w in raw_rows]
 
-    # ── Render barcode as a separate image, rotated 90 deg left ──
-    # This makes barcode bars span the full tape width
+    # Render barcode rotated 90 deg left (bars span tape width)
     bc_block_w = 0
     bc_img_final = None
     if bc_val:
         try:
-            import barcode as bc_lib
-            from barcode.writer import ImageWriter
-            writer = ImageWriter()
-            writer.set_options({
-                "module_width": 0.5,
-                "module_height": 15.0,
-                "font_size": 14,
-                "text_distance": 2.0,
-                "quiet_zone": 4.0,
-                "write_text": True,
-                "dpi": 300,
-            })
-            code = bc_lib.get("code128", bc_val, writer=writer)
-            bc_buf = io.BytesIO()
-            code.write(bc_buf)
-            bc_raw = Image.open(bc_buf).convert("RGB")
-            # Rotate barcode 90 deg left so bars span tape width
+            bc_raw = _render_barcode_image(bc_val)
             bc_rotated = bc_raw.rotate(90, expand=True)
-            # Scale height (was width) to fit tape height
             if bc_rotated.height > CONTENT_H:
                 r = CONTENT_H / bc_rotated.height
                 bc_rotated = bc_rotated.resize(
@@ -185,54 +276,46 @@ def render_label_png(label_data, label_type="inventory"):
         except Exception as e:
             logger.warning("Barcode render failed: %s", e)
 
-    # ── Measure text width ──
-    _measure = ImageDraw.Draw(Image.new("RGB", (1, 1)))
-    text_block_w = 0
-    for text, sz in rows:
-        bbox = _measure.textbbox((0, 0), text, font=font(sz))
-        text_block_w = max(text_block_w, bbox[2] - bbox[0])
-
-    # Unit label space (top-right corner)
+    # Measure text width
+    _m = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    text_block_w = max(
+        _m.textbbox((0, 0), t, font=_load_font(s))[2] for t, s in rows
+    )
     unit_w = 0
     if unit_label:
-        ubbox = _measure.textbbox((0, 0), unit_label, font=font(36))
-        unit_w = ubbox[2] - ubbox[0] + PAD
+        unit_w = _m.textbbox((0, 0), unit_label, font=_load_font(36))[2] + PAD
 
     total_w = PAD + bc_block_w + max(text_block_w, unit_w) + PAD
     total_w = max(total_w, 400)
 
-    # ── Draw ──
+    # Draw landscape
     img = Image.new("RGB", (total_w, TAPE_PX), "white")
     draw = ImageDraw.Draw(img)
     draw.rectangle([3, 3, total_w - 4, TAPE_PX - 4], outline="black", width=2)
 
-    # Barcode on left (already rotated 90 deg)
+    # Barcode on left
     if bc_img_final:
-        bc_x = PAD
-        bc_y = (TAPE_PX - bc_img_final.height) // 2
-        img.paste(bc_img_final, (bc_x, bc_y))
-        # Vertical separator
+        img.paste(bc_img_final, (PAD, (TAPE_PX - bc_img_final.height) // 2))
         sep_x = PAD + bc_block_w - PAD // 2
         draw.line([(sep_x, PAD), (sep_x, TAPE_PX - PAD)], fill="#999999", width=1)
 
     text_x = PAD + bc_block_w
 
-    # Unit label in top-right corner
+    # Unit label top-right
     if unit_label:
-        uf = font(36)
+        uf = _load_font(36)
         ubbox = draw.textbbox((0, 0), unit_label, font=uf)
-        uw = ubbox[2] - ubbox[0]
-        draw.text((total_w - PAD - uw, PAD), unit_label, fill="black", font=uf)
+        draw.text((total_w - PAD - (ubbox[2] - ubbox[0]), PAD), unit_label,
+                  fill="black", font=uf)
 
-    # Text rows, vertically centered
+    # Text rows vertically centered
     total_text_h = sum(sz + LINE_GAP for _, sz in rows) - LINE_GAP
     y = max(PAD, (TAPE_PX - total_text_h) // 2)
-
     for text, sz in rows:
-        draw.text((text_x, y), text, fill="black", font=font(sz))
+        draw.text((text_x, y), text, fill="black", font=_load_font(sz))
         y += sz + LINE_GAP
 
-    # ── Rotate 90 degrees clockwise for tape feed ──
+    # Rotate 90 deg CW for tape feed
     img = img.rotate(-90, expand=True)
 
     out = io.BytesIO()
@@ -241,10 +324,7 @@ def render_label_png(label_data, label_type="inventory"):
 
 
 def send_to_printer(image_bytes, printer_ip, cut=True):
-    """Send a PNG image to the Brother QL printer via TCP.
-
-    Returns dict: {"ok": True} on success, {"ok": False, "error": "..."} on failure.
-    """
+    """Send a PNG image to the Brother QL printer via TCP."""
     from brother_ql.conversion import convert
     from brother_ql.backends.helpers import send as ql_send
     from brother_ql.raster import BrotherQLRaster
@@ -270,7 +350,6 @@ def send_to_printer(image_bytes, printer_ip, cut=True):
         )
 
         if result is None:
-            # Network backend often returns None but still prints
             return {"ok": True}
         if result.get("did_print") or result.get("instructions_sent"):
             return {"ok": True}
@@ -292,10 +371,7 @@ def send_to_printer(image_bytes, printer_ip, cut=True):
 
 
 def check_printer_status(printer_ip):
-    """Quick TCP connect probe to port 9100.
-
-    Returns {"reachable": True/False, "ip": printer_ip}.
-    """
+    """Quick TCP connect probe to port 9100."""
     try:
         s = socket.create_connection((printer_ip, 9100), timeout=2)
         s.close()
@@ -306,16 +382,11 @@ def check_printer_status(printer_ip):
 
 # ── mDNS / Zeroconf auto-discovery ────────────────────────────────────
 
-_discovered_ip = None  # module-level cache
+_discovered_ip = None
 
 
 def discover_printer(timeout=5):
-    """Scan the LAN for a Brother QL printer via mDNS.
-
-    Looks for _pdl-datastream._tcp.local. and _printer._tcp.local. services
-    whose name contains 'Brother' or 'QL'. Returns the IP address string
-    or None if not found.
-    """
+    """Scan the LAN for a Brother QL printer via mDNS."""
     global _discovered_ip
     from zeroconf import Zeroconf, ServiceBrowser
 
@@ -326,7 +397,6 @@ def discover_printer(timeout=5):
             info = zc.get_service_info(stype, name)
             if info and info.parsed_addresses():
                 low = name.lower()
-                # Only match QL-series label printers, not other Brother devices
                 if "ql" in low or "ql-820" in low or "ql-800" in low:
                     found[name] = info.parsed_addresses()[0]
                 elif "brother" in low:
@@ -361,10 +431,7 @@ def discover_printer(timeout=5):
 
 
 def get_printer_ip():
-    """Return the configured or auto-discovered printer IP.
-
-    Priority: preference > cached discovery > fresh discovery scan.
-    """
+    """Return the configured or auto-discovered printer IP."""
     try:
         from modules.utils.common import get_preference
         ip = (get_preference("printer_ip") or "").strip()
@@ -380,17 +447,12 @@ def get_printer_ip():
 
 
 def auto_configure_printer():
-    """Run at startup: discover printer and set preferences if not already configured.
-
-    Sets printer_ip and direct_print_enabled=yes when a printer is found
-    and no IP is configured yet.
-    """
+    """Run at startup: discover printer and set preferences if not already configured."""
     try:
         from modules.utils.common import get_preference, set_preference
         existing_ip = (get_preference("printer_ip") or "").strip()
         if existing_ip:
             logger.info("Printer IP already configured: %s", existing_ip)
-            # Still default direct printing to on if not explicitly set
             if get_preference("direct_print_enabled") is None:
                 set_preference("direct_print_enabled", "yes")
             return existing_ip
@@ -402,8 +464,6 @@ def auto_configure_printer():
             logger.info("Auto-configured printer at %s, direct printing enabled", ip)
             return ip
         else:
-            # No printer found — still default direct_print to yes so it works
-            # when a printer appears later
             if get_preference("direct_print_enabled") is None:
                 set_preference("direct_print_enabled", "yes")
             return None
@@ -413,12 +473,7 @@ def auto_configure_printer():
 
 
 def backfill_barcodes():
-    """Generate barcodes for inventory items that predate the barcode system.
-
-    Finds distinct (category_id, sanitized_name, weight_per_unit) combos in
-    inventory_entries that have no matching row in inventory_barcodes, and
-    creates AOT-{cat}-{hash} barcodes for them.
-    """
+    """Generate barcodes for inventory items that predate the barcode system."""
     try:
         import sqlite3
         import hashlib
@@ -430,7 +485,6 @@ def backfill_barcodes():
         count = 0
         with sqlite3.connect(DB_FILE) as c:
             c.row_factory = sqlite3.Row
-            # Find items with no barcode
             rows = c.execute("""
                 SELECT DISTINCT e.category_id, e.sanitized_name, e.weight_per_unit, e.raw_name
                   FROM inventory_entries e
@@ -448,7 +502,6 @@ def backfill_barcodes():
             now = datetime.utcnow().isoformat()
             for r in rows:
                 bc = _generate_barcode_id(r["category_id"], r["sanitized_name"], r["weight_per_unit"])
-                # Check for collision
                 existing = c.execute("SELECT 1 FROM inventory_barcodes WHERE barcode=?", (bc,)).fetchone()
                 if existing:
                     bc = bc + "-" + hashlib.sha256(
@@ -470,10 +523,7 @@ def backfill_barcodes():
 
 
 def print_label_async(html_string, base_url, printer_ip):
-    """Render label HTML and send to printer in a background thread.
-
-    Fires a daemon thread — caller returns immediately.
-    """
+    """Render label HTML and send to printer in a background thread."""
     def _job():
         try:
             png = render_label_png(html_string, base_url)

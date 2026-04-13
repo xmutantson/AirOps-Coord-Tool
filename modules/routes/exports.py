@@ -2193,7 +2193,13 @@ def api_print_label():
         only = (params.get("only") or "").strip().lower()
         copies = params.get("copies") or 1
 
-        # Temporarily set request.args for unit_labels check inside builders
+        # Inject unit_labels into request.args so builder functions see it
+        from werkzeug.datastructures import ImmutableMultiDict
+        override_args = dict(request.args)
+        if params.get("unit_labels"):
+            override_args["unit_labels"] = params["unit_labels"]
+        request.args = ImmutableMultiDict(override_args)
+
         labels = (_labels_for_flight(fid_int, scope=scope, only_slug=only, copies=copies)
                   if fid_int > 0 else _labels_for_queued(qid_int, scope=scope, only_slug=only, copies=copies))
         if not labels:
@@ -2277,7 +2283,12 @@ def _dispatch_label_prints(labels, section, label_size, printer_ip):
     import threading
     from modules.services.label_printer import render_label_png, send_to_printer
 
-    label_type = "inventory" if section == "inventory_tags" else "cargo"
+    # "address" label_size = inventory tag (compact: barcode + name + weight)
+    # "shipping" label_size = shipping label (full cargo info)
+    if section == "inventory_tags" or label_size == "address":
+        label_type = "inventory_tag"
+    else:
+        label_type = "cargo"
 
     for lbl in labels:
         def _print_job(data=lbl, lt=label_type, ip=printer_ip):
