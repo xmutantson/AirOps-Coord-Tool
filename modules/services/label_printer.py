@@ -63,32 +63,43 @@ def render_label_png(html_string, base_url):
     """
     from weasyprint import HTML, CSS
 
-    # Force 62mm page width with a tall fixed height (content gets cropped later)
-    # Also hide all non-print elements (nav, header, sidebar, buttons)
+    # Render at a size where CSS pixels map to 300 DPI print pixels.
+    # 62mm at 300 DPI = 696px. At PDF's 72 DPI that's 696*(72/300) = 166.9pt.
+    # But we want fonts to look right, so we render the page at a wider pt size
+    # and then rasterize at a higher DPI to hit 696px final width.
+    # Strategy: 250pt wide page (~88mm), render PDF at 200 DPI → ~694px.
+    # This makes CSS px fonts ~2.8x larger than the 62mm approach.
     override_css = CSS(string="""
-        @page { size: 62mm 200mm; margin: 2mm; }
-        body { margin: 0; width: 58mm; }
+        @page { size: 250pt 800pt; margin: 6pt; }
+        body { margin: 0; width: 238pt; font-size: 14pt; }
         header, nav, .sidebar, .hide-on-print, .main-nav,
         button, .button, input, select, textarea,
         .label-size-hint, .inv-tag-hint,
         .print-page, #toast-container, .hamburger-container,
         #nav-dropdown, #nav-backdrop, footer,
         .initialize-btn { display: none !important; }
+        /* Scale up label fonts for thermal print readability */
+        .inv-tag .tag-name { font-size: 16pt !important; }
+        .inv-tag .tag-weight { font-size: 12pt !important; }
+        .inv-tag .tag-origin { font-size: 10pt !important; }
+        .inv-tag .tag-unit { font-size: 13pt !important; font-weight: 700 !important; }
+        .label-card h3 { font-size: 14pt !important; }
+        .label-card td { font-size: 11pt !important; padding: 2pt 4pt !important; }
+        .label-card td:first-child { font-weight: 700; }
     """)
 
     # WeasyPrint 60+ removed write_png(); render PDF then convert via Pillow
-    # Use media_type='print' so @media print rules apply
     pdf_bytes = HTML(
         string=html_string, base_url=base_url
     ).write_pdf(stylesheets=[override_css], presentational_hints=True)
 
-    # PDF -> PNG via pypdfium2 (bundled with WeasyPrint) or fitz fallback
+    # PDF -> PNG via pypdfium2 or fitz fallback
+    # Render at 200 DPI: 250pt * (200/72) ≈ 694px wide (close to 696 target)
     try:
         import pypdfium2 as pdfium
         pdf = pdfium.PdfDocument(pdf_bytes)
         page = pdf[0]
-        # Render at 300 DPI (scale = 300/72 = 4.167)
-        bitmap = page.render(scale=300 / 72)
+        bitmap = page.render(scale=200 / 72)
         pil_img = bitmap.to_pil()
         png_buf = io.BytesIO()
         pil_img.save(png_buf, format="PNG")
@@ -116,6 +127,11 @@ def render_label_png(html_string, base_url):
         # Keep full width, crop height to content + 20px padding
         bottom = min(bbox[3] + 20, img.height)
         img = img.crop((0, 0, img.width, bottom))
+
+    # If the image is wider than tall (landscape), rotate 90° so it feeds
+    # correctly on the 62mm tape (tape width = image width)
+    if img.width > img.height:
+        img = img.rotate(90, expand=True)
 
     # Resize to native 62mm width (696px at 300 DPI)
     if img.width != _NATIVE_WIDTH_PX:
