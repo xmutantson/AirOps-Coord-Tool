@@ -2290,16 +2290,27 @@ def _dispatch_label_prints(labels, section, label_size, printer_ip):
     else:
         label_type = "cargo"
 
-    for lbl in labels:
-        def _print_job(data=lbl, lt=label_type, ip=printer_ip):
+    # Send labels sequentially in ONE background thread (printer can only
+    # handle one job at a time — parallel sends cause dropped labels)
+    import logging as _log
+    _logger = _log.getLogger(__name__)
+    label_list = list(labels)
+    def _print_all(items=label_list, lt=label_type, ip=printer_ip):
+        import time
+        for i, data in enumerate(items):
             try:
                 png = render_label_png(data, label_type=lt)
                 result = send_to_printer(png, ip)
                 if not result["ok"]:
-                    import logging
-                    logging.getLogger(__name__).warning("Direct print failed: %s", result.get("error"))
+                    _logger.warning("Direct print failed (label %d/%d): %s",
+                                    i + 1, len(items), result.get("error"))
+                else:
+                    _logger.info("Printed label %d/%d", i + 1, len(items))
+                # Small delay between labels to let the printer finish cutting
+                if i < len(items) - 1:
+                    time.sleep(1.5)
             except Exception as e:
-                import logging
-                logging.getLogger(__name__).exception("Direct print job error: %s", e)
+                _logger.exception("Direct print job error (label %d/%d): %s",
+                                  i + 1, len(items), e)
 
-        threading.Thread(target=_print_job, daemon=True).start()
+    threading.Thread(target=_print_all, daemon=True).start()
