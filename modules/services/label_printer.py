@@ -65,6 +65,18 @@ def _load_font(size, _cache={}):
     return _cache[size]
 
 
+def _load_label_icon(size=48):
+    """Load the Air Ops icon for label printing (B&W, transparent background)."""
+    import os
+    icon_path = os.path.join(os.path.dirname(__file__), "..", "..", "static", "label_icon.png")
+    try:
+        icon = Image.open(icon_path).convert("RGBA")
+        icon = icon.resize((size, size), Image.LANCZOS)
+        return icon
+    except Exception:
+        return None
+
+
 def _render_barcode_image(bc_val, target_width=None, target_height=None):
     """Render a Code128 barcode as a Pillow Image."""
     import barcode as bc_lib
@@ -159,6 +171,11 @@ def _render_inventory_tag(label_data, bc_val, unit_label):
     draw.rectangle([2, 2, W - 3, y - 3], outline="black", width=2)
 
     cy = PAD
+
+    # Air Ops icon top-right
+    icon = _load_label_icon(36)
+    if icon:
+        img.paste(icon, (W - PAD - icon.width, PAD), icon)
 
     # Barcode across full width (no unit counter on inventory tags)
     if bc_val:
@@ -294,12 +311,18 @@ def _render_cargo_label(label_data, bc_val, unit_label):
 
     text_x = PAD + bc_block_w
 
-    # Unit label top-right
+    # Unit label + icon top-right
+    icon_y_offset = PAD
     if unit_label:
         uf = _load_font(36)
         ubbox = draw.textbbox((0, 0), unit_label, font=uf)
         draw.text((total_w - PAD - (ubbox[2] - ubbox[0]), PAD), unit_label,
                   fill="black", font=uf)
+        icon_y_offset = PAD + 36 + 4
+
+    icon = _load_label_icon(40)
+    if icon:
+        img.paste(icon, (total_w - PAD - icon.width, icon_y_offset), icon)
 
     # Text rows vertically centered
     total_text_h = sum(sz + LINE_GAP for _, sz in rows) - LINE_GAP
@@ -440,26 +463,29 @@ def get_printer_ip():
 
 
 def auto_configure_printer():
-    """Run at startup: discover printer and set preferences if not already configured."""
+    """Run at startup: always re-scan for the printer (IP may change via DHCP)."""
     try:
         from modules.utils.common import get_preference, set_preference
-        existing_ip = (get_preference("printer_ip") or "").strip()
-        if existing_ip:
-            logger.info("Printer IP already configured: %s", existing_ip)
-            if get_preference("direct_print_enabled") is None:
-                set_preference("direct_print_enabled", "yes")
-            return existing_ip
 
+        # Always re-scan — don't skip just because an IP is saved
         ip = discover_printer(timeout=5)
-        if ip:
+        existing_ip = (get_preference("printer_ip") or "").strip()
+
+        if ip and ip != existing_ip:
             set_preference("printer_ip", ip)
-            set_preference("direct_print_enabled", "yes")
-            logger.info("Auto-configured printer at %s, direct printing enabled", ip)
-            return ip
+            logger.info("Printer IP updated: %s -> %s", existing_ip, ip)
+        elif ip:
+            logger.info("Printer IP confirmed: %s", ip)
+        elif existing_ip:
+            # Discovery failed but we have a saved IP — keep it
+            logger.info("Printer discovery failed, keeping saved IP: %s", existing_ip)
+            ip = existing_ip
         else:
-            if get_preference("direct_print_enabled") is None:
-                set_preference("direct_print_enabled", "yes")
-            return None
+            logger.info("No printer found and no saved IP")
+
+        if get_preference("direct_print_enabled") is None:
+            set_preference("direct_print_enabled", "yes")
+        return ip
     except Exception as e:
         logger.warning("Auto-configure printer failed: %s", e)
         return None

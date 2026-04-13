@@ -126,6 +126,18 @@
   {% endfor %}
 </div>
 
+{% if radio_error is defined and radio_error %}
+<script>
+(function(){
+  if (document.cookie.indexOf('radio_warn_shown=1') !== -1) return;
+  document.cookie = 'radio_warn_shown=1; path=/; max-age=86400; SameSite=Lax';
+  if (window.showToast) {
+    window.showToast('Radio interface error: {{ radio_error|e }}. Packet radio features may not work. Check the DigiRig connection.', 'error', 10000);
+  }
+})();
+</script>
+{% endif %}
+
 {% if active not in ['login','setup'] %}
   <header>
     <nav class="main-nav">

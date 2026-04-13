@@ -697,6 +697,7 @@ def _inject_global_nav_flags():
         'admin_unlocked': admin_unlocked,
         'current_year': datetime.utcnow().year,
         'direct_print_enabled': (get_preference('direct_print_enabled') or 'yes') == 'yes',
+        'radio_error': _common.get_radio_error(),
     }
 
 # Jinja2 global: server-side barcode SVG rendering (for direct printing path)

@@ -1354,16 +1354,22 @@ def _cleanup_before_view():
     if request.blueprint in ('inventory', 'ramp', 'api'):
         cleanup_pending()
 
+_radio_error = ""  # empty = OK, non-empty = error message
+
+def get_radio_error():
+    return _radio_error
+
 def _start_radio_tx_once():
-    global _radio_started
+    global _radio_started, _radio_error
     if _radio_started:
         return
     try:
-        # reuse existing DB helper
         start_radio_tx(lambda sql, params=(): dict_rows(sql, params))
         _radio_started = True
+        _radio_error = ""
         logger.info("Radio TX thread started.")
     except Exception as e:
+        _radio_error = str(e)
         logger.exception("Failed to start Radio TX thread: %s", e)
 
 def ensure_airports_table():
