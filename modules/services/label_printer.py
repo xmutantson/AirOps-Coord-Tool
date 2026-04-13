@@ -298,9 +298,10 @@ def _render_cargo_label(label_data, bc_val, unit_label):
     if unit_label:
         unit_w = _m.textbbox((0, 0), unit_label, font=_load_font(36))[2] + PAD
 
-    # Reserve space for icon column on the right
+    # Reserve space for icon column on the right — never truncate text,
+    # just make the label longer (tape is continuous, length is free)
     _icon_reserve = 120 + PAD * 2  # icon size + padding
-    total_w = PAD + bc_block_w + max(text_block_w, unit_w) + _icon_reserve + PAD
+    total_w = PAD + bc_block_w + text_block_w + PAD + _icon_reserve + PAD
     total_w = max(total_w, 400)
 
     # Draw landscape
@@ -330,19 +331,11 @@ def _render_cargo_label(label_data, bc_val, unit_label):
     if icon:
         img.paste(icon, (total_w - PAD - icon.width, icon_y_offset), icon)
 
-    # Text rows vertically centered — stay clear of icon on the right
-    max_text_w = total_w - text_x - icon_reserve
+    # Text rows vertically centered
     total_text_h = sum(sz + LINE_GAP for _, sz in rows) - LINE_GAP
     y = max(PAD, (TAPE_PX - total_text_h) // 2)
     for text, sz in rows:
-        f = _load_font(sz)
-        # Truncate text if it would overlap the icon
-        while text and max_text_w > 0:
-            bbox = ImageDraw.Draw(Image.new("RGB", (1,1))).textbbox((0,0), text, font=f)
-            if (bbox[2] - bbox[0]) <= max_text_w:
-                break
-            text = text[:-1]
-        draw.text((text_x, y), text, fill="black", font=f)
+        draw.text((text_x, y), text, fill="black", font=_load_font(sz))
         y += sz + LINE_GAP
 
     # Rotate 90 deg CW for tape feed
