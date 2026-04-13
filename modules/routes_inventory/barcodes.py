@@ -349,10 +349,27 @@ def api_save_barcode_mapping():
         return jsonify({"status": "error", "message": "Missing or invalid fields"}), 400
     name = sanitize_name(name_in)
     now = datetime.utcnow().isoformat()
+    alias_of = None
     with sqlite3.connect(DB_FILE) as c:
+        c.row_factory = sqlite3.Row
+        # Check if a canonical barcode already exists for this item
+        canonical = c.execute(
+            """SELECT barcode FROM inventory_barcodes
+               WHERE category_id=? AND sanitized_name=?
+                 AND ABS(weight_per_unit - ?) < 0.001
+                 AND (deleted=0 OR deleted IS NULL)
+                 AND barcode != ?
+               ORDER BY created_at ASC
+               LIMIT 1""",
+            (cid, name, wpu, barcode),
+        ).fetchone()
+        if canonical:
+            alias_of = canonical["barcode"]
+
         c.execute("""
-          INSERT INTO inventory_barcodes(barcode, category_id, sanitized_name, raw_name, weight_per_unit, updated_at, deleted)
-          VALUES (?,?,?,?,?,? ,0)
+          INSERT INTO inventory_barcodes(barcode, category_id, sanitized_name,
+            raw_name, weight_per_unit, updated_at, deleted, alias_of)
+          VALUES (?,?,?,?,?,?,0,?)
           ON CONFLICT(barcode) DO UPDATE SET
             category_id     = excluded.category_id,
             sanitized_name  = excluded.sanitized_name,
@@ -360,13 +377,18 @@ def api_save_barcode_mapping():
             weight_per_unit = excluded.weight_per_unit,
             updated_at      = excluded.updated_at,
             deleted         = 0,
-            deleted_at      = NULL
-        """, (barcode, cid, name, raw_in or name, wpu, now))
+            deleted_at      = NULL,
+            alias_of        = excluded.alias_of
+        """, (barcode, cid, name, raw_in or name, wpu, now, alias_of))
         c.commit()
-    return jsonify({"status": "ok", "item": {
+
+    result = {"status": "ok", "item": {
         "barcode": barcode, "category_id": cid, "sanitized_name": name,
         "raw_name": (raw_in or name), "weight_per_unit": wpu
-    }})
+    }}
+    if alias_of:
+        result["alias_of"] = alias_of
+    return jsonify(result)
 
 
 def _generate_barcode_id(category_id, sanitized_name, weight_per_unit):
