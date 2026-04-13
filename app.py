@@ -696,7 +696,17 @@ def _inject_global_nav_flags():
         'enable_1090_distances': enable_1090,
         'admin_unlocked': admin_unlocked,
         'current_year': datetime.utcnow().year,
+        'direct_print_enabled': (get_preference('direct_print_enabled') or 'no') == 'yes',
     }
+
+# Jinja2 global: server-side barcode SVG rendering (for direct printing path)
+def _barcode_svg_global(value):
+    try:
+        from modules.services.label_printer import generate_barcode_svg
+        return generate_barcode_svg(str(value))
+    except Exception:
+        return str(value)
+app.jinja_env.globals['barcode_svg'] = _barcode_svg_global
 
 # Inventory subroutes attach to the shared inventory_bp on import
 for _mod in (

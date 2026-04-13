@@ -2136,3 +2136,176 @@ def docs_labels_inventory():
         "active": "inventory",
     }
     return render_template("waivers.html", **ctx)
+
+
+# ── Direct Printer API ──────────────────────────────────────────────
+
+@bp.get("/api/print/status")
+def api_print_status():
+    """Return printer configuration and reachability."""
+    enabled = (get_preference("direct_print_enabled") or "no") == "yes"
+    printer_ip = (get_preference("printer_ip") or "").strip()
+    if not enabled or not printer_ip:
+        return jsonify({"enabled": enabled, "printer_ip": printer_ip, "reachable": False})
+    from modules.services.label_printer import check_printer_status
+    status = check_printer_status(printer_ip)
+    return jsonify({"enabled": True, "printer_ip": printer_ip, "reachable": status["reachable"]})
+
+
+@bp.route("/api/print/label", methods=["POST"])
+def api_print_label():
+    """Render label(s) and send directly to the Brother QL printer.
+
+    Body (JSON):
+      print_type: "cargo" | "inventory"
+      params: dict of URL query params (same as GET label routes)
+    """
+    if (get_preference("direct_print_enabled") or "no") != "yes":
+        return jsonify({"ok": False, "error": "Direct printing is not enabled"}), 400
+    printer_ip = (get_preference("printer_ip") or "").strip()
+    if not printer_ip:
+        return jsonify({"ok": False, "error": "Printer IP not configured"}), 400
+
+    data = request.get_json(silent=True) or {}
+    print_type = (data.get("print_type") or "").strip().lower()
+    params = data.get("params") or {}
+
+    if print_type == "cargo":
+        # Build cargo labels exactly as docs_labels_cargo does
+        fid = params.get("flight_id") or ""
+        qid = params.get("queued_id") or ""
+        try:
+            fid_int = int(fid)
+        except Exception:
+            fid_int = -1
+        try:
+            qid_int = int(qid)
+        except Exception:
+            qid_int = -1
+        if fid_int <= 0 and qid_int <= 0:
+            return jsonify({"ok": False, "error": "Missing flight_id or queued_id"}), 400
+
+        scope = (params.get("scope") or "all").strip().lower()
+        only = (params.get("only") or "").strip().lower()
+        copies = params.get("copies") or 1
+
+        # Temporarily set request.args for unit_labels check inside builders
+        labels = (_labels_for_flight(fid_int, scope=scope, only_slug=only, copies=copies)
+                  if fid_int > 0 else _labels_for_queued(qid_int, scope=scope, only_slug=only, copies=copies))
+        if not labels:
+            return jsonify({"ok": False, "error": "No labels to print"}), 404
+
+        # Enrich with barcodes (same as GET route)
+        try:
+            with sqlite3.connect(DB_FILE) as c:
+                c.row_factory = sqlite3.Row
+                for lbl in labels:
+                    name = (lbl.get("name") or "").strip().lower()
+                    if not name:
+                        continue
+                    size = lbl.get("size_lb") or ""
+                    row = None
+                    try:
+                        wpu = float(size)
+                        row = c.execute(
+                            """SELECT barcode FROM inventory_barcodes
+                               WHERE LOWER(sanitized_name)=? AND ABS(weight_per_unit - ?) < 0.001
+                                 AND (deleted=0 OR deleted IS NULL)
+                               LIMIT 1""",
+                            (name, wpu),
+                        ).fetchone()
+                    except Exception:
+                        pass
+                    if not row:
+                        row = c.execute(
+                            """SELECT barcode FROM inventory_barcodes
+                               WHERE LOWER(sanitized_name)=?
+                                 AND (deleted=0 OR deleted IS NULL)
+                               ORDER BY seen_count DESC LIMIT 1""",
+                            (name,),
+                        ).fetchone()
+                    if row:
+                        lbl["barcode"] = row["barcode"]
+        except Exception:
+            pass
+
+        # Render and print each label individually (one cut per label)
+        label_size = (params.get("label_size") or "shipping").strip().lower()
+        _dispatch_label_prints(labels, "labels", label_size, printer_ip)
+
+    elif print_type == "inventory":
+        barcode = (params.get("barcode") or "").strip()
+        name = (params.get("name") or "").strip()
+        try:
+            wpu = float(params.get("weight_per_unit") or 0)
+        except Exception:
+            wpu = 0.0
+        if not (barcode and name and wpu > 0):
+            return jsonify({"ok": False, "error": "Missing barcode, name, or weight_per_unit"}), 400
+        try:
+            qty = max(1, int(params.get("qty") or 1))
+        except Exception:
+            qty = 1
+        qty = min(qty, 200)
+        origin = (params.get("origin") or "").strip()
+
+        labels = []
+        for i in range(qty):
+            labels.append({
+                "barcode": barcode,
+                "name": name,
+                "weight_lb": f"{wpu:.1f}",
+                "origin": origin,
+                "unit_label": f"{i+1}/{qty}" if qty > 1 else "",
+            })
+
+        label_size = (params.get("label_size") or "address").strip().lower()
+        _dispatch_label_prints(labels, "inventory_tags", label_size, printer_ip)
+
+    else:
+        return jsonify({"ok": False, "error": "print_type must be 'cargo' or 'inventory'"}), 400
+
+    return jsonify({"ok": True, "message": f"Sending {len(labels)} label(s) to printer"})
+
+
+def _dispatch_label_prints(labels, section, label_size, printer_ip):
+    """Render each label individually and send to printer in background threads."""
+    import threading
+    from modules.services.label_printer import render_label_png, send_to_printer
+
+    base_url = os.path.dirname(os.path.abspath(__file__)) + "/../../"
+
+    for lbl in labels:
+        if section == "labels":
+            ctx = {
+                "section": "labels",
+                "labels": [lbl],
+                "label_size": label_size,
+                "print_mode": False,
+                "auto_print": False,
+                "server_render": True,
+            }
+        else:
+            ctx = {
+                "section": "inventory_tags",
+                "inv_tags": [lbl],
+                "label_size": label_size,
+                "print_mode": False,
+                "auto_print": False,
+                "server_render": True,
+            }
+
+        html = render_template("waivers.html", **ctx)
+
+        def _print_job(html_str=html, ip=printer_ip):
+            try:
+                png = render_label_png(html_str, base_url)
+                result = send_to_printer(png, ip)
+                if not result["ok"]:
+                    import logging
+                    logging.getLogger(__name__).warning("Direct print failed: %s", result.get("error"))
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).exception("Direct print job error: %s", e)
+
+        threading.Thread(target=_print_job, daemon=True).start()

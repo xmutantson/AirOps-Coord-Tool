@@ -318,6 +318,13 @@ def preferences():
             resp.set_cookie('dashboard_sort_seq',
                             request.form['dashboard_sort_seq'],
                             max_age=31_536_000, samesite='Lax')
+        # Label Printer (direct printing) ----------------------------------
+        if 'printer_ip' in request.form:
+            set_preference('printer_ip', (request.form.get('printer_ip') or '').strip())
+        if 'direct_print_enabled' in request.form:
+            val = 'yes' if request.form.get('direct_print_enabled') == 'yes' else 'no'
+            set_preference('direct_print_enabled', val)
+
         # Inbound manifest auto-scan (Ramp) -------------------------------
         if 'ramp_scan_adv_manifest' in request.form:
             resp.set_cookie(
@@ -419,5 +426,8 @@ def preferences():
         map_offline_seed=map_offline_seed,
         map_tiles_default=map_tiles_default,
         # Ramp inbound auto-scan
-        scan_adv_pref=scan_adv_pref
+        scan_adv_pref=scan_adv_pref,
+        # Label Printer
+        printer_ip=(get_preference('printer_ip') or ''),
+        direct_print_pref=(get_preference('direct_print_enabled') or 'no'),
     )

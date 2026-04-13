@@ -484,7 +484,7 @@
     {% for label in page if label %}
       <div class="label-card">
         <h3>CARGO ID{% if label.unit_label %} <span style="float:right;">{{ label.unit_label }}</span>{% endif %}</h3>
-        {% if label.barcode %}<div style="text-align:center;margin:1mm 0;"><svg class="js-barcode" data-barcode="{{ label.barcode }}"></svg></div>{% endif %}
+        {% if server_render and label.barcode %}<div style="text-align:center;margin:1mm 0;">{{ barcode_svg(label.barcode)|safe }}</div>{% elif label.barcode %}<div style="text-align:center;margin:1mm 0;"><svg class="js-barcode" data-barcode="{{ label.barcode }}"></svg></div>{% endif %}
         <table>
           <tr><td>Mission:</td><td>{{ mission_number or label.mission or "" }}</td></tr>
           {% if label.tail %}<tr><td>Tail #:</td><td>{{ label.tail }}</td></tr>{% endif %}
@@ -608,7 +608,7 @@
   <section class="inv-tags-page">
     {% for tag in page if tag %}
       <div class="inv-tag">
-        <div class="tag-barcode"><svg class="js-barcode" data-barcode="{{ tag.barcode }}"></svg></div>
+        <div class="tag-barcode">{% if server_render %}{{ barcode_svg(tag.barcode)|safe }}{% else %}<svg class="js-barcode" data-barcode="{{ tag.barcode }}"></svg>{% endif %}</div>
         <div class="tag-name">{{ tag.name }}</div>
         <div class="tag-weight">{{ tag.weight_lb }} lb per unit</div>
         {% if tag.origin %}<div class="tag-origin">{{ tag.origin }}</div>{% endif %}

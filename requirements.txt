@@ -19,3 +19,5 @@ WeasyPrint>=60.0
 dsame3_simple
 pyrtlsdr>=0.3.0
 avwx-engine>=1.8,<2
+brother_ql>=0.9.4
+python-barcode>=0.15.1

@@ -504,6 +504,45 @@ window.printViaIframe = function(url) {
     setTimeout(function() { try { iframe.remove(); } catch(_) {} }, 2000);
   };
 };
+
+// ── Direct print: send label to server-side printer, fall back to iframe ──
+window.printLabel = function(url) {
+  // If direct printing is off, go straight to browser print
+  if (!{{ 'true' if direct_print_enabled else 'false' }}) {
+    return window.printViaIframe(url);
+  }
+  // Parse URL to extract print_type and params
+  var u = new URL(url, location.origin);
+  var path = u.pathname;
+  var params = {};
+  u.searchParams.forEach(function(v, k) { params[k] = v; });
+
+  var printType = 'cargo';
+  if (path.indexOf('/labels/inventory') !== -1) printType = 'inventory';
+
+  var csrf = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
+  fetch('/api/print/label', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Requested-With': 'XMLHttpRequest',
+      'X-CSRFToken': csrf
+    },
+    body: JSON.stringify({ print_type: printType, params: params })
+  }).then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+    .then(function(res) {
+      if (res.ok && res.data.ok) {
+        if (window.showToast) window.showToast(res.data.message || 'Sent to printer', 'success');
+      } else {
+        var msg = (res.data && res.data.error) || 'Print failed';
+        if (window.showToast) window.showToast('Printer: ' + msg + ' (using browser)', 'error');
+        window.printViaIframe(url);
+      }
+    }).catch(function(e) {
+      if (window.showToast) window.showToast('Printer unreachable (using browser)', 'error');
+      window.printViaIframe(url);
+    });
+};
 </script>
 
 <script>

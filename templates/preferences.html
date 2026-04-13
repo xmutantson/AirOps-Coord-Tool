@@ -136,6 +136,42 @@
 
     <hr>
 
+    <!-- ── Label Printer (Direct Printing) ──────────────────────── -->
+    <h3>Label Printer</h3>
+    <p class="muted" style="font-size:.85em; margin:0 0 .5rem;">
+      Send labels directly to a Brother QL-820NWB over the network.
+      No driver install needed on workstations.
+      <a href="/help/printer-setup">Setup guide</a>
+    </p>
+
+    <label for="direct_print_enabled">Direct printing</label>
+    <select id="direct_print_enabled" name="direct_print_enabled" onchange="this.form.submit()">
+      <option value="no"  {% if direct_print_pref=='no'  %}selected{% endif %}>Off (browser print dialog)</option>
+      <option value="yes" {% if direct_print_pref=='yes' %}selected{% endif %}>On (send to printer)</option>
+    </select>
+
+    <label for="printer_ip">Printer IP address</label>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <input id="printer_ip" name="printer_ip"
+             type="text" placeholder="e.g. 192.168.1.50"
+             value="{{ printer_ip }}"
+             style="flex:1; max-width:220px;">
+      <span id="printer-status" class="badge" style="font-size:.8em;">--</span>
+    </div>
+    <script>
+    (function(){
+      var ip = document.getElementById('printer_ip').value.trim();
+      var badge = document.getElementById('printer-status');
+      if (!ip) { badge.textContent = 'no IP'; badge.style.background = '#ccc'; return; }
+      fetch('/api/print/status').then(function(r){ return r.json(); }).then(function(d){
+        if (d.reachable) { badge.textContent = 'reachable'; badge.style.background = '#28a745'; badge.style.color = '#fff'; }
+        else { badge.textContent = 'unreachable'; badge.style.background = '#dc3545'; badge.style.color = '#fff'; }
+      }).catch(function(){ badge.textContent = 'error'; badge.style.background = '#ffc107'; });
+    })();
+    </script>
+
+    <hr>
+
     <!-- ── Flight Locate & Offline Maps ─────────────────────────── -->
     <h3>Flight Locate &amp; Offline Maps</h3>
 

@@ -116,24 +116,43 @@
 
   <hr>
 
-  <h3>Step 3: Printing from Air Ops</h3>
-  <p>When you click a label print button in Air Ops, a print dialog will open.
-  Make sure you select <strong>Brother QL-820NWB</strong> as the printer.</p>
+  <h3>Step 3: Direct Printing (Recommended)</h3>
+
+  <div style="background:#d4edda; border:1px solid #28a745; border-radius:6px; padding:10px 14px; margin-bottom:1rem;">
+    <strong>Best option:</strong> When direct printing is enabled, the Air Ops server sends
+    labels straight to the printer over the network. No driver install needed on
+    your computer, no print dialog, one-click printing. The printer auto-cuts each
+    label at exactly the right length.
+  </div>
+
+  <ol>
+    <li>Go to <strong>Preferences</strong> (gear icon in the nav bar)</li>
+    <li>Scroll to <strong>Label Printer</strong></li>
+    <li>Set <strong>Direct printing</strong> to <strong>On</strong></li>
+    <li>Enter the printer's <strong>IP address</strong> (ask your Ramp Boss)</li>
+    <li>The status badge should show <strong style="color:#28a745;">reachable</strong></li>
+    <li>Now clicking any label print button sends directly to the printer</li>
+  </ol>
+
+  <p class="muted" style="font-size:.85em;">
+    With direct printing enabled, you do not need to install the Brother driver or
+    configure paper sizes. The server handles everything.
+  </p>
+
+  <hr>
+
+  <h3>Alternative: Browser Printing</h3>
+  <p>If direct printing is not available (turned off, printer unreachable), labels
+  will fall back to the browser print dialog. For this you need the driver installed
+  (Steps 1-2 above).</p>
 
   <ol>
     <li>In the print dialog, select <strong>Brother QL-820NWB</strong> from the printer list</li>
-    <li>The label content is already sized correctly by the app — do not change
-    scaling or margins in the print dialog</li>
-    <li>Set <strong>Scale</strong> or <strong>Fit to page</strong> to <strong>100% / Actual size</strong>
+    <li>Set <strong>Scale</strong> to <strong>100% / Actual size</strong>
     (not "Fit to printable area")</li>
-    <li>Set <strong>Margins</strong> to <strong>None</strong> if the option is available</li>
+    <li>Set <strong>Margins</strong> to <strong>None</strong> if available</li>
     <li>Click <strong>Print</strong></li>
   </ol>
-
-  <div style="background:#fff3cd; border:1px solid #ffc107; border-radius:6px; padding:10px 14px; margin-top:1rem;">
-    <strong>Tip:</strong> Most browsers remember the last printer you selected.
-    After choosing the Brother QL once, it should stay selected for future prints.
-  </div>
 
   <hr>
 
