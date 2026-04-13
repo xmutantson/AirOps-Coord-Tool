@@ -129,7 +129,7 @@ def _render_inventory_tag(label_data, bc_val, unit_label):
     # Content
     name = label_data.get("name", "")
     weight = f'{label_data.get("weight_lb", "")} lb/unit'
-    origin = label_data.get("origin", "")
+    source = (label_data.get("cargo_origin") or label_data.get("origin") or "").strip()
 
     # Calculate height
     y = PAD
@@ -149,7 +149,7 @@ def _render_inventory_tag(label_data, bc_val, unit_label):
 
     y += name_sz + LINE_GAP
     y += wt_sz + LINE_GAP
-    if origin:
+    if source:
         y += origin_sz + LINE_GAP
     y += PAD
 
@@ -185,12 +185,13 @@ def _render_inventory_tag(label_data, bc_val, unit_label):
     draw.text((max(PAD, (W - tw) // 2), cy), weight, fill="black", font=f)
     cy += wt_sz + LINE_GAP
 
-    # Origin centered
-    if origin:
+    # Source centered
+    if source:
+        src_text = f"Source: {source}"
         f = _load_font(origin_sz)
-        bbox = draw.textbbox((0, 0), origin, font=f)
+        bbox = draw.textbbox((0, 0), src_text, font=f)
         tw = bbox[2] - bbox[0]
-        draw.text((max(PAD, (W - tw) // 2), cy), origin, fill="black", font=f)
+        draw.text((max(PAD, (W - tw) // 2), cy), src_text, fill="black", font=f)
 
     out = io.BytesIO()
     img.save(out, format="PNG")
