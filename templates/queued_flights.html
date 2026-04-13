@@ -348,6 +348,8 @@
     }
 
     async function refreshQueued() {
+      // Skip refresh if a labels dropdown is open (refresh would destroy it)
+      if (document.querySelector('.label-dropdown[open]')) return;
       try {
         const resp = await fetch(
           '{{ url_for("ramp.queued_flights_table_partial") }}' + window.location.search

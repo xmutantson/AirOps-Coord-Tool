@@ -479,7 +479,8 @@ def backfill_barcodes():
         with sqlite3.connect(DB_FILE) as c:
             c.row_factory = sqlite3.Row
             rows = c.execute("""
-                SELECT DISTINCT e.category_id, e.sanitized_name, e.weight_per_unit, e.raw_name
+                SELECT e.category_id, e.sanitized_name, e.weight_per_unit,
+                       MIN(e.raw_name) AS raw_name
                   FROM inventory_entries e
                  WHERE e.sanitized_name IS NOT NULL
                    AND e.weight_per_unit > 0
@@ -490,6 +491,7 @@ def backfill_barcodes():
                         AND ABS(b.weight_per_unit - e.weight_per_unit) < 0.001
                         AND (b.deleted = 0 OR b.deleted IS NULL)
                    )
+                 GROUP BY e.category_id, e.sanitized_name, e.weight_per_unit
             """).fetchall()
 
             now = datetime.utcnow().isoformat()

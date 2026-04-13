@@ -517,9 +517,9 @@ window.printLabel = function(url) {
   u.searchParams.forEach(function(v, k) { params[k] = v; });
 
   // Only use direct printing for 62mm tape formats (shipping/address)
-  // Letter and 4x6 go through the browser print dialog
+  // Everything else (letter, 4x6, no size specified) goes through browser dialog
   var labelSize = (params.label_size || '').toLowerCase();
-  if (labelSize && labelSize !== 'shipping' && labelSize !== 'address') {
+  if (labelSize !== 'shipping' && labelSize !== 'address') {
     return window.printViaIframe(url);
   }
 

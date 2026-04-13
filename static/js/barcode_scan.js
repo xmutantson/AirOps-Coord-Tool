@@ -419,10 +419,18 @@
         const body = { barcode: code, qty, direction: dirWord, commit_now: true, manifest_id: MANIFEST_ID || undefined, origin: _getOrigin() };
         const resp = await fetch(URLS.scanPost, { method:'POST', headers: jsonHeaders(), body: JSON.stringify(body) });
         if (resp.ok) {
-          setStatus(`Posted ${dirWord} x${qty}`,'ok'); /* no beep on posting */
-          // Preserve direction across our own reload
+          setStatus(`Posted ${dirWord} x${qty}`,'ok');
           saveDirOnce(getScanDir());
-          // Reset everything so the classic form returns and lists refresh.
+          // Offer to print inventory tags now that we know quantity
+          if ((window.printLabel || window.printViaIframe) && dirWord === 'inbound') {
+            var bc = encodeURIComponent(code);
+            var nm = encodeURIComponent(item.sanitized_name || item.raw_name || '');
+            var wp = encodeURIComponent(item.weight_per_unit || '');
+            var tagUrl = '/docs/labels/inventory?barcode=' + bc + '&name=' + nm + '&weight_per_unit=' + wp + '&qty=' + qty + '&label_size=address';
+            if (confirm('Print ' + qty + ' inventory tag(s) for ' + (item.sanitized_name || item.raw_name) + '?')) {
+              (window.printLabel || window.printViaIframe)(tagUrl);
+            }
+          }
           window.location.reload();
         }
         else setStatus('Failed to post transaction','err');
@@ -802,16 +810,7 @@
       createEl.hidden = true;
       setStatus('Mapping saved','ok'); // no beep here; beep only on scan
       if (data.item) showKnown(data.item, payload.barcode, null); // prefill + show quick-post card
-      // Offer to print inventory tags for the newly mapped item
-      if (data.item && (window.printLabel || window.printViaIframe)) {
-        var bc = encodeURIComponent(payload.barcode);
-        var nm = encodeURIComponent(payload.name);
-        var wp = encodeURIComponent(payload.weight_per_unit);
-        var tagUrl = '/docs/labels/inventory?barcode=' + bc + '&name=' + nm + '&weight_per_unit=' + wp + '&label_size=address';
-        if (confirm('Print inventory tags for ' + payload.name + '?')) {
-          (window.printLabel || window.printViaIframe)(tagUrl);
-        }
-      }
+      // Print prompt moved to after quantity is posted (see postBtn.onclick)
     };
     if (cancelBtn) cancelBtn.onclick = resetAll; // cancel = reset the scanner UI
   }
