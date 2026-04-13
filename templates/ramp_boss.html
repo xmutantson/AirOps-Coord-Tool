@@ -1031,6 +1031,7 @@
           wrap.dataset.raw = it.raw_name || it.sanitized_name;
           wrap.dataset.size = String(it.size_lb);
           wrap.dataset.qty  = String(it.qty);
+          wrap.dataset.origin = it.origin || '';
           // label
           const label = document.createElement('div');
           label.innerHTML = `<strong>${it.sanitized_name}</strong> &nbsp; ${it.size_lb} lb × ${it.qty}`;
@@ -1064,7 +1065,8 @@
               raw_name: (ch.dataset.raw || ch.dataset.sanitized || '').trim(),
               size_lb: Number(ch.dataset.size || 0),
               qty: Number(ch.dataset.qty || 0),
-              category_id: sel && sel.value ? Number(sel.value) : null
+              category_id: sel && sel.value ? Number(sel.value) : null,
+              origin: (ch.dataset.origin || '').trim()
             };
           });
           if (bad) {
