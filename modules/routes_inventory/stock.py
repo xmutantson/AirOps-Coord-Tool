@@ -27,15 +27,31 @@ def inventory_stock():
        ORDER BY c.display_name, e.sanitized_name, e.weight_per_unit
     """)
 
+    # Look up barcodes for each item
+    barcode_map = {}
+    try:
+        bc_rows = dict_rows("""
+            SELECT sanitized_name, weight_per_unit, barcode
+              FROM inventory_barcodes
+             WHERE (deleted=0 OR deleted IS NULL)
+        """)
+        for br in bc_rows:
+            key = f"{br['sanitized_name']}|{br['weight_per_unit']:.4f}"
+            barcode_map[key] = br['barcode']
+    except Exception:
+        pass
+
     stock = {}
     for r in rows:
         cat = r['category']
+        key = f"{r['noun']}|{r['wpu']:.4f}"
         entry = {
           'noun' : r['noun'],
           'size' : r['wpu'],
           'wpu_lbs': r['wpu'],
           'qty'  : r['qty'],
-          'total': r['wpu'] * r['qty']
+          'total': r['wpu'] * r['qty'],
+          'barcode': barcode_map.get(key, ''),
         }
         stock.setdefault(cat, []).append(entry)
 

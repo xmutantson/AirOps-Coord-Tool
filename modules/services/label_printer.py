@@ -151,8 +151,6 @@ def _render_inventory_tag(label_data, bc_val, unit_label):
     y += wt_sz + LINE_GAP
     if origin:
         y += origin_sz + LINE_GAP
-    if unit_label:
-        y += 22 + LINE_GAP
     y += PAD
 
     # Draw
@@ -162,13 +160,7 @@ def _render_inventory_tag(label_data, bc_val, unit_label):
 
     cy = PAD
 
-    # Unit label top-right
-    if unit_label:
-        uf = _load_font(22)
-        ubbox = draw.textbbox((0, 0), unit_label, font=uf)
-        draw.text((W - PAD - (ubbox[2] - ubbox[0]), cy), unit_label, fill="black", font=uf)
-
-    # Barcode across full width
+    # Barcode across full width (no unit counter on inventory tags)
     if bc_val:
         try:
             bc_img = _render_barcode_image(bc_val, target_width=W - 2 * PAD)
