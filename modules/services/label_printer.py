@@ -173,7 +173,7 @@ def _render_inventory_tag(label_data, bc_val, unit_label):
     cy = PAD
 
     # Air Ops icon top-right
-    icon = _load_label_icon(36)
+    icon = _load_label_icon(108)
     if icon:
         img.paste(icon, (W - PAD - icon.width, PAD), icon)
 
@@ -320,7 +320,7 @@ def _render_cargo_label(label_data, bc_val, unit_label):
                   fill="black", font=uf)
         icon_y_offset = PAD + 36 + 4
 
-    icon = _load_label_icon(40)
+    icon = _load_label_icon(120)
     if icon:
         img.paste(icon, (total_w - PAD - icon.width, icon_y_offset), icon)
 
