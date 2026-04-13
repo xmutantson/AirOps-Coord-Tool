@@ -93,22 +93,23 @@ def render_label_png(label_data, label_type="inventory"):
     except Exception:
         pass
 
-    # ── Build content rows: list of (text, font_size) ──
-    rows = []
+    # ── Build content rows: list of (text, relative_weight) ──
+    # Weights are relative — actual px sizes are computed to fill tape height
+    raw_rows = []
     bc_val = label_data.get("barcode", "")
 
     if label_type == "inventory":
-        rows.append((label_data.get("name", ""), 48))
-        rows.append((f'{label_data.get("weight_lb", "")} lb per unit', 36))
+        raw_rows.append((label_data.get("name", ""), 5))
+        raw_rows.append((f'{label_data.get("weight_lb", "")} lb per unit', 4))
         if label_data.get("origin"):
-            rows.append((label_data["origin"], 30))
+            raw_rows.append((label_data["origin"], 3))
         if label_data.get("unit_label"):
-            rows.append((f'Unit {label_data["unit_label"]}', 40))
+            raw_rows.append((f'Unit {label_data["unit_label"]}', 4))
     else:  # cargo
         title = "CARGO ID"
         if label_data.get("unit_label"):
             title += f'  {label_data["unit_label"]}'
-        rows.append((title, 40))
+        raw_rows.append((title, 4))
 
         m = mission_num or label_data.get("mission", "")
         kv = []
@@ -124,7 +125,18 @@ def render_label_png(label_data, label_type="inventory"):
         if wt:
             kv.append(("Weight", f"{wt} lb"))
         for k, v in kv:
-            rows.append((f"{k}: {v}", 30))
+            raw_rows.append((f"{k}: {v}", 3))
+
+    # ── Scale font sizes to fill the tape height (696px) ──
+    total_weight = sum(w for _, w in raw_rows)
+    num_gaps = len(raw_rows) - 1
+    available_h = CONTENT_H  # 696 - 2*PAD = 656px
+    # Each weight unit gets: available_h / (total_weight + gap_allowance)
+    px_per_weight = available_h / (total_weight + num_gaps * 0.3)
+    rows = []
+    for text, weight in raw_rows:
+        sz = max(20, min(80, int(px_per_weight * weight)))
+        rows.append((text, sz))
 
     # ── Calculate width needed (this becomes label length after rotation) ──
     # Barcode block width
