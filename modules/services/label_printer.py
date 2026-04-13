@@ -54,130 +54,156 @@ def generate_barcode_svg(value):
 
 
 def render_label_png(label_data, label_type="inventory"):
-    """Render a label directly to a 696px-wide PNG using Pillow.
+    """Render a label directly to a PNG using Pillow.
 
-    Bypasses WeasyPrint entirely — draws text and barcodes directly for
-    predictable output at 300 DPI on the Brother QL 62mm tape.
+    Draws at 696px wide (62mm @ 300 DPI) for the Brother QL.
+    If content needs more width, renders wider and rotates 90 degrees.
 
-    Args:
-        label_data: dict with label fields (barcode, name, weight_lb, origin,
-                    unit_label for inventory; or mission, tail, origin, destination,
-                    date_sealed, contents, cargo_origin, weight_lb, barcode,
-                    unit_label for cargo)
-        label_type: "inventory" or "cargo"
-
-    Returns PNG bytes (696px wide, variable height).
+    Returns PNG bytes.
     """
     from PIL import ImageDraw, ImageFont
 
     W = _NATIVE_WIDTH_PX  # 696
-    MARGIN = 20
-    TEXT_W = W - 2 * MARGIN
-    y = MARGIN
+    PAD = 24
+    LINE_GAP = 6
 
-    # Try to load a decent font; fall back to default
-    font_cache = {}
-    def get_font(size):
-        if size not in font_cache:
-            for name in ("DejaVuSans.ttf", "LiberationSans-Regular.ttf",
-                         "FreeSans.ttf", "arial.ttf", "Helvetica.ttf"):
+    # Font loader with fallback chain
+    _fc = {}
+    def font(size):
+        if size not in _fc:
+            for n in ("DejaVuSans-Bold.ttf", "DejaVuSans.ttf",
+                      "LiberationSans-Bold.ttf", "LiberationSans-Regular.ttf",
+                      "FreeSans.ttf", "arial.ttf"):
                 try:
-                    font_cache[size] = ImageFont.truetype(name, size)
+                    _fc[size] = ImageFont.truetype(n, size)
                     break
                 except (OSError, IOError):
                     continue
             else:
-                font_cache[size] = ImageFont.load_default(size=size)
-        return font_cache[size]
+                _fc[size] = ImageFont.load_default(size=size)
+        return _fc[size]
 
-    font_title = get_font(36)
-    font_large = get_font(28)
-    font_med   = get_font(22)
-    font_small = get_font(18)
-    font_label = get_font(16)
+    # Get real mission number from preferences
+    mission_num = ""
+    try:
+        from modules.utils.common import get_preference
+        mission_num = get_preference("mission_number") or ""
+    except Exception:
+        pass
 
-    # First pass: calculate height
-    lines = []  # (font, text, bold)
+    # ── Build content rows: list of (text, font_size) ──
+    rows = []
 
     if label_type == "inventory":
-        lines.append((font_title, label_data.get("name", ""), True))
-        lines.append((font_large, f"{label_data.get('weight_lb', '')} lb per unit", False))
+        rows.append((label_data.get("name", ""), 38))
+        rows.append((f'{label_data.get("weight_lb", "")} lb per unit', 28))
         if label_data.get("origin"):
-            lines.append((font_med, label_data["origin"], False))
+            rows.append((label_data["origin"], 24))
         if label_data.get("unit_label"):
-            lines.append((font_large, f"Unit {label_data['unit_label']}", True))
+            rows.append((f'Unit {label_data["unit_label"]}', 30))
+
     else:  # cargo
-        lines.append((font_title, "CARGO ID", True))
+        title = "CARGO ID"
         if label_data.get("unit_label"):
-            lines[-1] = (font_title, f"CARGO ID  {label_data['unit_label']}", True)
-        for label_key, display in [("mission", "Mission"), ("tail", "Tail #"),
-                                    ("origin", "From"), ("destination", "To"),
-                                    ("date_sealed", "Date"), ("contents", "Item"),
-                                    ("cargo_origin", "Source"), ("weight_lb", "Weight")]:
-            val = label_data.get(label_key, "")
-            if not val:
-                continue
-            if label_key == "weight_lb":
-                val = f"{val} lb"
-            lines.append((font_label, f"{display}:", True))
-            lines.append((font_med, f"  {val}", False))
+            title += f'  {label_data["unit_label"]}'
+        rows.append((title, 32))
 
-    # Calculate total height
-    barcode_height = 80 if label_data.get("barcode") else 0
-    text_height = sum(f.size + 8 for f, _, _ in lines)
-    total_h = MARGIN + barcode_height + 10 + text_height + MARGIN
+        # Use real mission number, fall back to label data
+        m = mission_num or label_data.get("mission", "")
+        kv = []
+        if m:
+            kv.append(("Mission", m))
+        for key, display in [("tail", "Tail"), ("origin", "From"),
+                              ("destination", "To"), ("date_sealed", "Date"),
+                              ("contents", "Item"), ("cargo_origin", "Source")]:
+            v = label_data.get(key, "")
+            if v:
+                kv.append((display, str(v)))
+        wt = label_data.get("weight_lb", "")
+        if wt:
+            kv.append(("Weight", f"{wt} lb"))
 
-    # Create image
+        for k, v in kv:
+            rows.append((f"{k}: {v}", 24))
+
+    # ── Calculate dimensions ──
+    total_h = PAD
+    for text, sz in rows:
+        total_h += sz + LINE_GAP
+    # Add space for barcode
+    bc_val = label_data.get("barcode", "")
+    bc_block_h = 0
+    if bc_val:
+        bc_block_h = 100
+        total_h += bc_block_h + LINE_GAP
+    total_h += PAD
+
+    # ── Draw ──
     img = Image.new("RGB", (W, total_h), "white")
     draw = ImageDraw.Draw(img)
+    draw.rectangle([3, 3, W - 4, total_h - 4], outline="black", width=2)
 
-    # Draw border
-    draw.rectangle([4, 4, W - 5, total_h - 5], outline="black", width=2)
+    y = PAD
 
-    y = MARGIN
-
-    # Draw barcode if present
-    bc_val = label_data.get("barcode", "")
+    # Barcode at top
     if bc_val:
         try:
             import barcode as bc_lib
             from barcode.writer import ImageWriter
             writer = ImageWriter()
             writer.set_options({
-                "module_width": 0.4,
-                "module_height": 12.0,
-                "font_size": 14,
-                "text_distance": 2.0,
-                "quiet_zone": 4.0,
+                "module_width": 0.35,
+                "module_height": 10.0,
+                "font_size": 12,
+                "text_distance": 1.5,
+                "quiet_zone": 3.0,
                 "write_text": True,
                 "dpi": 300,
             })
             code = bc_lib.get("code128", bc_val, writer=writer)
             bc_buf = io.BytesIO()
             code.write(bc_buf)
-            bc_img = Image.open(bc_buf)
-            # Scale barcode to fit width
-            bc_w = min(TEXT_W, bc_img.width)
-            ratio = bc_w / bc_img.width
-            bc_h = int(bc_img.height * ratio)
-            bc_img = bc_img.resize((bc_w, bc_h), Image.LANCZOS)
-            # Center barcode
-            x_offset = (W - bc_w) // 2
-            img.paste(bc_img, (x_offset, y))
-            y += bc_h + 8
+            bc_img = Image.open(bc_buf).convert("RGB")
+            # Scale to fit width
+            max_w = W - 2 * PAD
+            if bc_img.width > max_w:
+                r = max_w / bc_img.width
+                bc_img = bc_img.resize((max_w, int(bc_img.height * r)), Image.LANCZOS)
+            # Center
+            img.paste(bc_img, ((W - bc_img.width) // 2, y))
+            y += bc_img.height + LINE_GAP
         except Exception as e:
             logger.warning("Barcode render failed: %s", e)
-            draw.text((MARGIN, y), bc_val, fill="black", font=font_small)
+            draw.text((PAD, y), bc_val, fill="black", font=font(18))
             y += 24
 
-    # Draw text lines
-    for font, text, bold in lines:
-        draw.text((MARGIN, y), text, fill="black", font=font)
-        y += font.size + 8
+    # Separator line after barcode
+    if bc_val:
+        draw.line([(PAD, y), (W - PAD, y)], fill="gray", width=1)
+        y += LINE_GAP
 
-    # Crop to actual content
-    y += MARGIN
+    # Text rows
+    for text, sz in rows:
+        f = font(sz)
+        # Center inventory labels, left-align cargo
+        if label_type == "inventory":
+            bbox = draw.textbbox((0, 0), text, font=f)
+            tw = bbox[2] - bbox[0]
+            x = max(PAD, (W - tw) // 2)
+        else:
+            x = PAD
+        draw.text((x, y), text, fill="black", font=f)
+        y += sz + LINE_GAP
+
+    # Crop to content
+    y += PAD
     img = img.crop((0, 0, W, min(y, img.height)))
+
+    # Convert to RGB (safety)
+    if img.mode != "RGB":
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        bg.paste(img)
+        img = bg
 
     out = io.BytesIO()
     img.save(out, format="PNG")
