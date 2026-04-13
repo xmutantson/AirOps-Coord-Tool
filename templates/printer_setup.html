@@ -54,36 +54,59 @@
           <tr style="background:#f0f0f0;">
             <th style="text-align:left; padding:4px 8px; border:1px solid #ccc;">Setting</th>
             <th style="text-align:left; padding:4px 8px; border:1px solid #ccc;">Value</th>
+            <th style="text-align:left; padding:4px 8px; border:1px solid #ccc;">Why</th>
           </tr>
         </thead>
         <tbody>
           <tr>
             <td style="padding:4px 8px; border:1px solid #ccc;"><strong>Paper Size</strong></td>
-            <td style="padding:4px 8px; border:1px solid #ccc;">62mm (pick any length — the app controls cut length)</td>
+            <td style="padding:4px 8px; border:1px solid #ccc;"><strong>2.4" x 3.9"</strong></td>
+            <td style="padding:4px 8px; border:1px solid #ccc;">2.4" is the 62mm tape width. 3.9" is the longest preset — the auto-cutter trims to actual content length</td>
           </tr>
           <tr>
             <td style="padding:4px 8px; border:1px solid #ccc;"><strong>Width</strong></td>
-            <td style="padding:4px 8px; border:1px solid #ccc;">2.4" (62mm)</td>
+            <td style="padding:4px 8px; border:1px solid #ccc;">2.4"</td>
+            <td style="padding:4px 8px; border:1px solid #ccc;">Auto-filled from paper size</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 8px; border:1px solid #ccc;"><strong>Length</strong></td>
+            <td style="padding:4px 8px; border:1px solid #ccc;">3.9" (or leave as-is)</td>
+            <td style="padding:4px 8px; border:1px solid #ccc;">Maximum print area — the cutter handles the rest</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 8px; border:1px solid #ccc;"><strong>Feed</strong></td>
+            <td style="padding:4px 8px; border:1px solid #ccc;">0.12"</td>
+            <td style="padding:4px 8px; border:1px solid #ccc;">Small gap before cut line. Default is fine</td>
           </tr>
           <tr>
             <td style="padding:4px 8px; border:1px solid #ccc;"><strong>Orientation</strong></td>
             <td style="padding:4px 8px; border:1px solid #ccc;"><strong>Landscape</strong></td>
+            <td style="padding:4px 8px; border:1px solid #ccc;">Labels are wider than tall</td>
           </tr>
           <tr>
             <td style="padding:4px 8px; border:1px solid #ccc;"><strong>Quality</strong></td>
             <td style="padding:4px 8px; border:1px solid #ccc;">Give priority to print speed</td>
+            <td style="padding:4px 8px; border:1px solid #ccc;">300x300 DPI — fast and clean barcodes</td>
           </tr>
           <tr>
             <td style="padding:4px 8px; border:1px solid #ccc;"><strong>Cut Every</strong></td>
-            <td style="padding:4px 8px; border:1px solid #ccc;">Checked, 1 labels</td>
+            <td style="padding:4px 8px; border:1px solid #ccc;">Checked, <strong>1</strong> labels</td>
+            <td style="padding:4px 8px; border:1px solid #ccc;">Cuts between each label</td>
           </tr>
           <tr>
             <td style="padding:4px 8px; border:1px solid #ccc;"><strong>Cut at end</strong></td>
             <td style="padding:4px 8px; border:1px solid #ccc;">Checked</td>
+            <td style="padding:4px 8px; border:1px solid #ccc;">Final cut after last label</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 8px; border:1px solid #ccc;"><strong>Mirror Printing</strong></td>
+            <td style="padding:4px 8px; border:1px solid #ccc;">Unchecked</td>
+            <td style="padding:4px 8px; border:1px solid #ccc;">Leave off</td>
           </tr>
           <tr>
             <td style="padding:4px 8px; border:1px solid #ccc;"><strong>Trim tape after data</strong></td>
             <td style="padding:4px 8px; border:1px solid #ccc;">Unchecked</td>
+            <td style="padding:4px 8px; border:1px solid #ccc;">Not needed — "Cut Every" handles it</td>
           </tr>
         </tbody>
       </table>
@@ -123,7 +146,7 @@
 
     <dt style="font-weight:600; margin-top:.5rem;">Labels print too small or too large</dt>
     <dd>Check that the print dialog scale is set to 100% (not "Fit to page").
-    Also verify the Paper Size in printer preferences is set to 62mm.</dd>
+    Also verify the Paper Size in printer preferences is set to <strong>2.4" x 3.9"</strong>.</dd>
 
     <dt style="font-weight:600; margin-top:.5rem;">Labels cut in the wrong place</dt>
     <dd>Ensure "Cut Every 1 labels" and "Cut at end" are both checked in
