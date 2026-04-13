@@ -517,6 +517,7 @@
     createEl.querySelector('#u_name').value = '';
     createEl.querySelector('#u_wpu').value  = '';
     const unitSel2 = createEl.querySelector('#u_unit'); if (unitSel2) unitSel2.value = '';
+    const originEl = createEl.querySelector('#u_origin'); if (originEl) originEl.value = '';
   }
 
   async function handleCode(raw, sym='unknown') {
