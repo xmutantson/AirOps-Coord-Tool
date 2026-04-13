@@ -200,8 +200,18 @@ def inventory_detail():
             except Exception as e:
                 logger.warning("Auto-barcode generation failed: %s", e)
 
-        # Redirect with tag print prompt params if barcode was generated/found
+        # Return barcode info — AJAX gets JSON, non-AJAX gets redirect
         logger.info("Inventory entry: dirn=%s, item=%s, gen_barcode=%s", dirn, noun, gen_barcode)
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            resp_data = {"message": f"Logged {dirn} {qty} x {noun} ({wpu_lbs:.1f} lb)"}
+            if gen_barcode:
+                resp_data["tag_barcode"] = gen_barcode
+                resp_data["tag_name"] = noun
+                resp_data["tag_wpu"] = f"{wpu_lbs:.2f}"
+                resp_data["tag_qty"] = str(qty)
+                resp_data["tag_origin"] = origin or ""
+            return jsonify(resp_data)
+
         redir_url = url_for("inventory.inventory_detail")
         if gen_barcode:
             import urllib.parse

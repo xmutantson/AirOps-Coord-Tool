@@ -561,17 +561,47 @@
           body: new FormData(form)
         });
         if (resp.ok) {
-          showToast('Entry saved', 'success');
+          let data = {};
+          try { data = await resp.json(); } catch (_) {}
+          showToast(data.message || 'Entry saved', 'success');
           form.reset();
           if (prevDir === 'out') dirOut.checked = true;
           else dirIn.checked = true;
-          await fetchInventory();      // fetch new inventory after save
+          await fetchInventory();
           updateMode();
           fixFieldEnabling();
           await (window.loadInventoryDetail?.({ preserve: true }));
-          // after saving, return focus to the first input
           if (prevDir === 'in') nameTxt.focus(); else qtyFld.focus();
 
+          // Show print tags modal if barcode was generated
+          if (data.tag_barcode && (window.printLabel || window.printViaIframe)) {
+            var bc = encodeURIComponent(data.tag_barcode);
+            var nm = encodeURIComponent(data.tag_name || '');
+            var wp = encodeURIComponent(data.tag_wpu || '');
+            var qt = encodeURIComponent(data.tag_qty || '1');
+            var og = encodeURIComponent(data.tag_origin || '');
+            var tagUrl = '/docs/labels/inventory?barcode=' + bc + '&name=' + nm + '&weight_per_unit=' + wp + '&qty=' + qt + '&origin=' + og + '&label_size=address';
+            // Build modal
+            var overlay = document.createElement('div');
+            overlay.id = 'tag-print-overlay';
+            overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10000;display:flex;align-items:center;justify-content:center;';
+            overlay.innerHTML = '<div style="background:#fff;border-radius:10px;padding:24px 32px;max-width:420px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.3);text-align:center;">'
+              + '<h3 style="margin:0 0 12px;">Print Inventory Tags?</h3>'
+              + '<p style="margin:0 0 8px;font-size:.95em;"><strong>' + (data.tag_name || '') + '</strong> -- ' + (data.tag_wpu || '') + ' lb x ' + (data.tag_qty || '1') + ' units</p>'
+              + '<p style="margin:0 0 16px;font-size:.85em;color:#666;">Barcode: <code>' + data.tag_barcode + '</code></p>'
+              + '<div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">'
+              + '<button type="button" class="btn-primary" style="padding:8px 20px;font-size:1em;" id="tag-modal-print">Print Tags</button>'
+              + '<button type="button" class="btn-secondary" style="padding:8px 20px;font-size:1em;" id="tag-modal-skip">Skip</button>'
+              + '</div></div>';
+            document.body.appendChild(overlay);
+            document.getElementById('tag-modal-print').onclick = function() {
+              (window.printLabel || window.printViaIframe)(tagUrl);
+              overlay.remove();
+            };
+            document.getElementById('tag-modal-skip').onclick = function() {
+              overlay.remove();
+            };
+          }
         } else {
           let err = { message: 'Save failed' };
           try { err = await resp.json(); } catch (_) {}

@@ -54,9 +54,9 @@
         <td>{{ it.total|round(1) }}</td>
         <td style="white-space:nowrap;">
           {% if it.barcode %}
-          <button type="button" class="icon-btn" title="Print inventory tags"
+          <button type="button" style="padding:2px 8px; font-size:.8em; cursor:pointer;"
                   onclick="var n=prompt('How many tags?','1'); if(n&&!isNaN(n)&&n>0) printLabel('/docs/labels/inventory?barcode={{ it.barcode|urlencode }}&name={{ it.noun|urlencode }}&weight_per_unit={{ it.wpu_lbs }}&qty='+n+'&label_size=address');">
-            &#127991;
+            Print Tags
           </button>
           {% else %}
           <span class="muted" style="font-size:.8em;">--</span>
