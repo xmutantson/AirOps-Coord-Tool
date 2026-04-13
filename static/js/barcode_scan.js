@@ -428,7 +428,17 @@
             var wp = encodeURIComponent(item.weight_per_unit || '');
             var tagUrl = '/docs/labels/inventory?barcode=' + bc + '&name=' + nm + '&weight_per_unit=' + wp + '&qty=' + qty + '&label_size=address';
             if (confirm('Print ' + qty + ' inventory tag(s) for ' + (item.sanitized_name || item.raw_name) + '?')) {
-              (window.printLabel || window.printViaIframe)(tagUrl);
+              // Send print request and wait for it before reloading
+              try {
+                var csrf = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
+                var u = new URL(tagUrl, location.origin);
+                var pp = {}; u.searchParams.forEach(function(v,k){ pp[k]=v; });
+                await fetch('/api/print/label', {
+                  method: 'POST',
+                  headers: { 'Content-Type':'application/json', 'X-Requested-With':'XMLHttpRequest', 'X-CSRFToken': csrf },
+                  body: JSON.stringify({ print_type: 'inventory', params: pp })
+                });
+              } catch(_) {}
             }
           }
           window.location.reload();
