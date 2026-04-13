@@ -3174,11 +3174,6 @@
               // Cosmetic refresh so size dropdowns / hints stay current (not used for gating)
               await fetchInventory();
             }
-            try {
-                key: k, beforeQty, afterQty, delta, availSnapshot,
-                remaining: SESSION_AVAIL_CAPS.get(k)
-              });
-            } catch (_){}
           }
         }
       } catch(_) {}
