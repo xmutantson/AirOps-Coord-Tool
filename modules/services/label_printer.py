@@ -259,7 +259,10 @@ def _render_cargo_label(label_data, bc_val, unit_label):
             parts = contents.split(": ", 1)
             if len(parts[0]) < 30:
                 contents = parts[1]
-        raw_rows.append((f"Item: {contents}", 3))
+        item_text = f"Item: {contents}"
+        if unit_label:
+            item_text += f" ({unit_label})"
+        raw_rows.append((item_text, 3))
     if label_data.get("cargo_origin"):
         raw_rows.append((f"Source: {label_data['cargo_origin']}", 3))
     wt = label_data.get("weight_lb", "")
@@ -295,8 +298,6 @@ def _render_cargo_label(label_data, bc_val, unit_label):
         _m.textbbox((0, 0), t, font=_load_font(s))[2] for t, s in rows
     )
     unit_w = 0
-    if unit_label:
-        unit_w = _m.textbbox((0, 0), unit_label, font=_load_font(36))[2] + PAD
 
     # Reserve space for icon column on the right — never truncate text,
     # just make the label longer (tape is continuous, length is free)
@@ -317,16 +318,9 @@ def _render_cargo_label(label_data, bc_val, unit_label):
 
     text_x = PAD + bc_block_w
 
-    # Unit label + icon top-right
-    icon_y_offset = PAD
-    if unit_label:
-        uf = _load_font(36)
-        ubbox = draw.textbbox((0, 0), unit_label, font=uf)
-        draw.text((total_w - PAD - (ubbox[2] - ubbox[0]), PAD), unit_label,
-                  fill="black", font=uf)
-        icon_y_offset = PAD + 36 + 4
-
+    # Icon top-right (unit counter is now part of the Item: line)
     icon = _load_label_icon(120)
+    icon_y_offset = PAD
     icon_reserve = (icon.width + PAD * 2) if icon else 0
     if icon:
         img.paste(icon, (total_w - PAD - icon.width, icon_y_offset), icon)
