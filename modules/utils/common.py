@@ -4066,6 +4066,7 @@ def cr2_delete_group(airport: str, priority_code: int, need: str) -> int:
     Delete a v2 cargo request group by airport, priority, and need.
     Returns the number of link rows deleted.
     """
+    ensure_cargo_request_tables()
     ap = canonical_airport_code(airport or "") or (airport or "").strip().upper()
     need_s = sanitize_name(need or "")
     if not ap or not need_s:
@@ -4088,6 +4089,7 @@ def cr2_delete_airport(airport: str) -> int:
     Delete all v2 cargo requests for an airport.
     Returns the number of link rows deleted.
     """
+    ensure_cargo_request_tables()
     ap = canonical_airport_code(airport or "") or (airport or "").strip().upper()
     if not ap:
         return 0

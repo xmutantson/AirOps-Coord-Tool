@@ -176,6 +176,7 @@ def hide_alert(alert_id: int, hide: bool = True) -> bool:
         return db.total_changes > 0
 
 def latest_nonhidden_utc() -> str:
+    _ensure_schema()
     with connect(get_db_file()) as db:
         row = db.execute("SELECT received_at_utc FROM same_alerts WHERE COALESCE(is_hidden,0)=0 ORDER BY received_at_utc DESC LIMIT 1").fetchone()
     return row[0] if row else ""

@@ -17,6 +17,7 @@ from modules.utils.common import (
     cr2_get_airport_detail,
     cr2_delete_group,
     cr2_delete_airport,
+    ensure_cargo_request_tables,
     PRIORITY_LABELS,  # kept for parity with your diff (unused here but harmless)
     dict_rows,
 )
@@ -363,6 +364,11 @@ def get_aggregate():
             "tails": tails or [],
         },
     }
+
+    # Read-only connection can't run CREATE TABLE — ensure any lazily-created
+    # tables exist via their writable helpers BEFORE opening the RO connection.
+    if "cargo_requests" in sections:
+        ensure_cargo_request_tables()
 
     # Collect data (all read-only)
     with _ro_connect() as conn:
