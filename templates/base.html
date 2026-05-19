@@ -69,9 +69,14 @@
         try { window.removeEventListener('keydown', keyBlocker, true); } catch(_) {}
         try { window.__CSRF_EXPIRED_SHOWN__ = false; } catch(_) {}
         try { window.__NAVIGATING_AWAY = true; } catch(_) {}
-        try { window.location.reload(); return; } catch(_) {}
-        try { window.location.assign(window.location.href); return; } catch(_) {}
-        try { window.location.href = window.location.pathname + window.location.search; } catch(_) {}
+        // Navigate via GET to the same URL (path + search + hash) instead of
+        // reload(). reload() resubmits the original request method, so if the
+        // current page was reached via POST, Firefox shows a "Resend form
+        // data?" prompt -- which the user then has to dismiss separately.
+        var same = window.location.pathname + window.location.search + window.location.hash;
+        try { window.location.assign(same); return; } catch(_) {}
+        try { window.location.href = same; return; } catch(_) {}
+        try { window.location.reload(); } catch(_) {}
       }
 
       var okBtn = overlay.querySelector('#csrf-ok');
