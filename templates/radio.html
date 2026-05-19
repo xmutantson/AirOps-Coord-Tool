@@ -12,7 +12,13 @@
 </div>
 
 {# ── WinLink controls ─────────────────────────────────────────── #}
-<div class="winlink-controls" style="display:flex; gap:0.5rem; align-items:center; margin:1rem 0;">
+<div class="winlink-controls" style="display:flex; gap:0.5rem; align-items:center; margin:1rem 0; flex-wrap:wrap;">
+  <button type="button"
+          id="legend-open-btn"
+          class="btn btn-secondary">
+    📖 Legend
+  </button>
+
   <form method="POST"
         id="winlink-poll-form"
         action="{{ url_for('winlink.winlink_start') if not winlink_job_active else url_for('winlink.winlink_stop') }}"
@@ -34,7 +40,7 @@
     </button>
   </form>
 
-   <a href="{{ url_for('winlink.winlink_inbox') }}" class="btn btn-secondary">
+   <a href="{{ url_for('winlink.winlink_inbox') }}" class="btn btn-secondary" style="margin-left:auto;">
      📥 WinLink Inbox
      <span id="wl-unread-badge" class="wl-unread-badge" style="display:none;">
        UNREAD EMAILS: 0
@@ -677,6 +683,167 @@ setInterval(refreshUnreadBadge, 30000);
     }
   }, true);
 })();
+</script>
+
+<!-- ── Row Color Legend Modal ─────────────────────────────────────────── -->
+<style>
+  #legend-backdrop {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.75);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+    padding: 1rem;
+  }
+  #legend-backdrop.open { display: flex; }
+  #legend-card {
+    background: #ffffff;
+    color: #1a1a1a;
+    border-radius: 10px;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.6);
+    width: min(720px, 96vw);
+    max-height: 90vh;
+    overflow: auto;
+    padding: 1.25rem 1.5rem 1.25rem;
+    position: relative;
+  }
+  #legend-card h3 { margin: 0 0 0.25rem 0; font-size: 1.25rem; }
+  #legend-card .legend-intro { margin: 0 0 1rem 0; color: #555; font-size: 0.95rem; }
+  #legend-card .legend-close {
+    position: absolute;
+    top: 0.5rem; right: 0.75rem;
+    background: none; border: none;
+    font-size: 1.5rem; line-height: 1;
+    cursor: pointer; color: #555;
+  }
+  #legend-card .legend-close:hover { color: #000; }
+  .legend-entry { margin-bottom: 1.25rem; }
+  .legend-entry:last-child { margin-bottom: 0; }
+  .legend-entry h4 { margin: 0 0 0.4rem 0; font-size: 1rem; }
+  .legend-entry p { margin: 0.4rem 0 0 0; font-size: 0.9rem; color: #333; }
+  .legend-example {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+    border: 1px solid #ccc;
+  }
+  .legend-example th,
+  .legend-example td {
+    padding: 0.35rem 0.5rem;
+    border: 1px solid #ddd;
+    text-align: left;
+    color: #1a1a1a;
+  }
+  .legend-example thead th { background: #f0f0f0; font-weight: 600; }
+  .legend-example tr.legend-yellow { background-color: #FFF9C4; }
+  .legend-example tr.legend-red    { background-color: #f8d7da; }
+  .legend-example tr.legend-white  { background-color: #ffffff; }
+  .legend-actions { display: flex; justify-content: flex-end; margin-top: 1rem; }
+  .legend-actions .btn-close {
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    border: 1px solid #888;
+    background: #eee;
+    cursor: pointer;
+  }
+  .legend-actions .btn-close:hover { background: #ddd; }
+</style>
+
+<div id="legend-backdrop" role="dialog" aria-modal="true" aria-labelledby="legend-title">
+  <div id="legend-card">
+    <button type="button" class="legend-close" id="legend-close-x" aria-label="Close legend">×</button>
+    <h3 id="legend-title">Row Color Legend</h3>
+    <p class="legend-intro">Each flight row is shaded to show the status of its outbound notification to other sites.</p>
+
+    <div class="legend-entry">
+      <h4>Yellow — message queued, not yet transmitted</h4>
+      <table class="legend-example">
+        <thead>
+          <tr><th>Code</th><th>Status</th><th>Tail #</th><th>Origin</th><th>Destination</th></tr>
+        </thead>
+        <tbody>
+          <tr class="legend-yellow">
+            <td>A1234-5</td>
+            <td>✈️ In-Flight</td>
+            <td>N12345</td>
+            <td>KAWO</td>
+            <td>KBLI</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>The status message for this flight is queued and waiting for radio operators to transmit it to the destination site.</p>
+    </div>
+
+    <div class="legend-entry">
+      <h4>White — message has been transmitted</h4>
+      <table class="legend-example">
+        <thead>
+          <tr><th>Code</th><th>Status</th><th>Tail #</th><th>Origin</th><th>Destination</th></tr>
+        </thead>
+        <tbody>
+          <tr class="legend-white">
+            <td>B5678-9</td>
+            <td>🛬 Landed</td>
+            <td>N67890</td>
+            <td>KBLI</td>
+            <td>KAWO</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>The status message for this flight has already been transmitted. No further action is required.</p>
+    </div>
+
+    <div class="legend-entry">
+      <h4>Red — no addressee defined for the destination</h4>
+      <table class="legend-example">
+        <thead>
+          <tr><th>Code</th><th>Status</th><th>Tail #</th><th>Origin</th><th>Destination</th></tr>
+        </thead>
+        <tbody>
+          <tr class="legend-red">
+            <td>C2468-1</td>
+            <td>✈️ In-Flight</td>
+            <td>N24680</td>
+            <td>KAWO</td>
+            <td>KZZZ</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>No Winlink/radio addressee is defined in the program for the counterparty airport, so the message cannot be sent. Add a mapping in Admin → Airport Call Mappings to resolve this.</p>
+    </div>
+
+    <div class="legend-actions">
+      <button type="button" class="btn-close" id="legend-close-btn">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  (function(){
+    var backdrop = document.getElementById('legend-backdrop');
+    var openBtn  = document.getElementById('legend-open-btn');
+    var closeX   = document.getElementById('legend-close-x');
+    var closeBtn = document.getElementById('legend-close-btn');
+    if (!backdrop || !openBtn) return;
+
+    function open(){
+      backdrop.classList.add('open');
+      document.addEventListener('keydown', onEsc);
+    }
+    function close(){
+      backdrop.classList.remove('open');
+      document.removeEventListener('keydown', onEsc);
+    }
+    function onEsc(e){ if (e.key === 'Escape') close(); }
+
+    openBtn.addEventListener('click', open);
+    closeX && closeX.addEventListener('click', close);
+    closeBtn && closeBtn.addEventListener('click', close);
+    backdrop.addEventListener('click', function(e){
+      if (e.target === backdrop) close();
+    });
+  })();
 </script>
 
 {% endblock %}
