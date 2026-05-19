@@ -19,6 +19,14 @@
 12. **Send confirmation** — after clicking active Send, should show confirm dialog: "Aircraft has taken off?" with tail number reminder
 
 ## Pending Validation
-- Delete flight reversal with origin (queue delete path fixed, needs re-test)
-- CSV export with origin column
-- Waiver flow (pilot/volunteer routing, dark mode)
+- Delete flight reversal with origin — VALIDATED
+- CSV export with origin column — VALIDATED
+- Waiver flow — pilot goes straight to waiver, no dashboard button — VALIDATED
+
+## Future: Ramp Boss Form Restructuring
+- Rename current form to just have a "Cargo Entry" button
+- Cargo Type and Cargo Weight fields should prefill with "Autofilled" or similar
+  indicator showing they'll be auto-completed from cargo entry
+- Running total should move above Cargo Type
+- Running total should be grey to indicate it's informational/auto-computed
+- Origin dropdown should clear after each item add — DONE
