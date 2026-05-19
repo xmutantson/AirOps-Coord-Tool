@@ -3,6 +3,29 @@
 
 {% block content %}
 
+{% if callsign_missing %}
+<div class="ramp-form-container">
+  <form id="radio-set-callsign" method="POST" action="{{ url_for('radio.radio_set_callsign') }}" style="display:block;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <h2 style="margin-top:0;">Your Callsign?</h2>
+    <p style="margin:.25rem 0 1rem; opacity:.85;">
+      Radio operators need their callsign on record before the Radio tab is usable.
+      This setting is stored on this device only — each operator should set their own.
+    </p>
+    <label for="radio-callsign" style="display:block; font-weight:bold;">Callsign*</label>
+    <input id="radio-callsign" name="operator_call" required autofocus
+           placeholder="e.g. W7XYZ"
+           style="display:block; width:100%; max-width:20ch; padding:.5em;
+                  text-transform:uppercase; margin:.4rem 0 .8rem;"
+           oninput="this.value=this.value.toUpperCase()">
+    <button type="submit" style="display:block; width:100%;">Save &amp; Continue</button>
+    <p style="margin-top:1rem; font-size:.9em; opacity:.7;">
+      You can change this later in Preferences.
+    </p>
+  </form>
+</div>
+{% else %}
+
 <div class="page-header-bar">
   <span class="page-title">
     Radio Operator Outbox
@@ -869,4 +892,5 @@ setInterval(refreshUnreadBadge, 30000);
   })();
 </script>
 
+{% endif %}
 {% endblock %}

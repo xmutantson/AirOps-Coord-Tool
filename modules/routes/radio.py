@@ -2,7 +2,7 @@
 from markupsafe import escape
 import sqlite3, re, json, logging
 from datetime import datetime, timezone
-from flask import Blueprint, current_app, flash, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, current_app, flash, jsonify, make_response, redirect, render_template, request, url_for
 from app import scheduler
 
 from modules.services.winlink.core import (
@@ -412,6 +412,22 @@ def winlink_settings():
         aoct_cc_reply=get_preference('aoct_cc_reply') or 'no',
         aoct_cc_broadcast=get_preference('aoct_cc_broadcast') or 'no',
     )
+
+
+@bp.route('/radio/set_callsign', methods=['POST'])
+def radio_set_callsign():
+    """Set the per-device `operator_call` cookie from the Radio first-run gate."""
+    raw = (request.form.get('operator_call') or '').strip().upper()
+    # Allow basic callsign characters; reject anything else as a guard against
+    # downstream rendering surprises (callsigns are alnum plus '/' and '-').
+    cleaned = ''.join(ch for ch in raw if ch.isalnum() or ch in '/-')
+    if not cleaned:
+        flash('Enter your callsign.', 'error')
+        return redirect(url_for('radio.radio'))
+    resp = make_response(redirect(url_for('radio.radio')))
+    resp.set_cookie('operator_call', cleaned, max_age=60*60*24*365, samesite='Lax')
+    flash(f'Callsign set to {cleaned}.', 'success')
+    return resp
 
 
 @bp.route('/radio', methods=['GET','POST'], endpoint='radio')
@@ -1114,6 +1130,11 @@ def radio():
 
         # normal (non-AJAX) POST → redirect back to Radio screen
         return redirect(url_for('radio.radio'))
+
+    # ─── GET: first gate the page behind a per-device "Your Callsign?" prompt ───
+    operator_call_cookie = (request.cookies.get('operator_call') or '').strip()
+    if not operator_call_cookie:
+        return render_template('radio.html', callsign_missing=True, active='radio')
 
     # ─── GET: fetch & order ramp entries ────────────────────────────────
     show_unsent_only = request.cookies.get('radio_show_unsent_only','yes') == 'yes'
