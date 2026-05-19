@@ -73,3 +73,11 @@ get-docker.sh
 # Optional: ignore dev-only helpers if you don't intend to track them
 tools/
 scripts/
+
+# ---- curl/test scratch at repo root ----
+/admin_page.html
+/wargame_page*.html
+/cookies.txt
+/wg_cookies.txt
+/*_cookies.txt
+/NDH6SA~M
