@@ -754,10 +754,10 @@ setInterval(refreshUnreadBadge, 30000);
   <div id="legend-card">
     <button type="button" class="legend-close" id="legend-close-x" aria-label="Close legend">×</button>
     <h3 id="legend-title">Row Color Legend</h3>
-    <p class="legend-intro">Each flight row is shaded to show the status of its outbound notification to other sites.</p>
+    <p class="legend-intro">The Radio tab is a hot outbox — by default it shows only flights that still need radio action. Any row you see here needs attention unless it is white (white rows only appear if "show sent traffic" has been enabled).</p>
 
     <div class="legend-entry">
-      <h4>Yellow — message queued, not yet transmitted</h4>
+      <h4>Yellow — needs transmission</h4>
       <table class="legend-example">
         <thead>
           <tr><th>Code</th><th>Status</th><th>Tail #</th><th>Origin</th><th>Destination</th></tr>
@@ -776,7 +776,7 @@ setInterval(refreshUnreadBadge, 30000);
     </div>
 
     <div class="legend-entry">
-      <h4>White — message has been transmitted</h4>
+      <h4>White — already sent, no action required</h4>
       <table class="legend-example">
         <thead>
           <tr><th>Code</th><th>Status</th><th>Tail #</th><th>Origin</th><th>Destination</th></tr>
@@ -791,7 +791,7 @@ setInterval(refreshUnreadBadge, 30000);
           </tr>
         </tbody>
       </table>
-      <p>The status message for this flight has already been transmitted. No further action is required.</p>
+      <p>This row's status message has already been transmitted. White rows only appear when "show sent traffic" is enabled — by default the Radio tab hides them so only action-needed rows are visible.</p>
     </div>
 
     <div class="legend-entry">
