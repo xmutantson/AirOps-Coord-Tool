@@ -516,20 +516,65 @@ window.printViaIframe = function(url) {
   };
 };
 
+// ── Printer-unreachable modal ─────────────────────────────────────────────
+window.printerUnreachableModal = function(opts) {
+  opts = opts || {};
+  var msg = opts.message || 'The label printer cannot be reached on the network.';
+  var onRetry = opts.onRetry;
+  var onFallback = opts.onFallback;
+  // Build once, reuse
+  var bd = document.getElementById('printer-unreachable-backdrop');
+  if (!bd) {
+    bd = document.createElement('div');
+    bd.id = 'printer-unreachable-backdrop';
+    bd.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,0.65); display:flex; align-items:center; justify-content:center; z-index:10001; padding:1rem;';
+    bd.innerHTML = '<div style="background:#fff; color:#1a1a1a; border-radius:10px; width:min(440px,96vw); padding:1.25rem 1.5rem; box-shadow:0 24px 80px rgba(0,0,0,0.6);">'
+      + '<h3 style="margin:0 0 .5rem 0;">Printer unreachable</h3>'
+      + '<p id="printer-unreachable-msg" style="margin:.25rem 0 1rem 0; color:#333;"></p>'
+      + '<p style="margin:.25rem 0 1rem 0; color:#666; font-size:.9em;">Check that the printer is powered on, has a network cable / Wi-Fi, and is on the same LAN as this server.</p>'
+      + '<div style="display:flex; gap:.5rem; justify-content:flex-end;">'
+      +   '<button type="button" id="printer-unreachable-fallback" style="padding:.5rem 1rem; border-radius:6px; border:1px solid #888; background:#eee; cursor:pointer;">Use Browser Print</button>'
+      +   '<button type="button" id="printer-unreachable-retry" style="padding:.5rem 1rem; border-radius:6px; border:1px solid #196b35; background:#2e7d4f; color:#fff; cursor:pointer; font-weight:600;">Retry</button>'
+      + '</div></div>';
+    document.body.appendChild(bd);
+  }
+  document.getElementById('printer-unreachable-msg').textContent = msg;
+  var btnRetry = document.getElementById('printer-unreachable-retry');
+  var btnFb = document.getElementById('printer-unreachable-fallback');
+  function close(){ bd.remove(); }
+  btnRetry.onclick = function(){ close(); if (typeof onRetry === 'function') onRetry(); };
+  btnFb.onclick    = function(){ close(); if (typeof onFallback === 'function') onFallback(); };
+  bd.onclick = function(e){ if (e.target === bd) close(); };
+};
+
 // ── Direct print: send label to server-side printer, fall back to iframe ──
 window.printLabel = function(url) {
-  // If direct printing is off, go straight to browser print
-  if (!{{ 'true' if direct_print_enabled is defined and direct_print_enabled else 'false' }}) {
+  // Hard gate: if the printer isn't configured at all, point the operator
+  // at Preferences. The buttons themselves should already be swapped to a
+  // "Printer not configured" affordance, but this is the safety net for any
+  // path that still reaches printLabel().
+  var printerConfigured = {{ 'true' if printer_configured is defined and printer_configured else 'false' }};
+  var directEnabled     = {{ 'true' if direct_print_enabled is defined and direct_print_enabled else 'false' }};
+  if (!directEnabled) {
     return window.printViaIframe(url);
   }
+  if (!printerConfigured) {
+    if (window.showToast) {
+      window.showToast('Label printer is not configured — set the IP in Preferences.', 'error', 4000);
+    } else {
+      alert('Label printer is not configured. Set the printer IP in Preferences.');
+    }
+    return;
+  }
+
   // Parse URL to extract print_type and params
   var u = new URL(url, location.origin);
   var path = u.pathname;
   var params = {};
   u.searchParams.forEach(function(v, k) { params[k] = v; });
 
-  // Only use direct printing for 62mm tape formats (shipping/address)
-  // Everything else (letter, 4x6, no size specified) goes through browser dialog
+  // Only use direct printing for 62mm tape formats (shipping/address).
+  // Everything else (letter, 4x6, no size specified) goes through browser dialog.
   var labelSize = (params.label_size || '').toLowerCase();
   if (labelSize !== 'shipping' && labelSize !== 'address') {
     return window.printViaIframe(url);
@@ -537,16 +582,20 @@ window.printLabel = function(url) {
 
   var printType = 'cargo';
   if (path.indexOf('/labels/inventory') !== -1) printType = 'inventory';
-
-  // Check printer status first, then send
   var csrf = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
-  fetch('/api/print/status').then(function(r) { return r.json(); }).then(function(st) {
-    if (!st.reachable) {
-      if (window.showToast) window.showToast('Printer unreachable (using browser)', 'error');
-      window.printViaIframe(url);
-      return;
-    }
-    fetch('/api/print/label', {
+
+  // Re-run discovery each time the print dialog is invoked so a DHCP-driven
+  // IP change is picked up without an app restart. The endpoint fast-paths
+  // when the saved IP is already reachable.
+  function rediscover() {
+    return fetch('/api/print/discover', {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': csrf }
+    }).then(function(r){ return r.json(); });
+  }
+
+  function sendJob() {
+    return fetch('/api/print/label', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -560,17 +609,42 @@ window.printLabel = function(url) {
           if (window.showToast) window.showToast(res.data.message || 'Sent to printer', 'success');
         } else {
           var msg = (res.data && res.data.error) || 'Print failed';
-          if (window.showToast) window.showToast('Printer: ' + msg + ' (using browser)', 'error');
-          window.printViaIframe(url);
+          window.printerUnreachableModal({
+            message: msg,
+            onRetry: function(){ attempt(); },
+            onFallback: function(){ window.printViaIframe(url); }
+          });
         }
-      }).catch(function(e) {
-        if (window.showToast) window.showToast('Print error (using browser)', 'error');
-        window.printViaIframe(url);
+      }).catch(function() {
+        window.printerUnreachableModal({
+          message: 'Network error talking to the printer.',
+          onRetry: function(){ attempt(); },
+          onFallback: function(){ window.printViaIframe(url); }
+        });
       });
-  }).catch(function() {
-    if (window.showToast) window.showToast('Printer unreachable (using browser)', 'error');
-    window.printViaIframe(url);
-  });
+  }
+
+  function attempt() {
+    rediscover().then(function(st) {
+      if (!st || !st.reachable) {
+        window.printerUnreachableModal({
+          message: 'The label printer could not be reached at ' + (st && st.printer_ip || 'the configured IP') + '.',
+          onRetry: function(){ attempt(); },
+          onFallback: function(){ window.printViaIframe(url); }
+        });
+        return;
+      }
+      sendJob();
+    }).catch(function() {
+      window.printerUnreachableModal({
+        message: 'Could not check printer status (network error).',
+        onRetry: function(){ attempt(); },
+        onFallback: function(){ window.printViaIframe(url); }
+      });
+    });
+  }
+
+  attempt();
 };
 </script>
 

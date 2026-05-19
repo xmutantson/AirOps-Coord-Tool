@@ -2152,6 +2152,48 @@ def api_print_status():
     return jsonify({"enabled": True, "printer_ip": printer_ip, "reachable": status["reachable"]})
 
 
+@bp.post("/api/print/discover")
+def api_print_discover():
+    """Re-run mDNS discovery for the label printer. The client calls this
+    whenever a label-print dialog opens so DHCP-driven IP changes are picked
+    up without an app restart. Fast path: if the saved IP is still reachable
+    we skip the (slow) mDNS scan."""
+    enabled = (get_preference("direct_print_enabled") or "yes") == "yes"
+    if not enabled:
+        return jsonify({
+            "enabled": False, "printer_ip": "",
+            "reachable": False, "discovered": False,
+        })
+    from modules.services.label_printer import (
+        discover_printer, check_printer_status,
+    )
+    existing = (get_preference("printer_ip") or "").strip()
+    if existing:
+        st = check_printer_status(existing)
+        if st["reachable"]:
+            return jsonify({
+                "enabled": True, "printer_ip": existing,
+                "reachable": True, "discovered": False,
+            })
+    # Saved IP missing or unreachable -- try mDNS.
+    ip = discover_printer(timeout=3)
+    if ip:
+        try:
+            from modules.utils.common import set_preference
+            set_preference("printer_ip", ip)
+        except Exception:
+            pass
+        st = check_printer_status(ip)
+        return jsonify({
+            "enabled": True, "printer_ip": ip,
+            "reachable": st["reachable"], "discovered": True,
+        })
+    return jsonify({
+        "enabled": True, "printer_ip": existing,
+        "reachable": False, "discovered": False,
+    })
+
+
 @bp.route("/api/print/label", methods=["POST"])
 def api_print_label():
     """Render label(s) and send directly to the Brother QL printer.

@@ -43,6 +43,7 @@
         <td>{{ q.created_at }}</td>
         <!-- Labels dropdown -->
         <td style="text-align:center; white-space:nowrap;">
+          {% if printer_configured %}
           <details class="label-dropdown" style="display:inline-block; position:relative;"
                    onclick="document.querySelectorAll('.label-dropdown[open]').forEach(d => { if(d!==this) d.removeAttribute('open'); })">
             <summary style="cursor:pointer; list-style:none;" title="Print labels">📦</summary>
@@ -54,6 +55,11 @@
                  onclick="event.preventDefault();printLabel(this.href);" style="display:block; padding:.2rem 0; cursor:pointer;">Inventory Tags (62mm)</a>
             </div>
           </details>
+          {% else %}
+          <a href="{{ url_for('preferences.preferences') }}"
+             title="Label printer is not configured — click to set the printer IP"
+             style="text-decoration:none; font-size:1em;">⚠️</a>
+          {% endif %}
         </td>
         <!-- Manifest PDF -->
         <td style="text-align:center;">

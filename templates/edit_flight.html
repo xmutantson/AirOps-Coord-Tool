@@ -11,10 +11,22 @@
   <!-- Action bar: Print Labels -->
   <div class="action-bar"
        style="display:flex; gap:.5rem; align-items:center; justify-content:flex-end; margin:.5rem 0 1rem;">
+    {% if printer_configured %}
     <a href="/docs/labels/cargo?flight_id={{ flight['id'] }}&scope=all"
        class="btn-secondary"
        onclick="event.preventDefault();printLabel(this.href);"
        title="Print cargo labels" style="cursor:pointer;">📦 Print Labels</a>
+    {% else %}
+    <a href="{{ url_for('preferences.preferences') }}"
+       title="Label printer is not configured — click to set the printer IP"
+       style="display:inline-flex; align-items:center; gap:.4rem;
+              background:#fff3cd; color:#664d03; border:1px solid #e0c97a;
+              padding:.4rem .75rem; border-radius:6px; text-decoration:none;
+              font-weight:600;">
+      <span aria-hidden="true">⚠️</span>
+      <span>📦 Printer not configured — Configure now</span>
+    </a>
+    {% endif %}
   </div>
 
   <div class="ramp-form-container">

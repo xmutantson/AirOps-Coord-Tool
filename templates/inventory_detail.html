@@ -25,10 +25,22 @@
         Barcode: <code>{{ request.args.get('tag_barcode') }}</code>
       </p>
       <div style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
+        {% if printer_configured %}
         <button type="button" class="btn-primary" style="padding:8px 20px; font-size:1em;"
                 onclick="printLabel('/docs/labels/inventory?barcode={{ request.args.get('tag_barcode')|urlencode }}&name={{ request.args.get('tag_name','')|urlencode }}&weight_per_unit={{ request.args.get('tag_wpu','')|urlencode }}&qty={{ request.args.get('tag_qty','1')|urlencode }}&origin={{ request.args.get('tag_origin','')|urlencode }}&label_size=address'); document.getElementById('tag-print-overlay').remove(); history.replaceState(null,'',location.pathname);">
           Print Tags
         </button>
+        {% else %}
+        <a href="{{ url_for('preferences.preferences') }}"
+           title="Label printer is not configured — click to set the printer IP"
+           style="display:inline-flex; align-items:center; gap:.4rem;
+                  background:#fff3cd; color:#664d03; border:1px solid #e0c97a;
+                  padding:8px 20px; font-size:1em; border-radius:6px;
+                  text-decoration:none; font-weight:600;">
+          <span aria-hidden="true">⚠️</span>
+          <span>Printer not configured — Configure now</span>
+        </a>
+        {% endif %}
         <button type="button" class="btn-secondary" style="padding:8px 20px; font-size:1em;"
                 onclick="document.getElementById('tag-print-overlay').remove(); history.replaceState(null,'',location.pathname);">
           Skip

@@ -697,6 +697,13 @@ def _inject_global_nav_flags():
         'admin_unlocked': admin_unlocked,
         'current_year': datetime.utcnow().year,
         'direct_print_enabled': (get_preference('direct_print_enabled') or 'yes') == 'yes',
+        # printer_configured = direct print is on AND we have an IP to talk to.
+        # When this is False, label-print buttons should swap to a "Printer not
+        # configured" affordance pointing at /preferences.
+        'printer_configured': (
+            (get_preference('direct_print_enabled') or 'yes') == 'yes'
+            and bool((get_preference('printer_ip') or '').strip())
+        ),
         'radio_error': _common.get_radio_error(),
     }
 

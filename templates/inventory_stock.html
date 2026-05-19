@@ -56,10 +56,16 @@
         <td>{{ it.total|round(1) }}</td>
         <td style="white-space:nowrap;">
           {% if it.barcode %}
-          <button type="button" style="padding:2px 8px; font-size:.8em; cursor:pointer;"
-                  onclick="var n=prompt('How many tags?','1'); if(n&&!isNaN(n)&&n>0) printLabel('/docs/labels/inventory?barcode={{ it.barcode|urlencode }}&name={{ it.noun|urlencode }}&weight_per_unit={{ it.wpu_lbs }}&qty='+n+'&origin={{ it.origin|urlencode }}&label_size=address');">
-            Print Tags
-          </button>
+            {% if printer_configured %}
+            <button type="button" style="padding:2px 8px; font-size:.8em; cursor:pointer;"
+                    onclick="var n=prompt('How many tags?','1'); if(n&&!isNaN(n)&&n>0) printLabel('/docs/labels/inventory?barcode={{ it.barcode|urlencode }}&name={{ it.noun|urlencode }}&weight_per_unit={{ it.wpu_lbs }}&qty='+n+'&origin={{ it.origin|urlencode }}&label_size=address');">
+              Print Tags
+            </button>
+            {% else %}
+            <a href="{{ url_for('preferences.preferences') }}"
+               title="Label printer is not configured — click to set the printer IP"
+               style="font-size:.8em; color:#664d03; text-decoration:none;">⚠️ Printer not configured</a>
+            {% endif %}
           {% else %}
           <span class="muted" style="font-size:.8em;">--</span>
           {% endif %}
