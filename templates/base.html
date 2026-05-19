@@ -47,25 +47,52 @@
         'font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;">' +
         '<h2 style="margin:0 0 8px">Session expired</h2>' +
         '<p style="margin:0 0 16px">For security your CSRF token expired. Click OK to reload and continue.</p>' +
-        '<button id="csrf-ok" style="padding:10px 18px;border:none;border-radius:8px;background:#0b5cff;color:#fff;font-weight:600;cursor:pointer;">OK</button>' +
+        '<button id="csrf-ok" type="button" style="padding:10px 18px;border:none;border-radius:8px;background:#0b5cff;color:#fff;font-weight:600;cursor:pointer;">OK</button>' +
         '</div>';
 
       document.body.appendChild(overlay);
 
-      function hardReload() {
+      // The OK button must reliably dismiss the dialog AND attempt recovery.
+      // Old impl just reloaded -- if the reload silently failed (cached SW,
+      // deprecated reload(true) arg, etc.) the overlay sat forever. Now we:
+      //   1. Remove the overlay BEFORE reload, so the click visibly registers.
+      //   2. Tear down the keyboard blocker so a stuck page is still usable.
+      //   3. Reset the "already shown" guard so a fresh CSRF failure can
+      //      re-trigger the overlay if needed.
+      //   4. Try multiple navigation methods in case one is intercepted.
+      function dismissAndReload(ev) {
+        if (ev) { try { ev.preventDefault(); ev.stopPropagation(); } catch(_) {} }
+        try {
+          var el = document.getElementById('csrf-expired-overlay');
+          if (el && el.parentNode) el.parentNode.removeChild(el);
+        } catch(_) {}
+        try { window.removeEventListener('keydown', keyBlocker, true); } catch(_) {}
+        try { window.__CSRF_EXPIRED_SHOWN__ = false; } catch(_) {}
         try { window.__NAVIGATING_AWAY = true; } catch(_) {}
-        try { window.location.reload(true); } catch (_) { window.location.href = window.location.href; }
+        try { window.location.reload(); return; } catch(_) {}
+        try { window.location.assign(window.location.href); return; } catch(_) {}
+        try { window.location.href = window.location.pathname + window.location.search; } catch(_) {}
       }
-      overlay.querySelector('#csrf-ok').addEventListener('click', hardReload, { once: true });
 
-      // Block interaction with page underneath overlay (but not the OK button)
+      var okBtn = overlay.querySelector('#csrf-ok');
+      // Dual-bind: addEventListener + direct onclick, so even if one binding is
+      // intercepted/overwritten by another script, the other still fires.
+      okBtn.addEventListener('click', dismissAndReload);
+      okBtn.onclick = dismissAndReload;
+
+      // Block interaction with the page underneath the overlay (but not the OK button)
       overlay.addEventListener('click', function (e) {
         if (e.target === overlay) { e.preventDefault(); e.stopPropagation(); }
       }, { capture: true });
-      window.addEventListener('keydown', function (ev) {
-        if (ev.key === 'Enter') hardReload();
+
+      function keyBlocker(ev) {
+        if (ev.key === 'Enter' || ev.key === 'Escape') {
+          dismissAndReload(ev);
+          return;
+        }
         ev.preventDefault(); ev.stopPropagation();
-      }, { capture: true });
+      }
+      window.addEventListener('keydown', keyBlocker, { capture: true });
     }
 
     function isCsrfFailure(status, headersGetter) {
