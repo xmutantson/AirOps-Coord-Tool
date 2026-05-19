@@ -770,7 +770,7 @@ setInterval(refreshUnreadBadge, 30000);
     <p class="legend-intro">The Radio tab is a hot outbox — by default it shows only flights that still need radio action. Any row you see here needs attention unless it is white (white rows only appear if "show sent traffic" has been enabled).</p>
 
     <div class="legend-entry">
-      <h4>Yellow — needs transmission</h4>
+      <h4>Yellow — <span style="color:#a00;">action required</span> — needs transmission</h4>
       <table class="legend-example">
         <thead>
           <tr><th>Code</th><th>Status</th><th>Tail #</th><th>Origin</th><th>Destination</th></tr>
@@ -808,7 +808,7 @@ setInterval(refreshUnreadBadge, 30000);
     </div>
 
     <div class="legend-entry">
-      <h4>Red — no addressee defined for the destination</h4>
+      <h4>Red — <span style="color:#a00;">action required</span> — no addressee defined for the destination</h4>
       <table class="legend-example">
         <thead>
           <tr><th>Code</th><th>Status</th><th>Tail #</th><th>Origin</th><th>Destination</th></tr>
@@ -823,7 +823,17 @@ setInterval(refreshUnreadBadge, 30000);
           </tr>
         </tbody>
       </table>
-      <p>No Winlink/radio addressee is defined in the program for the counterparty airport, so the message cannot be sent. Add a mapping in Admin → Airport Call Mappings to resolve this.</p>
+      <p>No Winlink/radio addressee is defined in the program for the counterparty airport, so the message cannot be sent. The mapping lives in Winlink Settings &rarr; Airport &rarr; Winlink Callsign Mappings.</p>
+      <p style="margin-top:.6rem;">
+        <a href="{{ url_for('radio.winlink_settings') }}"
+           style="display:inline-flex; align-items:center; gap:.4rem;
+                  background:#fff3cd; color:#664d03; border:1px solid #e0c97a;
+                  padding:.4rem .75rem; border-radius:6px; text-decoration:none;
+                  font-weight:600;">
+          <span aria-hidden="true">⚠️</span>
+          <span>Seeing this? Fix it here &rarr;</span>
+        </a>
+      </p>
     </div>
 
     <div class="legend-actions">
