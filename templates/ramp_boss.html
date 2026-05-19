@@ -265,6 +265,34 @@
         } catch(_) {}
       }, 250);
     });
+
+    // Auto-reveal: poll the preference so this view reloads as soon as
+    // ANY user (this tab, a teammate, an admin) sets the home airport.
+    let pollInflight = false;
+    async function pollDefaultOrigin(){
+      if (pollInflight || document.hidden) return;
+      pollInflight = true;
+      try {
+        const r = await fetch('/ramp_boss/default_origin_status', {
+          headers: {'X-Requested-With':'XMLHttpRequest'},
+          cache: 'no-store'
+        });
+        if (!r.ok) return;
+        const j = await r.json();
+        if (j && j.set) {
+          // Someone configured it -- reload so the server renders the real form.
+          window.location.reload();
+        }
+      } catch(_) {} finally {
+        pollInflight = false;
+      }
+    }
+    const pollId = setInterval(pollDefaultOrigin, 5000);
+    // Quick check on visibility change too, so returning to the tab doesn't wait the full interval.
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) pollDefaultOrigin();
+    });
+    window.addEventListener('beforeunload', () => clearInterval(pollId));
   })();
   </script>
   {% else %}

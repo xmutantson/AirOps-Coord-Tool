@@ -263,6 +263,14 @@ def api_apply_adv_manifest():
         return jsonify({'error': 'no valid items inserted', 'skipped': skipped}), 400
     return jsonify({'status':'ok', 'manifest_id': mid, 'inserted': inserted, 'skipped': skipped})
 
+@bp.route('/ramp_boss/default_origin_status', methods=['GET'])
+def ramp_boss_default_origin_status():
+    """Tiny polling endpoint so the first-run setup card can auto-reveal
+    the real Ramp Boss form once *anyone* sets the home-airport preference."""
+    drow = dict_rows("SELECT value FROM preferences WHERE name='default_origin'")
+    val = (drow[0]['value'] if drow else '') or ''
+    return jsonify({'set': bool(val.strip()), 'value': val.strip()})
+
 @bp.route('/ramp_boss', methods=['GET', 'POST'])
 def ramp_boss():
     ensure_column("flights", "is_ramp_entry", "INTEGER DEFAULT 0")
