@@ -19,6 +19,7 @@
     📖 Legend
   </button>
 
+  {% if winlink_configured %}
   <form method="POST"
         id="winlink-poll-form"
         action="{{ url_for('winlink.winlink_start') if not winlink_job_active else url_for('winlink.winlink_stop') }}"
@@ -39,6 +40,17 @@
       {{ 'Start Auto-WinLink-Send' if not winlink_auto_active else 'Stop Auto-WinLink-Send' }}
     </button>
   </form>
+  {% else %}
+  <a href="{{ url_for('radio.winlink_settings') }}"
+     class="btn"
+     style="display:inline-flex; align-items:center; gap:.4rem;
+            background:#fff3cd; color:#664d03; border:1px solid #e0c97a;
+            padding:.4rem .75rem; border-radius:6px; text-decoration:none;
+            font-weight:600;">
+    <span aria-hidden="true">⚠️</span>
+    <span>Onboard Winlink needs configuration — Configure now</span>
+  </a>
+  {% endif %}
 
    <a href="{{ url_for('winlink.winlink_inbox') }}" class="btn btn-secondary" style="margin-left:auto;">
      📥 WinLink Inbox
@@ -651,7 +663,8 @@ setInterval(refreshUnreadBadge, 30000);
   const scope = document.querySelector('.winlink-controls');
   if (!scope) return;
 
-  const buttons = Array.from(scope.querySelectorAll('button'));
+  // Legend button is a local UI control — must stay clickable when offline.
+  const buttons = Array.from(scope.querySelectorAll('button:not(#legend-open-btn)'));
   const DISABLED_MSG = 'No internet detected — WinLink jobs disabled';
 
   function setEnabled(on){

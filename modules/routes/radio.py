@@ -1188,13 +1188,21 @@ def radio():
     winlink_job_active  = bool(_sch and _sch.get_job('winlink_poll'))
     winlink_auto_active = bool(_sch and _sch.get_job('winlink_auto_send'))
 
+    # Winlink is "configured" when at least one callsign+password pair is set.
+    # If not, the start/auto buttons would silently fail -- show a prompt instead.
+    winlink_configured = bool(
+        (get_preference('winlink_callsign_1') or '').strip() and
+        (get_preference('winlink_password_1') or '').strip()
+    )
+
     return render_template(
         'radio.html',
         flights=flights,
         active='radio',
         hide_tbd=hide_tbd,
         winlink_job_active=winlink_job_active,
-        winlink_auto_active=winlink_auto_active
+        winlink_auto_active=winlink_auto_active,
+        winlink_configured=winlink_configured,
     )
 
 @bp.route('/_radio_table')
