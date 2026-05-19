@@ -271,6 +271,30 @@ def ramp_boss():
     drow = dict_rows("SELECT value FROM preferences WHERE name='default_origin'")
     default_origin = drow[0]['value'] if drow else ''
 
+    # First-run gate: if no default_origin is configured, the Ramp Boss form
+    # asks for the home airport up front and locks out the rest until it's set.
+    if request.method == 'POST' and request.form.get('action') == 'set_default_origin':
+        code = request.form.get('default_origin', '').strip().upper()
+        if not code:
+            flash('Enter your home airport code.', 'error')
+            return redirect(url_for('ramp.ramp_boss'))
+        rows = dict_rows(
+            "SELECT 1 FROM airports "
+            " WHERE ident       = ?"
+            "    OR icao_code   = ?"
+            "    OR iata_code   = ?"
+            "    OR local_code  = ?"
+            "    OR gps_code    = ?"
+            " LIMIT 1",
+            (code,)*5
+        )
+        if not rows:
+            flash(f'“{code}” is not a known airport code.', 'error')
+            return redirect(url_for('ramp.ramp_boss'))
+        set_preference('default_origin', code)
+        flash(f'Home airport set to {code}.', 'success')
+        return redirect(url_for('ramp.ramp_boss'))
+
     if request.method == 'POST':
         # ── Validate destination against airports DB ─────────────────────
         dest = request.form.get('destination','').upper().strip()

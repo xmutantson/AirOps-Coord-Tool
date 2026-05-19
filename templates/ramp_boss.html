@@ -220,6 +220,54 @@
   })();
   </script>
 
+  {% if not default_origin and not draft %}
+  <div class="ramp-form-container">
+    <form id="rb-setup-origin" method="POST" style="display:block;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="set_default_origin">
+      <h2 style="margin-top:0;">Set Home Airport</h2>
+      <p style="margin:.25rem 0 1rem; opacity:.85;">
+        Ramp Boss needs to know which airport you're stationed at before flights
+        can be logged. Enter the airport code (ICAO or FAA) below.
+      </p>
+      <label for="ramp-default-origin" style="display:block; font-weight:bold;">
+        Home Airport*
+      </label>
+      <input id="ramp-default-origin" name="default_origin" required autofocus
+             placeholder="e.g. KSEA or SEA"
+             style="display:block; width:100%; max-width:20ch; padding:.5em;
+                    text-transform:uppercase; margin:.4rem 0 .8rem;"
+             oninput="this.value=this.value.toUpperCase()">
+      <small id="ramp-default-origin-warn"
+             style="display:block; color:#a33; min-height:1.2em; margin-bottom:.5rem;"></small>
+      <button type="submit" style="display:block; width:100%;">Save &amp; Continue</button>
+      <p style="margin-top:1rem; font-size:.9em; opacity:.7;">
+        You can change this later in Admin Settings.
+      </p>
+    </form>
+  </div>
+  <script>
+  (function(){
+    const inp  = document.getElementById('ramp-default-origin');
+    const warn = document.getElementById('ramp-default-origin-warn');
+    if (!inp || !warn) return;
+    let t = null;
+    inp.addEventListener('input', () => {
+      warn.textContent = '';
+      clearTimeout(t);
+      const code = (inp.value || '').trim();
+      if (code.length < 2) return;
+      t = setTimeout(async () => {
+        try {
+          const r = await fetch('/api/airport_exists/' + encodeURIComponent(code));
+          const j = await r.json();
+          warn.textContent = j.exists ? '' : '"' + code + '" is not a known airport code';
+        } catch(_) {}
+      }, 250);
+    });
+  })();
+  </script>
+  {% else %}
   <div class="ramp-form-container">
     <form id="rb-form" method="POST">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -893,9 +941,11 @@
         if (fcInput)  fcInput.value = '';
         if (fcStamp)  fcStamp.value = '';
       }
-      /* Always require BOTH Origin and Destination in all modes (RB + Queue edit) */
-      originField.required = true;
-      destField.required   = true;
+      /* Only mark visible fields as required — browsers can't focus a hidden
+         required input, which triggers "invalid form control … is not focusable".
+         The hidden side is auto-filled from defaultOrigin and validated server-side. */
+      originField.required = (originField.style.display !== 'none');
+      destField.required   = (destField.style.display   !== 'none');
 
       /* queue button only for outbound */
       const outbound = (dir === 'outbound');
@@ -4219,6 +4269,7 @@ function showWebeocModal(data){
   m.style.display = 'block';
 }
 </script>
+{% endif %}
 {% endif %}
 
 {% endblock %}
