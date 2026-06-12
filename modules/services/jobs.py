@@ -135,7 +135,7 @@ def _self_alias_canons() -> set:
 def _winlink_ccs() -> list[str]:
     out = []
     try:
-        for i in (1, 2, 3):
+        for i in (1, 2, 3, 4, 5, 6):
             v = (get_preference(f"winlink_cc_{i}") or "").strip().upper()
             if v:
                 out.append(v)
@@ -962,23 +962,31 @@ def _tcp_probe(host: str, port: int, timeout_s: float = 1.5) -> bool:
 
 def _probe_internet_once(timeout_s: float = 1.5) -> bool:
     """
-    Fast WAN probe.
-      • ICMP ping BOTH 1.1.1.1 and 8.8.8.8; online if EITHER responds.
-      • If 'ping' is unavailable, fall back to TCP 53 to those hosts.
+    Fast WAN probe. Online if ANY check passes.
+      • ICMP ping 1.1.1.1, 8.8.8.8, google.com
+      • Fallback TCP: 1.1.1.1:53, 8.8.8.8:53, google.com:443
+
+    google.com (DNS-resolved, port 443) is included because many restrictive
+    field uplinks (cellular APNs, VSAT, captive/guest WiFi) block the
+    1.1.1.1/8.8.8.8 canaries and outbound DNS/53 while still passing normal
+    HTTPS web traffic. Each ICMP host is retried once so a single dropped
+    packet on a jittery link does not read as offline.
     """
-    # Prefer ICMP (never raise)
-    try:
-        a = _icmp_ping("1.1.1.1", timeout_s)
-        b = _icmp_ping("8.8.8.8", timeout_s)
-    except Exception:
-        a = False
-        b = False
-    if a or b:
-        return True
-    # Fallback: TCP DNS port
-    a = _tcp_probe("1.1.1.1", 53, timeout_s)
-    b = _tcp_probe("8.8.8.8", 53, timeout_s)
-    return a or b
+    icmp_hosts = ("1.1.1.1", "8.8.8.8", "google.com")
+    for host in icmp_hosts:
+        for _ in range(2):  # one retry to ride out a single dropped packet
+            try:
+                if _icmp_ping(host, timeout_s):
+                    return True
+            except Exception:
+                break
+    # Fallback: raw TCP connect (works even when ICMP is filtered).
+    # 443 to google.com is the most permissive of the three.
+    tcp_targets = (("1.1.1.1", 53), ("8.8.8.8", 53), ("google.com", 443))
+    for host, port in tcp_targets:
+        if _tcp_probe(host, port, timeout_s):
+            return True
+    return False
 
 def internet_watch_tick():
     """
@@ -1150,7 +1158,7 @@ def auto_winlink_send_job():
     # load CC addresses
     cc_list = [
         get_preference(f'winlink_cc_{i}') or ''
-        for i in (1,2,3)
+        for i in (1,2,3,4,5,6)
     ]
     # pull all unsent outbound flights
     flights = dict_rows("""
@@ -2518,6 +2526,9 @@ def inventory_auto_broadcast_job():
                 (get_preference('winlink_cc_1') or '').strip().upper(),
                 (get_preference('winlink_cc_2') or '').strip().upper(),
                 (get_preference('winlink_cc_3') or '').strip().upper(),
+                (get_preference('winlink_cc_4') or '').strip().upper(),
+                (get_preference('winlink_cc_5') or '').strip().upper(),
+                (get_preference('winlink_cc_6') or '').strip().upper(),
             ]
             for cc in cc_raw:
                 if not cc:

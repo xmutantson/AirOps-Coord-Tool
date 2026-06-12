@@ -960,6 +960,64 @@ load_airports_from_csv()
 seed_default_categories()
 clear_airport_cache()
 
+# First-run seed: default Embedded Site (ADS-B map) so the supervisor map panel
+# and nav button work out of the box. Guarded by 'embedded_defaults_seeded' so a
+# deliberate Clear in Admin stays cleared and reboots never resurrect it. Only
+# fills a blank embedded_url -- never clobbers an admin-configured value. Prefers
+# the ADS-B poller base URL if one is set, else the typical on-box tar1090 URL.
+try:
+    from modules.utils.common import set_preference
+    if (get_preference('embedded_defaults_seeded') or '') != 'yes':
+        if not (get_preference('embedded_url') or '').strip():
+            _seed_url = (get_preference('adsb_base_url') or '').strip() or 'http://192.168.8.2/tar1090/'
+            set_preference('embedded_url', _seed_url)
+            set_preference('embedded_name', 'ADS-B')
+            if not (get_preference('embedded_mode') or '').strip():
+                set_preference('embedded_mode', 'iframe')
+            logger.info("Seeded default Embedded Site (ADS-B map): %s", _seed_url)
+        set_preference('embedded_defaults_seeded', 'yes')
+except Exception as e:
+    logger.warning("Embedded-site default seeding skipped: %s", e)
+
+# Scheduler keepalive: guarantees the BackgroundScheduler stays running and the
+# internet connectivity watchdog is always installed. Without this, a failed
+# scheduler start -- or a deployment that never configures Winlink -- leaves the
+# 'internet_online' flag latched at its boot default (offline) forever, because
+# the only thing that flips it is internet_watch_tick(). Daemon thread; never
+# raises into the request loop. Mirrors the printer/GPS daemon-thread pattern.
+try:
+    import threading as _threading
+    import time as _time
+    def _scheduler_keepalive():
+        from modules.services.jobs import configure_internet_watch_job
+        # First pass runs immediately (installs internet_watch at boot even when
+        # Winlink is never configured), then re-checks every 30s.
+        while True:
+            try:
+                if getattr(scheduler, "state", None) != STATE_RUNNING:
+                    try:
+                        scheduler.start()
+                        logger.warning("Scheduler keepalive: started stopped scheduler")
+                    except Exception as e:
+                        logger.warning("Scheduler keepalive: start failed: %s", e)
+                try:
+                    has_watch = scheduler.get_job('internet_watch') is not None
+                except Exception:
+                    has_watch = False
+                if not has_watch:
+                    try:
+                        configure_internet_watch_job()
+                        logger.warning("Scheduler keepalive: installed missing internet_watch job")
+                    except Exception as e:
+                        logger.warning("Scheduler keepalive: internet_watch install failed: %s", e)
+            except Exception:
+                pass
+            _time.sleep(30)
+    _threading.Thread(target=_scheduler_keepalive, name="sched-keepalive", daemon=True).start()
+    logger.info("Scheduler keepalive thread started.")
+except Exception:
+    pass
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpful route dump + dev diagnostics
 

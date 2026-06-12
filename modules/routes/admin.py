@@ -330,7 +330,7 @@ def admin():
     # Pre-fill embedded settings with tar1090 defaults if not set
     # Use 192.168.8.2 (typical Pi setup) instead of localhost so remote hosts can connect
     embedded_url          = get_preference('embedded_url') or 'http://192.168.8.2/tar1090/'
-    embedded_name         = get_preference('embedded_name') or 'tar1090'
+    embedded_name         = get_preference('embedded_name') or 'ADS-B'
     embedded_mode         = get_preference('embedded_mode') or 'iframe'
     enable_1090_distances = get_preference('enable_1090_distances') == 'yes'
     internet_force_online = (get_preference('internet_force_online') or 'no')

@@ -68,12 +68,12 @@ def _all_mapped_callsigns() -> set[str]:
 
 def _cc_calls() -> set[str]:
     """
-    Collect non-empty Winlink CC callsigns from prefs (winlink_cc_1..3).
+    Collect non-empty Winlink CC callsigns from prefs (winlink_cc_1..6).
     Accepts single calls per field; tolerates accidental separators/spaces.
     Excludes our own callsign.
     """
     cc_set: set[str] = set()
-    for idx in (1, 2, 3):
+    for idx in (1, 2, 3, 4, 5, 6):
         raw = (get_preference(f'winlink_cc_{idx}') or '').strip().upper()
         if not raw:
             continue

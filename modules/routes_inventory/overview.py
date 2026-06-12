@@ -763,6 +763,9 @@ def broadcast_send_now():
             (get_preference('winlink_cc_1') or '').strip().upper(),
             (get_preference('winlink_cc_2') or '').strip().upper(),
             (get_preference('winlink_cc_3') or '').strip().upper(),
+            (get_preference('winlink_cc_4') or '').strip().upper(),
+            (get_preference('winlink_cc_5') or '').strip().upper(),
+            (get_preference('winlink_cc_6') or '').strip().upper(),
         ]
         for cc in cc_raw:
             if not cc:

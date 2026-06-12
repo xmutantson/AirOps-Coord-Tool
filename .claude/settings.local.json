@@ -22,7 +22,21 @@
       "Bash(for i in 1 2 3)",
       "Bash(do curl -w \"%{time_total}s \" -b /tmp/cookies.txt http://ops.lan/training -s -o /dev/null)",
       "Bash(do curl -w \"%{time_total}s \" -b /tmp/cookies.txt http://ops.lan/ -s -o /dev/null)",
-      "Bash(do curl -w \"%{time_total}s \" -b /tmp/cookies.txt http://ops.lan/weather -s -o /dev/null)"
+      "Bash(do curl -w \"%{time_total}s \" -b /tmp/cookies.txt http://ops.lan/weather -s -o /dev/null)",
+      "Bash(docker ps:*)",
+      "Bash(for i in {1..15})",
+      "Bash(do curl -s -o /dev/null -w \"%{http_code} \" http://ops.lan/aggregate/inventory/requests/agg.json)",
+      "Bash(sqlite3:*)",
+      "Bash(python -m py_compile:*)",
+      "Bash(docker buildx build:*)",
+      "WebFetch(domain:connectivitycheck.gstatic.com)",
+      "WebFetch(domain:clients3.google.com)",
+      "WebFetch(domain:captive.apple.com)",
+      "WebFetch(domain:www.msftconnecttest.com)",
+      "WebFetch(domain:detectportal.firefox.com)",
+      "Bash(git add:*)",
+      "Bash(git push)",
+      "PowerShell($env:WSL_UTF8 = \"1\"; wsl -d Ubuntu --cd ~ -- bash -c \"if mountpoint -q /mnt/x; then echo MOUNTED; else echo NOT_MOUNTED; fi\")"
     ]
   }
 }

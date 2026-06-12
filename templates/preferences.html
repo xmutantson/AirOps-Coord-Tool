@@ -138,11 +138,6 @@
 
     <!-- ── Label Printer (Direct Printing) ──────────────────────── -->
     <h3>Label Printer</h3>
-    <p class="muted" style="font-size:.85em; margin:0 0 .5rem;">
-      Send labels directly to a Brother QL-820NWB over the network.
-      No driver install needed on workstations.
-      <a href="/help/printer-setup">Setup guide</a>
-    </p>
 
     <label for="direct_print_enabled">Direct printing</label>
     <select id="direct_print_enabled" name="direct_print_enabled" onchange="this.form.submit()">
@@ -151,22 +146,70 @@
     </select>
 
     <label for="printer_ip">Printer IP address</label>
-    <div style="display:flex; gap:8px; align-items:center;">
-      <input id="printer_ip" name="printer_ip"
-             type="text" placeholder="e.g. 192.168.1.50"
-             value="{{ printer_ip }}"
-             style="flex:1; max-width:220px;">
-      <span id="printer-status" class="badge" style="font-size:.8em;">--</span>
+    <input id="printer_ip" name="printer_ip"
+           type="text" placeholder="e.g. 192.168.1.50"
+           value="{{ printer_ip }}"
+           style="max-width:220px;">
+    <div style="grid-column:2; display:flex; gap:10px; align-items:center;">
+      <button type="button" id="printer-discover" class="btn">Discover</button>
+      <span id="printer-status"
+            style="display:inline-flex; align-items:center; gap:6px;
+                   padding:4px 10px; border-radius:999px; font-size:.8em;
+                   font-weight:600; border:1px solid #e5e7eb;
+                   background:#f3f4f6; color:#555;">
+        <span id="printer-status-dot"
+              style="width:8px; height:8px; border-radius:50%;
+                     background:#9ca3af; display:inline-block; flex:none;"></span>
+        <span id="printer-status-text">--</span>
+      </span>
     </div>
     <script>
     (function(){
-      var ip = document.getElementById('printer_ip').value.trim();
-      var badge = document.getElementById('printer-status');
-      if (!ip) { badge.textContent = 'no IP'; badge.style.background = '#ccc'; return; }
-      fetch('/api/print/status').then(function(r){ return r.json(); }).then(function(d){
-        if (d.reachable) { badge.textContent = 'reachable'; badge.style.background = '#28a745'; badge.style.color = '#fff'; }
-        else { badge.textContent = 'unreachable'; badge.style.background = '#dc3545'; badge.style.color = '#fff'; }
-      }).catch(function(){ badge.textContent = 'error'; badge.style.background = '#ffc107'; });
+      var ipField = document.getElementById('printer_ip');
+      var badge   = document.getElementById('printer-status');
+      var dot     = document.getElementById('printer-status-dot');
+      var label   = document.getElementById('printer-status-text');
+      var btn     = document.getElementById('printer-discover');
+      var csrf    = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
+
+      var STATES = {
+        reachable:   { text: 'Reachable',     fg: '#15803d', bg: '#dcfce7', bd: '#bbf7d0', dot: '#22c55e' },
+        unreachable: { text: 'Unreachable',   fg: '#b91c1c', bg: '#fee2e2', bd: '#fecaca', dot: '#ef4444' },
+        searching:   { text: 'Searching...',  fg: '#92400e', bg: '#fef3c7', bd: '#fde68a', dot: '#f59e0b' },
+        error:       { text: 'Error',         fg: '#92400e', bg: '#fef3c7', bd: '#fde68a', dot: '#f59e0b' },
+        none:        { text: 'No IP set',     fg: '#6b7280', bg: '#f3f4f6', bd: '#e5e7eb', dot: '#9ca3af' }
+      };
+
+      function setBadge(state){
+        var s = STATES[state] || STATES.none;
+        label.textContent      = s.text;
+        badge.style.color       = s.fg;
+        badge.style.background   = s.bg;
+        badge.style.borderColor  = s.bd;
+        dot.style.background     = s.dot;
+      }
+
+      function runDiscover(){
+        setBadge('searching');
+        btn.disabled = true;
+        return fetch('/api/print/discover', {
+          method: 'POST',
+          headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': csrf }
+        }).then(function(r){ return r.json(); }).then(function(d){
+          if (d.printer_ip) { ipField.value = d.printer_ip; }
+          if (!d.enabled)        { setBadge('none'); }
+          else if (d.printer_ip) { setBadge(d.reachable ? 'reachable' : 'unreachable'); }
+          else                   { setBadge('unreachable'); }
+        }).catch(function(){ setBadge('error'); }).then(function(){ btn.disabled = false; });
+      }
+
+      btn.addEventListener('click', runDiscover);
+
+      // Auto-discover on page load so a printer that came up after the Pi
+      // booted (or a DHCP-driven IP change) is picked up without an app
+      // restart. The endpoint fast-paths when the saved IP is reachable, so
+      // the slow mDNS scan only runs when the IP is missing or unreachable.
+      runDiscover();
     })();
     </script>
 

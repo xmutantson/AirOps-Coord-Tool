@@ -77,10 +77,10 @@ def winlink_mappings_json():
 # --- recipient counting helpers for “mass email to mapped call signs” UI ---
 def _nonblank_cc_list() -> List[str]:
     """
-    Return non-empty CC addresses from winlink_cc_1..3 (trimmed, uppercased).
+    Return non-empty CC addresses from winlink_cc_1..6 (trimmed, uppercased).
     """
     out: List[str] = []
-    for idx in (1, 2, 3):
+    for idx in (1, 2, 3, 4, 5, 6):
         v = (get_preference(f"winlink_cc_{idx}") or "").strip().upper()
         if v:
             out.append(v)

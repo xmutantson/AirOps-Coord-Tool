@@ -37,9 +37,9 @@
 
     <h3 style="margin-top:2em;">WinLink CC Addresses</h3>
     <div style="display:flex; flex-direction:column; gap:.5rem;">
-      {% for idx in [1,2,3] %}
+      {% for idx in [1,2,3,4,5,6] %}
         <input name="winlink_cc_{{ idx }}" class="map-cc"
-               value="{{ (winlink_cc_1,winlink_cc_2,winlink_cc_3)[idx-1] }}"
+               value="{{ (winlink_cc_1,winlink_cc_2,winlink_cc_3,winlink_cc_4,winlink_cc_5,winlink_cc_6)[idx-1] }}"
                placeholder="CC Address #{{ idx }}"
                style="width:100%;"
                oninput="this.value=this.value.toUpperCase()">

@@ -2283,7 +2283,7 @@ def api_print_label():
 
         # Render and print each label individually (one cut per label)
         label_size = (params.get("label_size") or "shipping").strip().lower()
-        _dispatch_label_prints(labels, "labels", label_size, printer_ip)
+        section = "labels"
 
     elif print_type == "inventory":
         barcode = (params.get("barcode") or "").strip()
@@ -2312,11 +2312,28 @@ def api_print_label():
             })
 
         label_size = (params.get("label_size") or "address").strip().lower()
-        _dispatch_label_prints(labels, "inventory_tags", label_size, printer_ip)
+        section = "inventory_tags"
 
     else:
         return jsonify({"ok": False, "error": "print_type must be 'cargo' or 'inventory'"}), 400
 
+    # Bulk safety: never spew a stupendous run of physical labels by accident.
+    # Past the threshold the client must echo back confirm_bulk after the
+    # operator confirms "Print N labels?". This is the authoritative count check
+    # (the cargo count is only known here, server-side).
+    BULK_LABEL_THRESHOLD = 10
+    confirm_bulk = str(
+        data.get("confirm_bulk") or params.get("confirm_bulk") or ""
+    ).strip().lower() in ("1", "true", "yes", "on")
+    if len(labels) > BULK_LABEL_THRESHOLD and not confirm_bulk:
+        return jsonify({
+            "ok": False,
+            "needs_confirm": True,
+            "count": len(labels),
+            "error": f"About to print {len(labels)} labels.",
+        })
+
+    _dispatch_label_prints(labels, section, label_size, printer_ip)
     return jsonify({"ok": True, "message": f"Sending {len(labels)} label(s) to printer"})
 
 

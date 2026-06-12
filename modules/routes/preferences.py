@@ -71,9 +71,9 @@ def preferences():
                           SET value=excluded.value
                     """, (raw,))
 
-            # save up to three CC addresses
+            # save up to six CC addresses
             if 'winlink_cc_1' in request.form:
-                for idx in (1,2,3):
+                for idx in (1,2,3,4,5,6):
                     key = f"winlink_cc_{idx}"
                     val = request.form.get(key, "").strip()
                     with sqlite3.connect(DB_FILE) as c:
@@ -372,6 +372,9 @@ def preferences():
     winlink_cc_1 = get_preference('winlink_cc_1') or ''
     winlink_cc_2 = get_preference('winlink_cc_2') or ''
     winlink_cc_3 = get_preference('winlink_cc_3') or ''
+    winlink_cc_4 = get_preference('winlink_cc_4') or ''
+    winlink_cc_5 = get_preference('winlink_cc_5') or ''
+    winlink_cc_6 = get_preference('winlink_cc_6') or ''
 
     # AOCT CC toggles
     aoct_cc_query     = (get_preference('aoct_cc_query') or 'no')
@@ -410,6 +413,9 @@ def preferences():
         winlink_cc_1=winlink_cc_1,
         winlink_cc_2=winlink_cc_2,
         winlink_cc_3=winlink_cc_3,
+        winlink_cc_4=winlink_cc_4,
+        winlink_cc_5=winlink_cc_5,
+        winlink_cc_6=winlink_cc_6,
         aoct_cc_query=aoct_cc_query,
         aoct_cc_reply=aoct_cc_reply,
         aoct_cc_broadcast=aoct_cc_broadcast,
