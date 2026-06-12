@@ -2548,6 +2548,23 @@
       }
     }
 
+    /* Append a hint when an unknown code is not an AOT tag and not a valid
+       GTIN (UPC-A/EAN-8/EAN-13/GTIN-14 with a good check digit). Those are
+       usually warehouse/lot stickers unique to one case, which is exactly why
+       they never match the barcode DB. */
+    function barcodeFormatHint(code){
+      if (/^AOT-\d+-[A-Z0-9]{6}(-[A-Z0-9]{4})?$/i.test(code)) return '';
+      if (/^\d+$/.test(code) &&
+          (code.length === 8 || code.length === 12 || code.length === 13 || code.length === 14)){
+        const d = code.split('').map(Number);
+        const check = d.pop();
+        let sum = 0, w = 3;
+        for (let i = d.length - 1; i >= 0; i--){ sum += d[i] * w; w = (w === 3) ? 1 : 3; }
+        if (((10 - (sum % 10)) % 10) === check) return '';
+      }
+      return ' - nonstandard code, likely a per-case warehouse sticker; scan the printed UPC/case barcode instead';
+    }
+
     function uuid4(){
       return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
         (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c/4).toString(16)
@@ -3089,11 +3106,19 @@
       }
       if (!resp.ok){
         if (j && (j.status === 'unknown' || j.error === 'unknown_barcode' || j.code === 'UNKNOWN_BARCODE')){
-          setFB(`Unknown barcode: ${barcode}`, 'scan-warn');
+          const hint = barcodeFormatHint(barcode);
+          if (hint && window.barcodeFormatWarningModal){
+            setFB(`Unknown barcode: ${barcode}`, 'scan-warn', 4000);
+            window.barcodeFormatWarningModal(barcode, {
+              altLabel: 'Relabel at Inventory',
+              onAlt: () => window.open('/inventory/detail', '_blank')
+            });
+          } else {
+            setFB(`Unknown barcode: ${barcode}` + hint, 'scan-warn', 8000);
+          }
         } else {
           setFB(`Scan error (${resp.status})`, 'scan-err', 2500);
         }
-        setTimeout(()=> setFB('', null), 2500);
         scanBusy = false; return;
       }
 
@@ -3171,7 +3196,16 @@
       }
 
       if (j.status === 'unknown'){
-        setFB(`Unknown barcode: ${barcode}`, 'scan-warn', 2500);
+        const hint2 = barcodeFormatHint(barcode);
+        if (hint2 && window.barcodeFormatWarningModal){
+          setFB(`Unknown barcode: ${barcode}`, 'scan-warn', 4000);
+          window.barcodeFormatWarningModal(barcode, {
+            altLabel: 'Relabel at Inventory',
+            onAlt: () => window.open('/inventory/detail', '_blank')
+          });
+        } else {
+          setFB(`Unknown barcode: ${barcode}` + hint2, 'scan-warn', 8000);
+        }
       } else {
         const rem = (typeof j.remaining === 'number')
           ? j.remaining

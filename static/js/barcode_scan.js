@@ -11,6 +11,7 @@
     lookup:   app.dataset.urlLookup     || '/inventory/api/lookup_barcode',
     scanPost: app.dataset.urlScanPost || '/inventory/api/scan_barcode',
     saveMap:  app.dataset.urlSaveMap  || '/inventory/api/save_barcode_mapping',
+    genBarcode: app.dataset.urlGenBarcode || '/inventory/api/generate_barcode',
     cats:     app.dataset.urlCategories || '/inventory/api/categories',
     admin:    app.dataset.urlAdmin    || '/inventory/barcodes', // not used in inline flow anymore, but left for reference
   };
@@ -94,6 +95,7 @@
 
   let lastCode = '', lastTs = 0;            // debounce for repeated reads
   let burstTimer = 0, burstChars = 0;       // USB burst detection
+  let aotInstead = false;                   // unknown-card: generate AOT barcode on save
 
   // Single helper for direction (works on /scan and on inventory detail)
   const getScanDir = () => {
@@ -306,6 +308,30 @@
     return ai;
   }
 
+  // GS1 mod-10 check digit (EAN-8 / UPC-A / EAN-13 / GTIN-14 all use it)
+  function gs1CheckOk(digits) {
+    const d = digits.split('').map(Number);
+    const check = d.pop();
+    let sum = 0, w = 3;
+    for (let i = d.length - 1; i >= 0; i--) { sum += d[i] * w; w = (w === 3) ? 1 : 3; }
+    return ((10 - (sum % 10)) % 10) === check;
+  }
+  // Classify how safe a scanned code is as a REUSABLE item identifier:
+  //   'aot'     our own printed AOT tag (stable by construction)
+  //   'gtin'    standard retail/case barcode (product-level, stable)
+  //   'suspect' nonstandard format - likely a warehouse/lot sticker that is
+  //             unique to one case, so other cases of the same product will
+  //             not match a mapping built on it
+  function classifyBarcode(code) {
+    if (/^AOT-\d+-[A-Z0-9]{6}(-[A-Z0-9]{4})?$/i.test(code)) return 'aot';
+    if (/^\d+$/.test(code)) {
+      if ((code.length === 8 || code.length === 12 || code.length === 13 || code.length === 14)
+          && gs1CheckOk(code)) return 'gtin';
+      return 'suspect';
+    }
+    return 'suspect';
+  }
+
   // Prefill the existing Inventory Detail form (if present)
   function prefillInventoryForm(item) {
     const form = document.getElementById('inventory-form');
@@ -433,12 +459,23 @@
                 var csrf = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
                 var u = new URL(tagUrl, location.origin);
                 var pp = {}; u.searchParams.forEach(function(v,k){ pp[k]=v; });
-                await fetch('/api/print/label', {
+                // The operator confirmed the count just above, so pre-authorize the
+                // server's bulk gate: without confirm_bulk, jobs over 10 labels return
+                // needs_confirm instead of printing and the run silently no-ops.
+                pp.confirm_bulk = '1';
+                const pr = await fetch('/api/print/label', {
                   method: 'POST',
                   headers: { 'Content-Type':'application/json', 'X-Requested-With':'XMLHttpRequest', 'X-CSRFToken': csrf },
                   body: JSON.stringify({ print_type: 'inventory', params: pp })
                 });
-              } catch(_) {}
+                let pj = null; try { pj = await pr.json(); } catch(_) {}
+                if (!pr.ok || !pj || pj.ok !== true) {
+                  // alert() blocks, so the operator sees the failure before the reload below
+                  alert('Tag printing FAILED: ' + ((pj && (pj.error || pj.message)) || ('HTTP ' + pr.status)));
+                }
+              } catch(_) {
+                alert('Tag printing FAILED: could not reach the server.');
+              }
             }
           }
           window.location.reload();
@@ -514,6 +551,41 @@
     }
     createEl.hidden = false;
     createEl.querySelector('#u_barcode').value = code;
+    // Non-blocking warning when the code is not an AOT tag or a valid GTIN:
+    // mapping a per-case warehouse sticker means future cases will not match.
+    aotInstead = false; // fresh unknown code -> normal mapping unless chosen below
+    let warnEl = createEl.querySelector('#u_format_warn');
+    if (!warnEl) {
+      warnEl = document.createElement('div');
+      warnEl.id = 'u_format_warn';
+      warnEl.style.cssText = 'border:1px solid #e0a800;background:#fff3cd;color:#7a5c00;border-radius:8px;padding:8px 10px;margin:0 0 8px 0;';
+      const stack = createEl.querySelector('.stack');
+      if (stack) stack.insertBefore(warnEl, stack.firstChild);
+      else createEl.appendChild(warnEl);
+    }
+    const enableAotMode = () => {
+      aotInstead = true;
+      warnEl.innerHTML = '<strong>AOT tag mode:</strong> a new AOT barcode will be '
+        + 'generated for this item when you save, and you can print tags to stick '
+        + 'on each case. The scanned sticker will be ignored.';
+      warnEl.hidden = false;
+    };
+    if (classifyBarcode(code) === 'suspect') {
+      warnEl.innerHTML = 'Warning: this is not a standard UPC/EAN/case barcode. '
+        + 'It may be a warehouse or lot sticker unique to this one case, so other '
+        + 'cases of the same product will NOT match it. Scan the printed UPC or '
+        + 'case barcode instead, or '
+        + '<button type="button" id="u_use_aot" style="padding:2px 8px;cursor:pointer;">Make AOT tags instead</button>';
+      warnEl.hidden = false;
+      const aotBtn = warnEl.querySelector('#u_use_aot');
+      if (aotBtn) aotBtn.onclick = enableAotMode;
+      // Blocking modal too - the banner alone is easy to miss mid-scan.
+      if (window.barcodeFormatWarningModal) {
+        window.barcodeFormatWarningModal(code, { altLabel: 'Make AOT tags instead', onAlt: enableAotMode });
+      }
+    } else {
+      warnEl.hidden = true;
+    }
     createEl.querySelector('#u_name').value = '';
     createEl.querySelector('#u_wpu').value  = '';
     const unitSel2 = createEl.querySelector('#u_unit'); if (unitSel2) unitSel2.value = '';
@@ -812,6 +884,24 @@
         if (!payload.category_id) createEl.querySelector('#u_cat')?.focus();
         else if (!payload.name)   createEl.querySelector('#u_name')?.focus();
         else if (!(payload.weight_per_unit>0)) createEl.querySelector('#u_wpu')?.focus();
+        return;
+      }
+      if (aotInstead) {
+        // Generate our own AOT barcode for this item instead of mapping the
+        // scanned per-case sticker. The quick-post card below then runs the
+        // normal flow, so the post-qty print prompt prints AOT tags.
+        setStatus('Generating AOT barcode...');
+        const r = await fetch(URLS.genBarcode, { method:'POST', headers: jsonHeaders(), body: JSON.stringify({
+          category_id: payload.category_id,
+          name: payload.name,
+          weight_per_unit: payload.weight_per_unit
+        }) });
+        let data = null; try { data = await r.json(); } catch(_) {}
+        if (!r.ok || !data || data.status !== 'ok') { setStatus('AOT barcode generation failed','err'); return; }
+        aotInstead = false;
+        createEl.hidden = true;
+        setStatus('AOT barcode ready: ' + data.barcode, 'ok');
+        if (data.item) showKnown(data.item, data.barcode, null); // quick-post under the AOT code
         return;
       }
       setStatus('Saving…');

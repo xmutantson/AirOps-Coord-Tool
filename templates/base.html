@@ -579,6 +579,50 @@ window.printerUnreachableModal = function(opts) {
   bd.onclick = function(e){ if (e.target === bd) close(); };
 };
 
+// ── Nonstandard-barcode warning modal ─────────────────────────────────────
+// Shown when a scanned code is not an AOT tag and not a valid GTIN
+// (UPC-A / EAN-8 / EAN-13 / GTIN-14). Those are usually warehouse or lot
+// stickers unique to ONE case, so a mapping built on one will never match
+// other cases of the same product. Blocking modal so it cannot be missed.
+window.barcodeFormatWarningModal = function(code, opts) {
+  if (typeof opts === 'function') opts = { onOk: opts };
+  opts = opts || {};
+  var bd = document.getElementById('barcode-format-warn-backdrop');
+  if (!bd) {
+    bd = document.createElement('div');
+    bd.id = 'barcode-format-warn-backdrop';
+    bd.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,0.65); display:flex; align-items:center; justify-content:center; z-index:10001; padding:1rem;';
+    bd.innerHTML = '<div style="background:#fff; color:#1a1a1a; border-radius:10px; width:min(460px,96vw); padding:1.25rem 1.5rem; box-shadow:0 24px 80px rgba(0,0,0,0.6);">'
+      + '<h3 style="margin:0 0 .5rem 0;">&#9888; Not a product barcode</h3>'
+      + '<p style="margin:.25rem 0 .5rem 0; color:#333;"><code id="barcode-format-warn-code" style="background:#f3f3f3; padding:2px 6px; border-radius:4px; word-break:break-all;"></code> is not a standard UPC/EAN/case barcode.</p>'
+      + '<p style="margin:.25rem 0 1rem 0; color:#333;">It is probably a warehouse or lot sticker that is unique to this one case &mdash; other cases of the same product will <strong>not</strong> match it.</p>'
+      + '<p style="margin:.25rem 0 1rem 0; color:#666; font-size:.9em;">Use a barcode printed on the carton instead: the product UPC, or the long 14-digit case barcode (wide bars in a framed box).</p>'
+      + '<div style="display:flex; gap:.5rem; justify-content:flex-end; flex-wrap:wrap;">'
+      +   '<button type="button" id="barcode-format-warn-alt" style="display:none; padding:.5rem 1rem; border-radius:6px; border:1px solid #888; background:#eee; cursor:pointer;">Alternative</button>'
+      +   '<button type="button" id="barcode-format-warn-ok" style="padding:.5rem 1rem; border-radius:6px; border:1px solid #196b35; background:#2e7d4f; color:#fff; cursor:pointer; font-weight:600;">OK, got it</button>'
+      + '</div></div>';
+    document.body.appendChild(bd);
+  }
+  document.getElementById('barcode-format-warn-code').textContent = code || '';
+  function close(){ document.removeEventListener('keydown', onKey, true); bd.remove(); if (typeof opts.onOk === 'function') opts.onOk(); }
+  // Capture-phase Esc: close ONLY the modal. Without this, Esc would also hit
+  // the scan page's global Esc-reset handler and reload the page mid-entry.
+  function onKey(e){ if (e.key === 'Escape'){ e.stopPropagation(); e.preventDefault(); close(); } }
+  document.addEventListener('keydown', onKey, true);
+  // Optional alternative action (e.g. "Make AOT tags instead")
+  var altBtn = document.getElementById('barcode-format-warn-alt');
+  if (opts.altLabel && typeof opts.onAlt === 'function'){
+    altBtn.textContent = opts.altLabel;
+    altBtn.style.display = '';
+    altBtn.onclick = function(){ document.removeEventListener('keydown', onKey, true); bd.remove(); opts.onAlt(); };
+  } else {
+    altBtn.style.display = 'none';
+    altBtn.onclick = null;
+  }
+  document.getElementById('barcode-format-warn-ok').onclick = close;
+  bd.onclick = function(e){ if (e.target === bd) close(); };
+};
+
 // ── Direct print: send label to server-side printer, fall back to iframe ──
 window.printLabel = function(url) {
   // Hard gate: if the printer isn't configured at all, point the operator
@@ -605,6 +649,21 @@ window.printLabel = function(url) {
   var params = {};
   u.searchParams.forEach(function(v, k) { params[k] = v; });
 
+  // Bulk-print safety: for inventory tags the count is the 'qty' URL param and
+  // is known client-side, so confirm up front before printing a stupendous run
+  // of labels (covers both the direct and browser-dialog paths). Cargo label
+  // counts are only known server-side; /api/print/label enforces the same
+  // threshold there and sendJob() re-confirms below.
+  var _isInventory = path.indexOf('/labels/inventory') !== -1;
+  var _qty = parseInt(params.qty || '0', 10) || 0;
+  var bulkConfirmed = false;
+  if (_isInventory && _qty > 10) {
+    if (!window.confirm('This will print ' + _qty + ' labels. Are you sure?')) {
+      return;
+    }
+    bulkConfirmed = true;
+  }
+
   // Only use direct printing for 62mm tape formats (shipping/address).
   // Everything else (letter, 4x6, no size specified) goes through browser dialog.
   var labelSize = (params.label_size || '').toLowerCase();
@@ -626,7 +685,9 @@ window.printLabel = function(url) {
     }).then(function(r){ return r.json(); });
   }
 
-  function sendJob() {
+  function sendJob(confirmBulk) {
+    var body = { print_type: printType, params: params };
+    if (confirmBulk) { body.confirm_bulk = 1; }
     return fetch('/api/print/label', {
       method: 'POST',
       headers: {
@@ -634,9 +695,16 @@ window.printLabel = function(url) {
         'X-Requested-With': 'XMLHttpRequest',
         'X-CSRFToken': csrf
       },
-      body: JSON.stringify({ print_type: printType, params: params })
+      body: JSON.stringify(body)
     }).then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
       .then(function(res) {
+        if (res.ok && res.data && res.data.needs_confirm) {
+          var n = res.data.count || 'many';
+          if (window.confirm('This will print ' + n + ' labels. Are you sure?')) {
+            sendJob(true);
+          }
+          return;
+        }
         if (res.ok && res.data.ok) {
           if (window.showToast) window.showToast(res.data.message || 'Sent to printer', 'success');
         } else {
@@ -666,7 +734,7 @@ window.printLabel = function(url) {
         });
         return;
       }
-      sendJob();
+      sendJob(bulkConfirmed);
     }).catch(function() {
       window.printerUnreachableModal({
         message: 'Could not check printer status (network error).',
