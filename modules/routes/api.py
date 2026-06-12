@@ -155,8 +155,24 @@ def api_manifest_scan(mid: str):
     mode    = (data.get('mode') or 'add').strip().lower()
     flight_id = data.get('flight_id')
     draft_id  = data.get('draft_id')
+    # Direction hint from the client for BUILD sessions. The flight_cargo
+    # inference below only works when baseline rows exist (edit mode); a fresh
+    # inbound arrival session has none and would otherwise default to 'out',
+    # booking arriving cargo as outbound pending rows that subtract stock.
+    dir_hint = 'in' if str(data.get('dir') or '').strip().lower() == 'in' else 'out'
+    # Optional qty for ADDs (default 1 = classic one-scan-one-unit). Used by
+    # the ramp inbound create-and-print flow to book N just-tagged cases in a
+    # single call instead of N round-trips.
+    try:
+        req_qty = max(1, min(int(data.get('qty') or 1), 500))
+    except Exception:
+        req_qty = 1
     if not barcode:
         return jsonify({'status':'error','error':'missing_barcode'}), 400
+    # AOT-only scanning: foreign retail/warehouse codes are rejected outright
+    if not is_aot_barcode(barcode):
+        return jsonify({'status': 'error', 'error': 'non_aot_barcode',
+                        'message': 'Not an AOT label - scanning is AOT-only.'}), 400
 
     item = lookup_barcode(barcode)
     if not item:
@@ -213,7 +229,7 @@ def api_manifest_scan(mid: str):
                  ORDER BY id DESC
                  LIMIT 1
             """, (session_id, qid, qid, fid, fid)).fetchone()
-        return (row['direction'] if row and row['direction'] in ('in','out') else 'out')
+        return (row['direction'] if row and row['direction'] in ('in','out') else dir_hint)
 
     baseline_dir = _row_dir_for_scan(mid, draft_id, flight_id)  # 'out' or 'in'
 
@@ -248,19 +264,19 @@ def api_manifest_scan(mid: str):
            AND (queued_id IS NOT NULL OR flight_id IS NOT NULL)
          ORDER BY id DESC LIMIT 1
     """, (mid, draft_id, draft_id, flight_id, flight_id))
-    row_dir = row_hint[0]['direction'] if (row_hint and row_hint[0].get('direction') in ('in','out')) else 'out'
+    row_dir = row_hint[0]['direction'] if (row_hint and row_hint[0].get('direction') in ('in','out')) else dir_hint
 
     if mode == 'add':
         # Apply add in the snapshot's direction:
         #  - outbound edit → 'out'
         #  - inbound edit  → 'in'
         direction = 'out' if row_dir == 'out' else 'in'
-        delta = +1
+        delta = +req_qty
         # Enforce stock cap only when we're consuming stock (outbound)
         if row_dir == 'out':
             avail = _committed_avail()
             sess  = _session_pending_out()
-            if (avail - sess) < 1:
+            if (avail - sess) < req_qty:
                 return jsonify({'status':'out_of_stock'}), 409
     else:
         if (flight_id or draft_id):
@@ -280,6 +296,11 @@ def api_manifest_scan(mid: str):
         direction=direction,
         delta_qty=delta
     )
+    # Keep the whole session out of the 15-minute pending reaper while active
+    try:
+        touch_pending_session(mid)
+    except Exception:
+        pass
 
     # Compute net qty for the chip after this scan
     chips = aggregate_manifest_net(
@@ -311,6 +332,11 @@ def api_manifest_items(mid: str):
     """Return net chips for this session (optionally including an existing flight baseline)."""
     flight_id = request.args.get('flight_id', type=int, default=None)
     draft_id  = request.args.get('draft_id',  type=int, default=None)
+    # Chip refreshes count as session activity for the pending reaper
+    try:
+        touch_pending_session(mid)
+    except Exception:
+        pass
     chips = aggregate_manifest_net(
         session_id=mid,
         flight_id=flight_id,

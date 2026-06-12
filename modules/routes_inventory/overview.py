@@ -113,6 +113,12 @@ def inventory_advance_line():
     """Single endpoint: add / delete / commit pending lines by `action`."""
     action = request.form.get('action')
     mid     = request.form['manifest_id']
+    # Any manual panel activity keeps the whole session out of the reaper
+    try:
+        from modules.utils.common import touch_pending_session
+        touch_pending_session(mid)
+    except Exception:
+        pass
 
     if action == 'add':
         cleanup_pending()

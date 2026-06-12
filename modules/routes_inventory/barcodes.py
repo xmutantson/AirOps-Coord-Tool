@@ -12,7 +12,7 @@ from flask import (
 )
 from app import DB_FILE, publish_inventory_event
 from app import inventory_bp as bp
-from modules.utils.common import dict_rows, sanitize_name
+from modules.utils.common import dict_rows, sanitize_name, is_aot_barcode
 
 # ────────────────────────────────────────────────────────────────────
 # Schema helpers (adds columns if missing; safe to run many times)
@@ -59,6 +59,8 @@ def inventory_barcodes_admin():
 
         if not (barcode and name and wpu > 0 and cid > 0):
             return jsonify(success=False, message="Missing/invalid fields"), 400
+        if not is_aot_barcode(barcode):
+            return jsonify(success=False, message="Only AOT-format barcodes can be saved (AOT-only scanning). Use Convert to AOT for legacy rows."), 400
 
         now = datetime.utcnow().isoformat()
         with sqlite3.connect(DB_FILE) as c:
@@ -242,10 +244,17 @@ def inventory_barcodes_import_csv():
     content = io.TextIOWrapper(f.stream, encoding="utf-8", errors="replace")
     reader = csv.DictReader(content)
     now = datetime.utcnow().isoformat()
+    imported = 0
+    skipped_non_aot = 0
+    skipped_bad = 0
     with sqlite3.connect(DB_FILE) as c:
         for row in reader:
             barcode = (row.get("barcode") or "").strip()
             if not barcode:
+                continue
+            # AOT-only: foreign retail/warehouse codes are no longer importable
+            if not is_aot_barcode(barcode):
+                skipped_non_aot += 1
                 continue
             name = sanitize_name((row.get("sanitized_name") or row.get("raw_name") or "").strip())
             raw  = (row.get("raw_name") or name).strip()
@@ -253,6 +262,7 @@ def inventory_barcodes_import_csv():
                 cid = int(row.get("category_id") or 0)
                 wpu = float(row.get("weight_per_unit") or 0)
             except Exception:
+                skipped_bad += 1
                 continue
             alias = (row.get("alias_of") or "").strip() or None
             deleted = 1 if str(row.get("deleted") or "0").strip() in ("1","true","yes") else 0
@@ -277,9 +287,61 @@ def inventory_barcodes_import_csv():
                 seen_count      = COALESCE(NULLIF(excluded.seen_count,0), inventory_barcodes.seen_count)
             """, (barcode, cid, name, raw, wpu, now, alias,
                   deleted, (now if deleted else None), last_seen, seen_count))
+            imported += 1
         c.commit()
-    flash("Import complete.", "success")
+    msg = f"Import complete: {imported} AOT row(s) imported"
+    if skipped_non_aot:
+        msg += f", {skipped_non_aot} non-AOT row(s) skipped (scanning is AOT-only)"
+    if skipped_bad:
+        msg += f", {skipped_bad} malformed row(s) skipped"
+    flash(msg + ".", "success" if imported else "error")
     return redirect(url_for("inventory.inventory_barcodes_admin"))
+
+@bp.post("/barcodes/convert_aot")
+def inventory_barcodes_convert_aot():
+    """Bulk-convert selected legacy (non-AOT) mappings to AOT codes.
+
+    For each selected barcode: find/mint the AOT mapping for its item triplet,
+    then soft-delete the legacy row. Items sharing a triplet converge on one
+    AOT code (the mint is deterministic), so converting duplicate stickers of
+    the same product produces a single tag to print.
+    """
+    _ensure_barcode_schema()
+    barcodes = request.form.getlist("barcodes[]") or request.form.getlist("barcodes")
+    barcodes, ph = _param_list(barcodes)
+    if not barcodes:
+        return jsonify(success=False, message="No selection"), 400
+    now = datetime.utcnow().isoformat()
+    results = []
+    skipped = 0
+    with sqlite3.connect(DB_FILE) as c:
+        c.row_factory = sqlite3.Row
+        for old in barcodes:
+            if is_aot_barcode(old):
+                skipped += 1  # already AOT - nothing to convert
+                continue
+            row = c.execute(
+                """SELECT category_id, sanitized_name,
+                          COALESCE(raw_name, sanitized_name) AS raw_name,
+                          weight_per_unit
+                     FROM inventory_barcodes
+                    WHERE barcode=? AND COALESCE(deleted,0)=0""",
+                (old,),
+            ).fetchone()
+            if not row:
+                skipped += 1
+                continue
+            new_bc, created = _get_or_create_aot_mapping(
+                c, int(row["category_id"]), row["sanitized_name"],
+                float(row["weight_per_unit"]), row["raw_name"])
+            c.execute(
+                "UPDATE inventory_barcodes SET deleted=1, deleted_at=? WHERE barcode=?",
+                (now, old))
+            results.append({"old": old, "new": new_bc,
+                            "name": row["sanitized_name"], "created": created})
+        c.commit()
+    return jsonify(success=True, converted=results, skipped=skipped)
+
 
 # ────────────────────────────────────────────────────────────────────
 # Lookup & save API (scanner-facing) — now resolves alias + updates last_seen
@@ -347,6 +409,9 @@ def api_save_barcode_mapping():
         cid = 0
     if not (barcode and name_in and cid > 0 and wpu > 0):
         return jsonify({"status": "error", "message": "Missing or invalid fields"}), 400
+    if not is_aot_barcode(barcode):
+        return jsonify({"status": "error", "code": "non_aot_barcode",
+                        "message": "Only AOT labels can be mapped. Generate an AOT tag for this item instead."}), 400
     name = sanitize_name(name_in)
     now = datetime.utcnow().isoformat()
     alias_of = None
@@ -392,10 +457,57 @@ def api_save_barcode_mapping():
 
 
 def _generate_barcode_id(category_id, sanitized_name, weight_per_unit):
-    """Generate a deterministic Code128-safe barcode: AOT-{cat}-{6-char hash}."""
+    """Generate a deterministic Code128-safe barcode: AOT-{cat}-{12-char hash}.
+
+    12 hex chars = 48 bits. Category ids are seeded identically across AOCT
+    installs, so codes minted at different airports share the AOT-{cat}-
+    namespace once cargo (and tags) start moving between sites. At ~25k items
+    fleet-wide under one category number, 6 hex (24-bit) expects ~19 birthday
+    collisions; 12 hex expects ~2e-6. Legacy 6-hex tags remain valid scans.
+    """
     key = f"{category_id}|{sanitized_name}|{weight_per_unit:.4f}"
-    h = hashlib.sha256(key.encode()).hexdigest()[:6].upper()
+    h = hashlib.sha256(key.encode()).hexdigest()[:12].upper()
     return f"AOT-{category_id}-{h}"
+
+
+def _get_or_create_aot_mapping(c, cid: int, name: str, wpu: float, raw_name: str = ""):
+    """Find or mint the canonical AOT mapping for an item triplet.
+
+    Caller supplies an open connection with row_factory=Row and owns commit.
+    Only AOT-format rows count as 'existing' — a legacy UPC mapping for the
+    same item must NOT short-circuit the mint (that is what Convert replaces).
+    Returns (barcode, created).
+    """
+    existing = c.execute(
+        """SELECT barcode FROM inventory_barcodes
+           WHERE category_id=? AND sanitized_name=?
+             AND ABS(weight_per_unit - ?) < 0.001
+             AND (deleted=0 OR deleted IS NULL)
+             AND barcode LIKE 'AOT-%'
+           ORDER BY created_at ASC
+           LIMIT 1""",
+        (cid, name, wpu),
+    ).fetchone()
+    if existing:
+        return existing["barcode"], False
+
+    bc = _generate_barcode_id(cid, name, wpu)
+    collision = c.execute(
+        "SELECT 1 FROM inventory_barcodes WHERE barcode=?", (bc,)
+    ).fetchone()
+    if collision:
+        bc = bc + "-" + hashlib.sha256(
+            f"{bc}{datetime.utcnow().isoformat()}".encode()
+        ).hexdigest()[:4].upper()
+
+    now = datetime.utcnow().isoformat()
+    c.execute(
+        """INSERT INTO inventory_barcodes(barcode, category_id, sanitized_name,
+             raw_name, weight_per_unit, created_at, updated_at, deleted)
+           VALUES (?,?,?,?,?,?,?,0)""",
+        (bc, cid, name, raw_name or name, wpu, now, now),
+    )
+    return bc, True
 
 
 @bp.route("/api/generate_barcode", methods=["POST"])
@@ -426,43 +538,11 @@ def api_generate_barcode():
         return jsonify({"status": "error", "message": "Missing or invalid fields"}), 400
     name = sanitize_name(name_in)
 
-    # Check if this item already has a barcode
+    # Find or mint the canonical AOT mapping (AOT-only: a legacy UPC mapping
+    # for the same item no longer satisfies "already has a barcode")
     with sqlite3.connect(DB_FILE) as c:
         c.row_factory = sqlite3.Row
-        existing = c.execute(
-            """SELECT barcode FROM inventory_barcodes
-               WHERE category_id=? AND sanitized_name=?
-                 AND ABS(weight_per_unit - ?) < 0.001
-                 AND (deleted=0 OR deleted IS NULL)
-               LIMIT 1""",
-            (cid, name, wpu),
-        ).fetchone()
-        if existing:
-            return jsonify({
-                "status": "ok", "barcode": existing["barcode"],
-                "item": {"barcode": existing["barcode"], "category_id": cid,
-                         "sanitized_name": name, "weight_per_unit": wpu},
-                "created": False,
-            })
-
-        # Generate a new deterministic barcode
-        barcode = _generate_barcode_id(cid, name, wpu)
-        # Handle unlikely collision (append suffix)
-        collision = c.execute(
-            "SELECT 1 FROM inventory_barcodes WHERE barcode=?", (barcode,)
-        ).fetchone()
-        if collision:
-            barcode = barcode + "-" + hashlib.sha256(
-                f"{barcode}{datetime.utcnow().isoformat()}".encode()
-            ).hexdigest()[:4].upper()
-
-        now = datetime.utcnow().isoformat()
-        c.execute(
-            """INSERT INTO inventory_barcodes(barcode, category_id, sanitized_name,
-                 raw_name, weight_per_unit, created_at, updated_at, deleted)
-               VALUES (?,?,?,?,?,?,?,0)""",
-            (barcode, cid, name, raw_in or name, wpu, now, now),
-        )
+        barcode, created = _get_or_create_aot_mapping(c, cid, name, wpu, raw_in)
         c.commit()
 
     return jsonify({
@@ -470,7 +550,7 @@ def api_generate_barcode():
         "item": {"barcode": barcode, "category_id": cid,
                  "sanitized_name": name, "raw_name": raw_in or name,
                  "weight_per_unit": wpu},
-        "created": True,
+        "created": created,
     })
 
 
@@ -490,6 +570,11 @@ def api_scan_barcode():
     barcode = (data.get("barcode") or "").strip()
     if not barcode:
         return jsonify({"status": "error", "message": "Missing barcode"}), 400
+    # AOT-only: retail/warehouse codes are never scanned (per-case stickers
+    # silently fail to match later — the operator must relabel with AOT tags)
+    if not is_aot_barcode(barcode):
+        return jsonify({"status": "error", "code": "non_aot_barcode",
+                        "message": "Not an AOT label - scanning is AOT-only. Print an AOT tag for this item."}), 400
 
     # qty handling respects scanner_mode cookie
     raw_qty = data.get("qty")

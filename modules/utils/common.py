@@ -4606,6 +4606,34 @@ def clear_airport_cache() -> None:
 #   • “Remove” in Build    → decrement the 'out' row; delete at qty=0
 #   • Always bump pending_ts so the reaper won’t purge active work
 # ─────────────────────────────────────────────────────────────────────────────
+# Canonical AOT label format: AOT-{category_id}-{hex hash}. New labels mint a
+# 12-hex hash (48-bit — collision-safe across a ~50-airport network); 6-hex is
+# accepted for tags printed before the widening, and the optional -XXXX suffix
+# comes from the mint-time collision fallback.
+AOT_BARCODE_RE = re.compile(r'^AOT-\d+-[0-9A-F]{6,12}(?:-[0-9A-F]{4})?$', re.IGNORECASE)
+
+def is_aot_barcode(code: str) -> bool:
+    """True when the scanned string is an AOT label. Scanning is AOT-only:
+    retail UPCs and warehouse stickers are rejected at every scan entry point
+    because warehouse/lot stickers can be unique per case."""
+    return bool(AOT_BARCODE_RE.match((code or '').strip()))
+
+def touch_pending_session(session_id: str) -> None:
+    """Re-stamp pending_ts for every pending row in a manifest session.
+    cleanup_pending() reaps pending rows 15 minutes after their last stamp;
+    touching the whole session on any scan/refresh keeps an actively-worked
+    intake session alive no matter how long it runs."""
+    sid = (session_id or '').strip()
+    if not sid:
+        return
+    try:
+        with connect(get_db_file(), timeout=30) as c:
+            c.execute(
+                "UPDATE inventory_entries SET pending_ts=? WHERE pending=1 AND session_id=?",
+                (datetime.utcnow().isoformat(), sid))
+    except Exception:
+        logger.debug("touch_pending_session: best-effort failed", exc_info=True)
+
 def lookup_barcode(barcode: str) -> dict | None:
     """Return {category_id, sanitized_name, weight_per_unit} for a known barcode."""
     bc = (barcode or '').strip()

@@ -40,6 +40,11 @@
 
     <input id="merge-primary" type="text" placeholder="Primary barcode for merge…" style="min-width:22ch;">
     <button id="bulk-merge" type="button">Merge (first=primary if blank)</button>
+
+    <button id="bulk-convert-aot" type="button"
+            title="Mint AOT codes for the selected legacy (non-AOT) rows and soft-delete the old codes. Scanning is AOT-only.">
+      Convert to AOT
+    </button>
   </div>
 </div>
 
@@ -109,30 +114,58 @@
     if (!resp.ok) throw new Error('HTTP '+resp.status);
     return resp.json();
   }
+  // NOTE: all bulk actions go through postList(). The old pattern
+  // Object.fromEntries(ids.map(b=>['barcodes',b])) collapsed duplicate keys,
+  // so every bulk action silently operated on only the LAST selected row.
   document.getElementById('bulk-delete').addEventListener('click', async () => {
     const ids = selected(); if (!ids.length) return;
     if (!confirm(`Soft delete ${ids.length} barcode(s)?`)) return;
-    await post("{{ url_for('inventory.inventory_barcodes_soft_delete') }}", Object.fromEntries(ids.map(b=>['barcodes',b])));
+    await postList("{{ url_for('inventory.inventory_barcodes_soft_delete') }}", ids);
     loadTable();
   });
   document.getElementById('bulk-restore').addEventListener('click', async () => {
     const ids = selected(); if (!ids.length) return;
-    await post("{{ url_for('inventory.inventory_barcodes_restore') }}", Object.fromEntries(ids.map(b=>['barcodes',b])));
+    await postList("{{ url_for('inventory.inventory_barcodes_restore') }}", ids);
     loadTable();
   });
   document.getElementById('bulk-cat-apply').addEventListener('click', async () => {
     const ids = selected(); const cid = document.getElementById('bulk-cat').value;
     if (!ids.length || !cid) return;
-    await post("{{ url_for('inventory.inventory_barcodes_bulk_category') }}",
-               Object.assign(Object.fromEntries(ids.map(b=>['barcodes',b])), { category_id: cid }));
+    await postList("{{ url_for('inventory.inventory_barcodes_bulk_category') }}", ids, { category_id: cid });
     loadTable();
   });
   document.getElementById('bulk-merge').addEventListener('click', async () => {
     const ids = selected(); if (ids.length < 2) return alert('Select 2+ rows to merge');
     const prim = document.getElementById('merge-primary').value.trim() || ids[0];
     if (!ids.includes(prim)) ids.unshift(prim);
-    await post("{{ url_for('inventory.inventory_barcodes_merge') }}",
-               Object.assign(Object.fromEntries(ids.map(b=>['barcodes',b])), { primary: prim }));
+    await postList("{{ url_for('inventory.inventory_barcodes_merge') }}", ids, { primary: prim });
+    loadTable();
+  });
+  // Multi-value form post: URLSearchParams.append per id, because
+  // Object.fromEntries collapses duplicate 'barcodes' keys to the last one.
+  async function postList(url, ids, extra) {
+    const body = new URLSearchParams();
+    ids.forEach(b => body.append('barcodes', b));
+    Object.entries(extra || {}).forEach(([k, v]) => body.set(k, v));
+    const resp = await fetch(url, { method:'POST', headers: hdr({'Content-Type':'application/x-www-form-urlencoded'}), body });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    return resp.json();
+  }
+  document.getElementById('bulk-convert-aot').addEventListener('click', async () => {
+    const ids = selected();
+    if (!ids.length) return alert('Select the legacy (non-AOT) rows to convert.');
+    if (!confirm('Convert ' + ids.length + ' barcode(s) to AOT codes? The old codes are soft-deleted - scanning is AOT-only from here on.')) return;
+    try {
+      const j = await postList("{{ url_for('inventory.inventory_barcodes_convert_aot') }}", ids);
+      const conv = (j && j.converted) || [];
+      const lines = conv.map(r => r.old + ' -> ' + r.new + '  (' + r.name + ')').join('\n');
+      alert('Converted ' + conv.length + ' row(s)'
+            + (j.skipped ? (', skipped ' + j.skipped + ' (already AOT or missing)') : '')
+            + (lines ? (':\n\n' + lines) : '')
+            + '\n\nPrint the new tags from the Stock or item Detail pages.');
+    } catch (e) {
+      alert('Convert failed: ' + e.message);
+    }
     loadTable();
   });
 

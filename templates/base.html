@@ -593,10 +593,10 @@ window.barcodeFormatWarningModal = function(code, opts) {
     bd.id = 'barcode-format-warn-backdrop';
     bd.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,0.65); display:flex; align-items:center; justify-content:center; z-index:10001; padding:1rem;';
     bd.innerHTML = '<div style="background:#fff; color:#1a1a1a; border-radius:10px; width:min(460px,96vw); padding:1.25rem 1.5rem; box-shadow:0 24px 80px rgba(0,0,0,0.6);">'
-      + '<h3 style="margin:0 0 .5rem 0;">&#9888; Not a product barcode</h3>'
-      + '<p style="margin:.25rem 0 .5rem 0; color:#333;"><code id="barcode-format-warn-code" style="background:#f3f3f3; padding:2px 6px; border-radius:4px; word-break:break-all;"></code> is not a standard UPC/EAN/case barcode.</p>'
-      + '<p style="margin:.25rem 0 1rem 0; color:#333;">It is probably a warehouse or lot sticker that is unique to this one case &mdash; other cases of the same product will <strong>not</strong> match it.</p>'
-      + '<p style="margin:.25rem 0 1rem 0; color:#666; font-size:.9em;">Use a barcode printed on the carton instead: the product UPC, or the long 14-digit case barcode (wide bars in a framed box).</p>'
+      + '<h3 id="barcode-format-warn-title" style="margin:0 0 .5rem 0;"></h3>'
+      + '<p style="margin:.25rem 0 .5rem 0; color:#333;"><code id="barcode-format-warn-code" style="background:#f3f3f3; padding:2px 6px; border-radius:4px; word-break:break-all;"></code> <span id="barcode-format-warn-msg"></span></p>'
+      + '<p id="barcode-format-warn-detail" style="margin:.25rem 0 1rem 0; color:#333;"></p>'
+      + '<p id="barcode-format-warn-guidance" style="margin:.25rem 0 1rem 0; color:#666; font-size:.9em;"></p>'
       + '<div style="display:flex; gap:.5rem; justify-content:flex-end; flex-wrap:wrap;">'
       +   '<button type="button" id="barcode-format-warn-alt" style="display:none; padding:.5rem 1rem; border-radius:6px; border:1px solid #888; background:#eee; cursor:pointer;">Alternative</button>'
       +   '<button type="button" id="barcode-format-warn-ok" style="padding:.5rem 1rem; border-radius:6px; border:1px solid #196b35; background:#2e7d4f; color:#fff; cursor:pointer; font-weight:600;">OK, got it</button>'
@@ -604,6 +604,14 @@ window.barcodeFormatWarningModal = function(code, opts) {
     document.body.appendChild(bd);
   }
   document.getElementById('barcode-format-warn-code').textContent = code || '';
+  document.getElementById('barcode-format-warn-title').textContent =
+    opts.title || '⚠ Not a product barcode';
+  document.getElementById('barcode-format-warn-msg').textContent =
+    opts.message || 'is not a standard UPC/EAN/case barcode.';
+  document.getElementById('barcode-format-warn-detail').textContent =
+    opts.detail || 'It is probably a warehouse or lot sticker that is unique to this one case - other cases of the same product will not match it.';
+  document.getElementById('barcode-format-warn-guidance').textContent =
+    opts.guidance || 'Use a barcode printed on the carton instead: the product UPC, or the long 14-digit case barcode (wide bars in a framed box).';
   function close(){ document.removeEventListener('keydown', onKey, true); bd.remove(); if (typeof opts.onOk === 'function') opts.onOk(); }
   // Capture-phase Esc: close ONLY the modal. Without this, Esc would also hit
   // the scan page's global Esc-reset handler and reload the page mid-entry.

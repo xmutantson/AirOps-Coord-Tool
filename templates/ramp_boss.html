@@ -33,6 +33,12 @@
         const b = document.getElementById('rb-scan-mode-remove');
         return !!(b && b.classList.contains('is-active'));
       }
+      function advIsInbound(){
+        /* Inbound build sessions send removes through /scan deliberately
+           (decrement pending 'in' rows, floored at 0). Never rewrite those
+           to /nudge - its compensator semantics are outbound-edit only. */
+        try { return document.body.dataset.advDir === 'inbound'; } catch(_){ return false; }
+      }
       function bodyToObject(body, contentType){
         if (typeof body === 'string'){
           const ct = String(contentType||'').toLowerCase();
@@ -102,7 +108,7 @@
           if (isPostScan){
             const mid = getManifestId();
             const obj = bodyToObject(init && init.body, (init && init.headers && init.headers['Content-Type']) || '');
-            const remove = uiSaysRemove() || bodySaysRemove(obj);
+            const remove = !advIsInbound() && (uiSaysRemove() || bodySaysRemove(obj));
             if (mid && remove){
               let name = pickName(obj);
               let wpu  = pickWpu(obj);
@@ -175,7 +181,7 @@
             const ct = (this.__rb_headers||[]).find(([n]) => n.toLowerCase()==='content-type');
             const contentType = ct ? String(ct[1]||'') : '';
             const parsed = bodyToObject(body, contentType);
-            const remove = uiSaysRemove() || bodySaysRemove(parsed);
+            const remove = !advIsInbound() && (uiSaysRemove() || bodySaysRemove(parsed));
             let name   = pickName(parsed);
             let wpu    = pickWpu(parsed);
             let qty    = pickQty(parsed);
@@ -2548,21 +2554,164 @@
       }
     }
 
-    /* Append a hint when an unknown code is not an AOT tag and not a valid
-       GTIN (UPC-A/EAN-8/EAN-13/GTIN-14 with a good check digit). Those are
-       usually warehouse/lot stickers unique to one case, which is exactly why
-       they never match the barcode DB. */
-    function barcodeFormatHint(code){
-      if (/^AOT-\d+-[A-Z0-9]{6}(-[A-Z0-9]{4})?$/i.test(code)) return '';
-      if (/^\d+$/.test(code) &&
-          (code.length === 8 || code.length === 12 || code.length === 13 || code.length === 14)){
-        const d = code.split('').map(Number);
-        const check = d.pop();
-        let sum = 0, w = 3;
-        for (let i = d.length - 1; i >= 0; i--){ sum += d[i] * w; w = (w === 3) ? 1 : 3; }
-        if (((10 - (sum % 10)) % 10) === check) return '';
+    /* ── Inline fill-in card for unknown AOT tags scanned INBOUND ──
+       A planeload from another airfield can be twenty unknown tags in a row;
+       bouncing to Inventory per item is a non-starter. Fill the item in once
+       here, the mapping saves, and the interrupted add re-fires itself. */
+    let rbFill = null;
+    function hideRbFill(){ if (rbFill) rbFill.style.display = 'none'; }
+    /* mode 'fill'   - unknown AOT tag scanned: keep the code, register it.
+       mode 'create' - untagged arriving cargo: generate an AOT code on save,
+                       print qty tags RIGHT HERE, and book the cases onto this
+                       arrival in one shot (no trip to Inventory). */
+    function showRbFill(code, fillMode){
+      const isCreate = (fillMode === 'create');
+      if (!rbFill){
+        rbFill = document.createElement('div');
+        rbFill.id = 'rb-scan-fill';
+        rbFill.style.cssText = 'border:1px solid #ffd39b;background:#fff7ea;border-radius:8px;padding:10px;margin:6px 0;max-width:560px;';
+        rbFill.innerHTML =
+          '<div id="rb-fill-head" style="margin-bottom:6px;"></div>'
+          + '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">'
+          + '<select id="rb-fill-cat" style="min-width:12ch;"><option value="">Category...</option></select>'
+          + '<input id="rb-fill-name" placeholder="Item name" style="min-width:16ch;">'
+          + '<input id="rb-fill-wpu" type="number" step="any" min="0" placeholder="Wt/unit" style="width:9ch;">'
+          + '<select id="rb-fill-unit" style="width:7ch;"><option value="lbs">lb</option><option value="oz">oz</option></select>'
+          + '<input id="rb-fill-qty" type="number" min="1" step="1" placeholder="Cases" style="width:8ch;display:none;">'
+          + '<button type="button" id="rb-fill-save">Save</button>'
+          + '<button type="button" id="rb-fill-cancel">Cancel</button>'
+          + '<span id="rb-fill-err" style="color:#b00020;"></span>'
+          + '</div>';
+        root.appendChild(rbFill);
+        rbFill.querySelector('#rb-fill-cancel').onclick = () => { hideRbFill(); inp && inp.focus(); };
+        rbFill.querySelector('#rb-fill-save').onclick = async () => {
+          const create = (rbFill.dataset.mode === 'create');
+          const cat = rbFill.querySelector('#rb-fill-cat').value;
+          const nm  = (rbFill.querySelector('#rb-fill-name').value || '').trim();
+          const wv  = parseFloat(rbFill.querySelector('#rb-fill-wpu').value);
+          const un  = rbFill.querySelector('#rb-fill-unit').value;
+          const qty = create ? parseInt(rbFill.querySelector('#rb-fill-qty').value, 10) : 1;
+          const errEl = rbFill.querySelector('#rb-fill-err');
+          errEl.textContent = '';
+          if (!cat || !nm || !isFinite(wv) || wv <= 0){ errEl.textContent = 'All fields required.'; return; }
+          if (create && !(qty > 0)){ errEl.textContent = 'Enter the number of cases.'; return; }
+          const wpu = (un === 'oz') ? (wv / 16.0) : wv;
+          let codeNow = rbFill.dataset.code || '';
+          try{
+            if (create){
+              /* 1) mint (or reuse) the AOT code for this item */
+              const g = await fetch('/inventory/api/generate_barcode', {
+                method:'POST',
+                headers: xhrHeaders({ 'Content-Type':'application/json' }),
+                body: JSON.stringify({ category_id: Number(cat), name: nm, weight_per_unit: wpu })
+              });
+              const gj = await g.json().catch(() => null);
+              if (!g.ok || !gj || gj.status !== 'ok'){ errEl.textContent = (gj && gj.message) || 'AOT generation failed.'; return; }
+              codeNow = gj.barcode;
+            } else {
+              /* register the scanned (foreign) AOT tag */
+              const r = await fetch('/inventory/api/save_barcode_mapping', {
+                method:'POST',
+                headers: xhrHeaders({ 'Content-Type':'application/json' }),
+                body: JSON.stringify({ barcode: codeNow, category_id: Number(cat), name: nm, weight_per_unit: wpu })
+              });
+              const j = await r.json().catch(() => null);
+              if (!r.ok || !j || j.status !== 'ok'){ errEl.textContent = (j && j.message) || 'Save failed.'; return; }
+            }
+          }catch(_){ errEl.textContent = 'Save failed (network).'; return; }
+
+          if (create){
+            /* 2) print one tag per case right now (consent given via the Cases
+               field, so pre-authorize the server bulk gate) */
+            let printErr = '';
+            try{
+              const pr = await fetch('/api/print/label', {
+                method:'POST',
+                headers: xhrHeaders({ 'Content-Type':'application/json' }),
+                body: JSON.stringify({ print_type: 'inventory', params: {
+                  barcode: codeNow, name: nm, weight_per_unit: String(wpu),
+                  qty: String(qty), label_size: 'address', confirm_bulk: '1'
+                }})
+              });
+              const pj = await pr.json().catch(() => null);
+              if (!pr.ok || !pj || pj.ok !== true){
+                printErr = (pj && (pj.error || pj.message)) || ('HTTP ' + pr.status);
+              }
+            }catch(_){ printErr = 'network error'; }
+            /* 3) book all cases onto this arrival in one call */
+            try{
+              const s = await fetch(`/api/manifest/${encodeURIComponent(ensureManifestId())}/scan`, {
+                method:'POST',
+                headers: xhrHeaders({ 'Content-Type':'application/json' }),
+                body: JSON.stringify({ barcode: codeNow, mode:'add', dir:'in', qty: qty })
+              });
+              if (!s.ok) throw new Error('add failed');
+              await refreshChips();
+              try { advDone.disabled = false; advDirty = true; } catch(_){}
+            }catch(_){
+              errEl.textContent = 'Tags handled, but adding to the arrival failed - scan the new tags instead.';
+              return;
+            }
+            hideRbFill();
+            if (printErr){
+              setFB(`Added x${qty} - PRINT FAILED (${printErr})`, 'scan-err', 8000);
+            } else {
+              setFB(`Added x${qty} - ${qty} tag(s) printing`, 'scan-ok', 4000);
+            }
+            inp && inp.focus();
+            return;
+          }
+          hideRbFill();
+          setFB('Tag registered', 'scan-ok', 1500);
+          lastScan = { code:'', t:0 };   /* let the immediate re-scan through dedup */
+          scan(codeNow);                 /* complete the interrupted add */
+          inp && inp.focus();
+        };
       }
-      return ' - nonstandard code, likely a per-case warehouse sticker; scan the printed UPC/case barcode instead';
+      /* (re)populate categories from the latest inventory probe; suggest the
+         category id embedded in the AOT code (ids are seeded identically
+         across installs, so foreign tags usually carry a valid local id) */
+      const sel = rbFill.querySelector('#rb-fill-cat');
+      const cats = (inventoryAdvancedData && (inventoryAdvancedData.all_categories || inventoryAdvancedData.categories)) || [];
+      sel.innerHTML = '<option value="">Category...</option>' +
+        cats.map(c => `<option value="${c.id}">${c.display_name}</option>`).join('');
+      rbFill.dataset.mode = isCreate ? 'create' : 'fill';
+      rbFill.querySelector('#rb-fill-qty').style.display = isCreate ? '' : 'none';
+      if (isCreate){
+        rbFill.querySelector('#rb-fill-head').innerHTML =
+          '<strong>No AOT tag:</strong> create the item - tags print here and the cases go straight onto this arrival.';
+        rbFill.dataset.code = '';
+      } else {
+        rbFill.querySelector('#rb-fill-head').innerHTML =
+          '<strong>New AOT tag:</strong> <code></code> is not in the database yet. Fill in the item once - later scans of this tag will just work.';
+        rbFill.querySelector('#rb-fill-head code').textContent = code;
+        const m = String(code).match(/^AOT-(\d+)-/i);
+        if (m && sel.querySelector('option[value="' + m[1] + '"]')) sel.value = m[1];
+        rbFill.dataset.code = code;
+      }
+      rbFill.querySelector('#rb-fill-name').value = '';
+      rbFill.querySelector('#rb-fill-wpu').value = '';
+      rbFill.querySelector('#rb-fill-qty').value = '';
+      rbFill.style.display = '';
+      rbFill.querySelector('#rb-fill-name').focus();
+    }
+    function handleUnknownAot(code){
+      if (document.body.dataset.advDir === 'inbound'){
+        setFB('Unknown AOT tag', 'scan-warn', 2000);
+        showRbFill(code);
+        return;
+      }
+      setFB(`Unknown AOT tag: ${code}`, 'scan-warn', 4000);
+      if (window.barcodeFormatWarningModal){
+        window.barcodeFormatWarningModal(code, {
+          title: 'Unknown AOT tag',
+          message: 'is an AOT label, but it is not in this database.',
+          detail: 'Outbound cargo should already be registered here. This tag was probably printed at another airfield and never received into stock.',
+          guidance: 'Register it at Inventory (scan it there and fill in the item), then scan it out.',
+          altLabel: 'Open Inventory',
+          onAlt: () => window.open('/inventory/detail', '_blank')
+        });
+      }
     }
 
     function uuid4(){
@@ -3029,6 +3178,27 @@
       const now = Date.now();
       if (barcode === lastScan.code && (now - lastScan.t) < SCAN_DEDUP_MS) return;
       lastScan = { code: barcode, t: now };
+      const isInbound = (document.body.dataset.advDir === 'inbound');
+      // AOT-only gate: reject every non-AOT code before it reaches the backend.
+      if (!/^AOT-\d+-[0-9A-F]{6,12}(-[0-9A-F]{4})?$/i.test(barcode)) {
+        setFB('AOT labels only', 'scan-err', 4000);
+        if (window.barcodeFormatWarningModal) {
+          window.barcodeFormatWarningModal(barcode, {
+            title: 'AOT labels only',
+            message: 'is not an AOT label.',
+            detail: 'Items are tracked by AOCT printed tags only. Retail UPCs and '
+              + 'warehouse stickers are not scanned, because lot and case stickers '
+              + 'can be unique to a single case and will not match later.',
+            guidance: isInbound
+              ? 'No AOT tags on this cargo? Create the item here - tags print now and the cases go straight onto this arrival.'
+              : 'Relabel the cargo with AOT tags at Inventory before scanning it out.',
+            altLabel: isInbound ? 'Create item + print AOT tags' : 'Open Inventory',
+            onAlt: isInbound ? (() => showRbFill('', 'create'))
+                             : (() => window.open('/inventory/detail', '_blank'))
+          });
+        }
+        return;
+      }
       // If our probe snapshot is stale, refresh it first so the gate is authoritative.
       if (Date.now() - lastInventoryFetch > 5000) { try { await fetchInventory(); } catch(_){} }
       // Wait until we have at least one fresh inventory snapshot
@@ -3039,12 +3209,14 @@
       const beforeNet = netQtyMapFromChips();
       const mid = ensureManifestId();
       // Decide endpoint and payload:
-      //  Always send *removes* to /nudge so backend never mints inbound compensators at/below zero.
-      //  Adds continue to use /scan.
-      const useNudge = (mode === 'remove');
+      //  OUTBOUND removes go to /nudge so the backend never mints inbound
+      //  compensators at/below zero. INBOUND build removes use /scan with
+      //  mode:'remove' (decrement pending 'in' rows, floored at 0) - /nudge
+      //  semantics are outbound-edit only. Adds always use /scan.
+      const useNudge = (mode === 'remove') && !isInbound;
       // PRECHECK: if we already know which key this barcode maps to and it's at/below 0,
       // short-circuit the remove on the client so nothing reaches the backend.
-      if (useNudge) {
+      if (mode === 'remove') {
         const k = BARCODE_TO_KEY.get(barcode);
         if (k) {
           const net = beforeNet.get(k) || 0;  // net qty BEFORE this scan
@@ -3054,8 +3226,10 @@
           }
         }
       }
-      if (!useNudge) {
-        // Preflight ADDs: if we already know the key and snapshot shows 0 avail, block before hitting backend
+      if (mode === 'add' && !isInbound) {
+        // Preflight OUTBOUND adds only: arriving cargo adds stock, so the
+        // availability snapshot is irrelevant (and fail-closed-to-zero would
+        // block every first-contact inbound item).
         const k = BARCODE_TO_KEY.get(barcode);
         if (k) {
           const availSnap = availForKey(k);
@@ -3074,7 +3248,7 @@
             draft_id: (typeof window.draftId === 'number' ? window.draftId : null)
           };
         }
-        const p = { barcode, mode };
+        const p = { barcode, mode, dir: isInbound ? 'in' : 'out' };
         // Use draft_id exactly once to seed from queued snapshot.
         if (typeof window.draftId !== 'undefined' && window.draftId && !RB_DRAFT_SEEDED){
           p.draft_id = Number(window.draftId);
@@ -3106,16 +3280,9 @@
       }
       if (!resp.ok){
         if (j && (j.status === 'unknown' || j.error === 'unknown_barcode' || j.code === 'UNKNOWN_BARCODE')){
-          const hint = barcodeFormatHint(barcode);
-          if (hint && window.barcodeFormatWarningModal){
-            setFB(`Unknown barcode: ${barcode}`, 'scan-warn', 4000);
-            window.barcodeFormatWarningModal(barcode, {
-              altLabel: 'Relabel at Inventory',
-              onAlt: () => window.open('/inventory/detail', '_blank')
-            });
-          } else {
-            setFB(`Unknown barcode: ${barcode}` + hint, 'scan-warn', 8000);
-          }
+          handleUnknownAot(barcode);
+        } else if (j && (j.error === 'non_aot_barcode' || j.code === 'NON_AOT_BARCODE')){
+          setFB('AOT labels only', 'scan-err', 4000);  /* server backstop; client pre-gates */
         } else {
           setFB(`Scan error (${resp.status})`, 'scan-err', 2500);
         }
@@ -3196,16 +3363,7 @@
       }
 
       if (j.status === 'unknown'){
-        const hint2 = barcodeFormatHint(barcode);
-        if (hint2 && window.barcodeFormatWarningModal){
-          setFB(`Unknown barcode: ${barcode}`, 'scan-warn', 4000);
-          window.barcodeFormatWarningModal(barcode, {
-            altLabel: 'Relabel at Inventory',
-            onAlt: () => window.open('/inventory/detail', '_blank')
-          });
-        } else {
-          setFB(`Unknown barcode: ${barcode}` + hint2, 'scan-warn', 8000);
-        }
+        handleUnknownAot(barcode);
       } else {
         const rem = (typeof j.remaining === 'number')
           ? j.remaining
@@ -3406,11 +3564,16 @@
     document.body.dataset.advDir = dir;
     document.querySelectorAll('.adv-out').forEach(el => el.style.display = out ? '' : 'none');
     document.querySelectorAll('.adv-in' ).forEach(el => el.style.display = out ? 'none' : '');
-    /* show scanner only for outbound */
+    /* scanner is available for BOTH directions: outbound builds the manifest
+       from stock; inbound scans other airfields' AOT tags off arriving cargo */
     const scanBox = document.getElementById('rb-scan');
     if (scanBox) {
-      scanBox.style.display = out ? '' : 'none';
-      if (out && document.getElementById('rb-scan-input')) document.getElementById('rb-scan-input').focus();
+      scanBox.style.display = '';
+      const scanInp = document.getElementById('rb-scan-input');
+      if (scanInp) {
+        scanInp.placeholder = out ? 'Scan AOT tag (out)...' : 'Scan arriving AOT tag...';
+        scanInp.focus();
+      }
     }
     if (out) {
       [advItem, advSize, advQty].forEach(el => el.disabled = true);
@@ -3679,6 +3842,35 @@
     pendingIds.push(j.entry_id);
     try { if (window._rbScanRefresh) await window._rbScanRefresh(); } catch(_){}
     try { if (window._rbSetOrigin)   window._rbSetOrigin(j.sanitized, j.wpu, 'manual'); } catch(_){}
+
+    // Manual inbound add = nothing physical is on these cases yet, so offer
+    // to mint the AOT code and print one tag per unit right here. (Scanned
+    // adds never prompt - the tag is already on the case, ours or theirs.)
+    if (dirNow === 'inbound') {
+      const addQty = advQty.value || '1';
+      if (confirm('Print ' + addQty + ' AOT tag(s) for "' + j.sanitized + '"?')) {
+        try {
+          const g = await fetch('/inventory/api/generate_barcode', {
+            method:'POST', headers: xhrHeaders({ 'Content-Type':'application/json' }),
+            body: JSON.stringify({ category_id: Number(advCat.value), name: j.sanitized, weight_per_unit: Number(j.wpu) })
+          });
+          const gj = await g.json().catch(() => null);
+          if (!g.ok || !gj || gj.status !== 'ok') throw new Error((gj && gj.message) || 'AOT generation failed');
+          const pr = await fetch('/api/print/label', {
+            method:'POST', headers: xhrHeaders({ 'Content-Type':'application/json' }),
+            body: JSON.stringify({ print_type:'inventory', params: {
+              barcode: gj.barcode, name: j.sanitized, weight_per_unit: String(j.wpu),
+              qty: String(addQty), label_size: 'address', confirm_bulk: '1'
+            }})
+          });
+          const pj = await pr.json().catch(() => null);
+          if (!pr.ok || !pj || pj.ok !== true) throw new Error((pj && (pj.error || pj.message)) || ('HTTP ' + pr.status));
+          showToast(addQty + ' AOT tag(s) printing', 'success');
+        } catch (e) {
+          showToast('Tag printing failed: ' + e.message, 'error');
+        }
+      }
+    }
 
     /* ► any add = dirty, so allow Done */
     advDirty        = true;

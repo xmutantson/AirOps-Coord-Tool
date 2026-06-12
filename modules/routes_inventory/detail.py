@@ -168,35 +168,18 @@ def inventory_detail():
         except Exception:
             pass
 
-        # ---- Auto-generate barcode for items that lack one ----
+        # ---- Auto-generate AOT barcode for items that lack one ----
+        # AOT-filtered helper: a legacy UPC mapping for this item must not be
+        # reused here, or the tag-print offer below would print non-AOT tags.
         gen_barcode = None
         if True:  # generate for both inbound and outbound
             try:
-                from modules.routes_inventory.barcodes import _generate_barcode_id, _ensure_barcode_schema
+                from modules.routes_inventory.barcodes import _get_or_create_aot_mapping, _ensure_barcode_schema
                 _ensure_barcode_schema()
                 with sqlite3.connect(DB_FILE) as c:
                     c.row_factory = sqlite3.Row
-                    existing = c.execute(
-                        """SELECT barcode FROM inventory_barcodes
-                           WHERE category_id=? AND sanitized_name=?
-                             AND ABS(weight_per_unit - ?) < 0.001
-                             AND (deleted=0 OR deleted IS NULL)
-                           LIMIT 1""",
-                        (cat_id, noun, wpu_lbs),
-                    ).fetchone()
-                    if existing:
-                        gen_barcode = existing["barcode"]
-                    else:
-                        gen_barcode = _generate_barcode_id(cat_id, noun, wpu_lbs)
-                        now_bc = datetime.utcnow().isoformat()
-                        c.execute(
-                            """INSERT INTO inventory_barcodes(barcode, category_id,
-                                 sanitized_name, raw_name, weight_per_unit,
-                                 created_at, updated_at, deleted)
-                               VALUES (?,?,?,?,?,?,?,0)""",
-                            (gen_barcode, cat_id, noun, raw, wpu_lbs, now_bc, now_bc),
-                        )
-                        c.commit()
+                    gen_barcode, _created = _get_or_create_aot_mapping(c, cat_id, noun, wpu_lbs, raw)
+                    c.commit()
             except Exception as e:
                 logger.warning("Auto-barcode generation failed: %s", e)
 

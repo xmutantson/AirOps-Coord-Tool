@@ -2692,7 +2692,10 @@ def api_manifest_nudge(manifest_id: str):
     # NEW: barcode-only bodies → resolve to (name,wpu)
     barcode = (data.get('barcode') or '').strip()
     if barcode and (not name or wpu <= 0):
-        from modules.utils.common import lookup_barcode
+        from modules.utils.common import lookup_barcode, is_aot_barcode
+        # AOT-only scanning: reject foreign codes before any lookup
+        if not is_aot_barcode(barcode):
+            return jsonify(error='non_aot_barcode', code='NON_AOT_BARCODE'), 400
         it = lookup_barcode(barcode)
         if not it:
             return jsonify(error='unknown_barcode', code='UNKNOWN_BARCODE'), 404
@@ -2701,6 +2704,13 @@ def api_manifest_nudge(manifest_id: str):
 
     if not name or wpu <= 0:
         return jsonify(error='missing name/weight'), 400
+
+    # Nudges count as session activity for the 15-minute pending reaper
+    try:
+        from modules.utils.common import touch_pending_session
+        touch_pending_session(manifest_id)
+    except Exception:
+        pass
 
     now = datetime.utcnow().isoformat()
     with sqlite3.connect(DB_FILE) as c:
