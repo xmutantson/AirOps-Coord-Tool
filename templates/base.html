@@ -350,6 +350,46 @@
     return { disarm: function(){ try { window.removeEventListener('beforeunload', handler); } catch(_){} } };
   };
 
+  // ── "Is that a barcode?" content guard ───────────────────────────────────
+  // True when a string looks like a scanned code rather than a typed name: an
+  // AOT tag, or a mostly-numeric string with 6+ digits (UPC/EAN/warehouse).
+  window.looksLikeBarcode = function (s) {
+    s = String(s || '').trim();
+    if (!s) return false;
+    if (/^AOT-\d+-[0-9A-F]{6,12}(-[0-9A-F]{4})?$/i.test(s)) return true;
+    var digits = s.replace(/\D/g, '');
+    return digits.length >= 6 && /^[\s\d-]+$/.test(s);  // only digits/space/dash
+  };
+  // Attach a one-shot "did you mean to scan that?" guard to a NAME field (or,
+  // with {root, selector}, to matching fields via delegation for dynamic rows).
+  // On blur, if the value looks like a barcode the operator confirms; declining
+  // clears the field. Accepting a specific value is remembered so it won't nag
+  // again for that same value.
+  window.attachBarcodeNameGuard = function (target, opts) {
+    opts = opts || {};
+    var label = opts.label || 'an item name';
+    function check(el) {
+      if (!el || el.dataset.bcGuardBusy) return;
+      var v = String(el.value || '').trim();
+      if (!window.looksLikeBarcode(v)) { el.dataset.bcGuardOkFor = ''; return; }
+      if (el.dataset.bcGuardOkFor === v) return;   // already accepted this value
+      el.dataset.bcGuardBusy = '1';
+      var keep = confirm('"' + v + '" looks like a barcode, not ' + label + '.\n\n'
+        + 'Barcodes are scanned, not typed here. Keep this value anyway?');
+      el.dataset.bcGuardBusy = '';
+      if (keep) { el.dataset.bcGuardOkFor = v; }
+      else { el.value = ''; try { el.focus(); } catch (_) {} }
+    }
+    if (opts.root && typeof target === 'string') {
+      opts.root.addEventListener('focusout', function (e) {
+        var el = e.target && e.target.closest ? e.target.closest(target) : null;
+        if (el) check(el);
+      });
+    } else if (target && target.addEventListener) {
+      target.addEventListener('blur', function () { check(target); });
+    }
+  };
+
   async function beat(){
     const ctrl = new AbortController();
     const tid  = setTimeout(()=>ctrl.abort(), TIMEOUT_MS);

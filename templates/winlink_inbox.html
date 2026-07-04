@@ -844,6 +844,10 @@ document.addEventListener('DOMContentLoaded', function () {
     if (wlIntakeDirty(panel, panel && panel.style.display !== 'none')) return true;
     return wlIntakeDirty(gDlg, gDlg && gDlg.open);
   });
+
+  // "That looks like a barcode" guard on the item-name cells of both intake
+  // surfaces (dynamic rows) via delegation.
+  try { if (window.attachBarcodeNameGuard) window.attachBarcodeNameGuard('.wl-name', { root: document }); } catch(_){}
 });
 </script>
 {% endblock %}

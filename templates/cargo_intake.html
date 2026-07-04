@@ -214,6 +214,9 @@ const SERVER_SOURCE_ID = {{ (source_email_id|tojson) if source_email_id is not n
                   .some(el => String(el.value || '').trim() !== '');
     } catch(_) { return false; }
   });
+
+  // "That looks like a barcode" guard on the item-name cells (dynamic rows).
+  try { if (window.attachBarcodeNameGuard) window.attachBarcodeNameGuard('.wl-name', { root: rowsWrap }); } catch(_){}
 })();
 </script>
 {% endblock %}

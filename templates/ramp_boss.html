@@ -2124,6 +2124,9 @@
   const advDirOut  = document.getElementById('adv-dir-out');
   const advDirIn   = document.getElementById('adv-dir-in');
   const advName    = document.getElementById('adv-name');
+  // "That looks like a barcode" guard: a scanned code typed into the manual
+  // item-name field goes in the scan box, not here.
+  try { if (advName && window.attachBarcodeNameGuard) window.attachBarcodeNameGuard(advName); } catch(_){}
   const advWeight  = document.getElementById('adv-weight');
   const advWunit   = document.getElementById('adv-wunit');
   const advQty     = document.getElementById('adv-qty');
@@ -3275,7 +3278,7 @@
       })();
       try { await window._rbScanRefreshing; } finally { window._rbScanRefreshing = null; }
     }
-    async function scan(barcode){
+    async function scan(barcode, confirmDup){
       if (scanBusy) return;
       // NEW: micro de-dup for twitchy scanners
       const now = Date.now();
@@ -3352,6 +3355,7 @@
           };
         }
         const p = { barcode, mode, dir: isInbound ? 'in' : 'out' };
+        if (confirmDup) p.confirm_dup = 1;   // operator OK'd adding on top of the tail lookup
         // Use draft_id exactly once to seed from queued snapshot.
         if (typeof window.draftId !== 'undefined' && window.draftId && !RB_DRAFT_SEEDED){
           p.draft_id = Number(window.draftId);
@@ -3390,6 +3394,17 @@
           setFB(`Scan error (${resp.status})`, 'scan-err', 2500);
         }
         scanBusy = false; return;
+      }
+
+      // Duplication guard: server says this item was already added by the tail
+      // lookup, so nothing was added yet. Confirm once, then re-scan to add.
+      if (j && j.status === 'dup_confirm') {
+        scanBusy = false;
+        const nm = (j.item && j.item.sanitized_name) || 'This item';
+        const ok = confirm('"' + nm + '" is already on this manifest from the tail-number lookup (x' + j.lookup_qty + ').\n\nScanning adds another on top. Add anyway?');
+        if (ok) { lastScan = { code:'', t:0 }; scan(barcode, true); }
+        else { setFB('Skipped - already added from the tail lookup', 'scan-warn', 3000); }
+        return;
       }
 
       // Mark draft seeded once we successfully used it on /scan path

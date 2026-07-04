@@ -881,6 +881,12 @@
   if (createEl) {
     const saveBtn = createEl.querySelector('#u_save');
     const cancelBtn = createEl.querySelector('#u_cancel');
+    // "That looks like a barcode" guard: the new-item NAME field is for a name,
+    // not the scanned code (which is captured separately as the barcode).
+    try {
+      const uNameEl = createEl.querySelector('#u_name');
+      if (uNameEl && window.attachBarcodeNameGuard) window.attachBarcodeNameGuard(uNameEl);
+    } catch(_){}
     if (saveBtn) saveBtn.onclick = async () => {
       const unitEl = createEl.querySelector('#u_unit');
       const unit   = (unitEl && unitEl.value ? unitEl.value : '').toLowerCase();

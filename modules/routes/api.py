@@ -181,6 +181,32 @@ def api_manifest_scan(mid: str):
     if not item:
         return jsonify({'status':'unknown'}), 404
 
+    # --- Duplication guard: this item was already added by the tail-number
+    # lookup (source='adv-detect') in this session, and now it's being scanned
+    # too -> the quantity would silently double. Warn before adding. The client
+    # re-sends with confirm_dup=1 to add anyway. Only fires for ADDs and only
+    # until the operator confirms once for this scan.
+    confirm_dup = str(data.get('confirm_dup') or '').strip().lower() in ('1', 'true', 'yes')
+    if mode == 'add' and not confirm_dup:
+        dup = dict_rows("""
+          SELECT COALESCE(SUM(quantity),0) AS q
+            FROM inventory_entries
+           WHERE session_id=? AND source='adv-detect' AND direction='in'
+             AND category_id=? AND LOWER(sanitized_name)=LOWER(?)
+             AND CAST(weight_per_unit AS REAL)=CAST(? AS REAL)
+        """, (mid, item['category_id'], item['sanitized_name'], item['weight_per_unit']))
+        dup_q = int(dup[0]['q'] or 0)
+        if dup_q > 0:
+            return jsonify({
+                'status': 'dup_confirm',
+                'lookup_qty': dup_q,
+                'item': {
+                    'category_id': item['category_id'],
+                    'sanitized_name': item['sanitized_name'],
+                    'weight_per_unit': item['weight_per_unit'],
+                },
+            }), 200
+
     # --- Pre-check: what's the current net qty for this item? -------------
     # Enforce spec: if toggle is Remove and item isn't on the manifest, do nothing.
     pre_chips = aggregate_manifest_net(
