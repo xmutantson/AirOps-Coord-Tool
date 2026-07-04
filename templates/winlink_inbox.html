@@ -824,6 +824,26 @@ document.addEventListener('DOMContentLoaded', function () {
     });
     window.addEventListener('mouseup', () => { dragging = false; });
   })();
+
+  // Unsaved-work guard: the inline panel and the global dialog each build a
+  // cargo manifest (airport + priority + item rows + optional WebEOC paste) in
+  // the DOM, persisted only on Submit Cargo Intake. Warn before reload/close.
+  // Arms only when a surface is OPEN with real content; the 30s inbox refresh
+  // is AJAX (no navigation) so it never trips this.
+  function wlIntakeDirty(scopeEl, open){
+    if (!scopeEl || !open) return false;
+    const ap = scopeEl.querySelector('input.force-upper');
+    if (ap && String(ap.value||'').trim() !== '') return true;
+    if (Array.from(scopeEl.querySelectorAll('.wl-name, .wl-weight'))
+             .some(el => String(el.value||'').trim() !== '')) return true;
+    const web = scopeEl.querySelector('textarea');
+    return !!(web && String(web.value||'').trim() !== '');
+  }
+  window.armUnsavedGuard('winlink-intake', () => {
+    const panel = document.getElementById('wl-intake-panel');
+    if (wlIntakeDirty(panel, panel && panel.style.display !== 'none')) return true;
+    return wlIntakeDirty(gDlg, gDlg && gDlg.open);
+  });
 });
 </script>
 {% endblock %}

@@ -226,6 +226,20 @@
     }
   });
 
+  // Unsaved-work guard: the 5-field staff profile is typed fresh and held only
+  // in the DOM until 'Add' (AJAX), after which addForm.reset() clears it. Warn
+  // before a reload/nav loses it. The window-select AJAX reload is not a
+  // navigation, and the pendingStaffProfile bridge uses requestSubmit()
+  // (programmatic submit does not trip beforeunload), so neither over-fires.
+  if (addForm) {
+    window.armUnsavedGuard('staff-add', () =>
+      ['name','organization','emc','email','phone'].some(n => {
+        const el = addForm.querySelector('[name="'+n+'"]');
+        return el && String(el.value||'').trim() !== '';
+      })
+    );
+  }
+
   // Load global flow triggers (pilot/volunteer confirm + labels toasts)
   // This is safe to include more than once; it self-guards.
   </script>

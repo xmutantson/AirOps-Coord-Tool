@@ -163,5 +163,29 @@
       el.value = `${y}-${m}-${d}`;
     } catch(_) {}
   })();
+
+  // Unsaved-work guard: ~18 pilot/aircraft/contact fields typed fresh (prefill.*
+  // only echoes back on a validation-error re-render, so a plain reload/close
+  // loses everything). Snapshot AFTER the on-load auto-fills above run
+  // (reviewed_by from localStorage, review date defaulted to today) so those
+  // do NOT read as dirty; disarm on the Save & Print submit.
+  (function(){
+    const form = document.querySelector('form[action="{{ url_for('aircraft.aircraft_new_post') }}"]') || document.querySelector('form');
+    if (!form) return;
+    let submitting = false;
+    form.addEventListener('submit', () => { submitting = true; });
+    function serialize(){
+      const parts = [];
+      form.querySelectorAll('input, select, textarea').forEach(el => {
+        if (el.type === 'hidden') return;
+        if (el.type === 'checkbox' || el.type === 'radio') parts.push((el.name||'')+'#'+(el.checked ? (el.value||'on') : ''));
+        else parts.push((el.name||'')+'='+String(el.value||''));
+      });
+      return parts.join('|');
+    }
+    let snap = null;
+    setTimeout(() => { try { snap = serialize(); } catch(_) { snap = null; } }, 0);
+    window.armUnsavedGuard('pai-form', () => !submitting && snap !== null && serialize() !== snap);
+  })();
 </script>
 {% endblock %}

@@ -89,6 +89,7 @@
   const btnBack   = document.getElementById('checkin-back');
   const statusDiv = document.getElementById('checkin-status');
   const instructions = document.getElementById('checkin-instructions');
+  let stage2Done = false;  // set once the profile save succeeds (disarms guard)
 
   function showStatus(msg, type) {
     statusDiv.textContent = msg;
@@ -230,6 +231,7 @@
         console.log('[checkin] staff_new data:', data);
 
         if (data && data.ok && data.staff_id) {
+          stage2Done = true;  // saved - the pending window.location redirect is intentional
           // Now clock them in
           showStatus('Profile created! Clocking in...', 'info');
           try {
@@ -308,6 +310,17 @@
 
   // Auto-focus name field
   setTimeout(()=>document.getElementById('ci-name')?.focus(), 100);
+
+  // Unsaved-work guard: Stage 2 collects 4 typed fields + affiliation from
+  // scratch (only Name carries over). Warn before a reload/close loses them.
+  // Only arms while Stage 2 is visible with real content; Back hides Stage 2
+  // (predicate false) and a successful save sets stage2Done.
+  window.armUnsavedGuard('checkin-stage2', () => {
+    if (stage2Done || !form2 || form2.style.display === 'none') return false;
+    if (['ci2-organization','ci2-emc','ci2-email','ci2-phone']
+          .some(id => (document.getElementById(id)?.value||'').trim() !== '')) return true;
+    return !!document.querySelector('input[name="affiliation"]:checked');
+  });
 })();
 </script>
 {% endblock %}

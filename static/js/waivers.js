@@ -25,6 +25,15 @@
     return;
   }
 
+  // ---------- unsaved-work guard ----------
+  // A completed waiver = printed name + date + tapped initials + up to TWO
+  // hand-drawn signatures (signer + witness), all held in the DOM until the
+  // '#print-submit' fetch POST. Losing it means redrawing signatures (possibly
+  // re-assembling a witness) - high-cost. waiverDirty is set ONLY by real user
+  // actions (accept a signature, tap an initial, type printed/date); the
+  // server-adopt path that re-hydrates an existing signature does NOT set it.
+  let waiverDirty = false, waiverSubmitting = false;
+
   // ---------- initials helpers ----------
   function deriveInitials(name) {
     if (!name) return '';
@@ -49,6 +58,7 @@
     window.__waiverInitialsMap = window.__waiverInitialsMap || {};
     const key = (chip.id || '').replace(/[^\d]/g,'') || chip.id || '';
     if (key) window.__waiverInitialsMap[key] = initials;
+    waiverDirty = true;
     refreshGate();
   }
 
@@ -244,6 +254,7 @@
 
       modal.style.display = 'none';
       currField = null;
+      waiverDirty = true;   // a signature was drawn & accepted
       refreshGate();
     });
   }
@@ -432,6 +443,10 @@
     // Ask if they want to print
     const wantPrint = confirm('Do you want to print this waiver?');
 
+    // The work is now being persisted; disarm the guard so the button-swap
+    // navigation to the next step (window.location.href=nextUrl below) is silent.
+    waiverSubmitting = true;
+
     // Submit to server (saves PDF regardless)
     submitWaiverToServer().catch(()=>{});
 
@@ -472,4 +487,13 @@
       btn.onclick = () => { window.location.href = nextUrl; };
     } catch(_) {}
   });
+
+  // Track typed printed-name / date as dirty (signatures & initials already do).
+  ['pilot_printed','vol_printed','pilot_date','vol_date'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', () => { waiverDirty = true; });
+  });
+  // Guard: warn before a reload / back-swipe / nav-link loses the in-progress
+  // waiver; silent once submit has started (window.print() does not navigate).
+  window.armUnsavedGuard('waiver', () => waiverDirty && !waiverSubmitting);
 })();

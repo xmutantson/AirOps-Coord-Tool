@@ -84,12 +84,19 @@
     const rOut = document.getElementById('dir-out');
     if (rIn && rOut) { rIn.checked = wantIn; rOut.checked = !wantIn; }
   })();
+  // Unsaved-work tracking. This page reloads itself constantly (reset/cancel/esc
+  // and after a quick-post), so the guard MUST be bypassed before every such
+  // reload or it would nag on the normal scan loop. Dirty is tracked via input
+  // events so app-driven prefills (prefillInventoryForm) never arm it.
+  let invFormDirty = false, createDirty = false, scanReloading = false;
+
   // one-shot reset (looks like closing the scan UI) — preserve direction for the reload
   const resetAll = () => {
     // Clear the input so browsers don't restore stale digits on reload
     clearScanBox();
     try { sessionStorage.setItem(RESET_FLAG, '1'); } catch(_){}
     saveDirOnce(getScanDir());
+    scanReloading = true;   // intentional reload — suppress the unsaved-work guard
     window.location.reload();
   };
 
@@ -466,6 +473,7 @@
               }
             }
           }
+          scanReloading = true;   // intentional reload — suppress the unsaved-work guard
           window.location.reload();
         }
         else setStatus('Failed to post transaction','err');
@@ -545,6 +553,7 @@
       unitSel.value = '';
     }
     createEl.hidden = false;
+    createDirty = false;   // fresh card: fields are blanked below programmatically
     const isCreate = (mode === 'aot-create');
     aotInstead = isCreate;
     createEl.querySelector('#u_barcode').value = isCreate ? '(generated on save)' : code;
@@ -934,4 +943,19 @@
   if (invForm) {
     invForm.addEventListener('submit', () => { try { saveDirOnce(getScanDir()); } catch {} });
   }
+
+  // Unsaved-work guard for the scan page: the unknown/AOT create-item card
+  // defines a brand-new item, and the manual inventory-add form holds a typed
+  // entry - both only in the DOM until saved. Dirty is tracked via input events
+  // so scanner-driven prefills don't arm it, and every intentional reload sets
+  // scanReloading first so the routine scan loop never nags.
+  if (createEl) createEl.addEventListener('input', () => { createDirty = true; });
+  if (invForm)  invForm.addEventListener('input',  () => { invFormDirty = true; });
+  if (invForm)  invForm.addEventListener('submit', () => { invFormDirty = false; });
+  if (window.armUnsavedGuard) window.armUnsavedGuard('inventory-scan', () => {
+    if (scanReloading) return false;
+    if (createEl && createEl.hidden === false && createDirty) return true;
+    if (invFormDirty && invForm && invForm.style.display !== 'none') return true;
+    return false;
+  });
 })();

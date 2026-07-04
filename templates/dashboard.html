@@ -549,6 +549,17 @@
         if (r.ok) { closeModal(); window.showToast?.('Okay — we won’t ask again for a while.', 'info'); }
       } catch(_) {}
     });
+
+    // Unsaved-work guard for the dashboard Check-In modal's Stage 2 (twin of the
+    // standalone /checkin page). Arms only while Stage 2 is on-screen with typed
+    // content; closeModal() removes the backdrop (st2 detaches), which disarms it
+    // on every success/close path before any intentional redirect.
+    window.armUnsavedGuard('dashboard-checkin', () => {
+      if (!st2 || !st2.isConnected || st2.style.display === 'none') return false;
+      if (['ci2-organization','ci2-emc','ci2-email','ci2-phone']
+            .some(id => (document.getElementById(id)?.value||'').trim() !== '')) return true;
+      return !!document.querySelector('#checkin-stage2 input[name="affiliation"]:checked');
+    });
   })();
 </script>
 {% endif %}

@@ -104,6 +104,21 @@
         rows.removeChild(rows.children[start]);
       }
     });
+
+    // Unsaved-work guard: fresh emergency intake (only the timestamp is
+    // prefilled) plus an arbitrarily long hand-built damage list + notes,
+    // persisted only on Save Red Flight. Warn before reload / Cancel / Back
+    // loses it. Fires when anything beyond the prefilled timestamp is filled.
+    const form = document.querySelector('form[action$="red_flight_submit"], form[method="post"]');
+    let submitting = false;
+    form && form.addEventListener('submit', () => { submitting = true; });
+    const val = (sel) => (document.querySelector(sel)?.value || '').trim();
+    window.armUnsavedGuard('red-flight', () => {
+      if (submitting) return false;
+      if (val('#rf-origin') || val('#rf-area') || val('#rf-lat') || val('#rf-lon') || val('#rf-notes')) return true;
+      return Array.from(document.querySelectorAll('input[name="infra_name[]"], input[name="infra_damage[]"]'))
+                  .some(i => String(i.value||'').trim() !== '');
+    });
   })();
 </script>
 {% endblock %}

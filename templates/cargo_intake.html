@@ -201,6 +201,19 @@ const SERVER_SOURCE_ID = {{ (source_email_id|tojson) if source_email_id is not n
 
   // Initial prefill
   loadFromQueryAndDraft();
+
+  // Unsaved-work guard: 'queue is the save button' in its purest form - the
+  // airport + multi-row item list live only in the DOM until Submit. The
+  // cargo_intake_draft key is only read/removed, never written, so nothing is
+  // recoverable on reload. Scans RAW row content (name OR weight typed) so a
+  // half-filled row still counts; a successful submit resets the rows, which
+  // disarms it. Airport alone is not flagged (single, often-prefilled field).
+  window.armUnsavedGuard('cargo-intake', () => {
+    try {
+      return Array.from(rowsWrap.querySelectorAll('.wl-name, .wl-weight'))
+                  .some(el => String(el.value || '').trim() !== '');
+    } catch(_) { return false; }
+  });
 })();
 </script>
 {% endblock %}

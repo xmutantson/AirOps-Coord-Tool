@@ -203,6 +203,10 @@
   btnCopyS.addEventListener('click', ()=> copyText(subjEl.value, fbS));
   btnCopyB.addEventListener('click', ()=> copyText(bodyEl.value, fbB));
 
+  // True once a hand-reconstructed message has been inserted into #incoming-form
+  // but not yet sent - keeps the unsaved-work guard armed after the modal closes.
+  let corrInserted = false;
+
   // Insert into Log Incoming form (does not submit)
   btnInsert.addEventListener('click', ()=>{
     const form = document.getElementById('incoming-form');
@@ -212,8 +216,11 @@
     s.value = subjEl.value;
     b.value = bodyEl.value;
     b.dispatchEvent(new Event('input', { bubbles:true })); // auto-resize
+    corrInserted = true;   // reconstructed text now sits unsent in the incoming form
     modal.style.display = 'none';
     form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // Sending/clearing the incoming form releases the guard.
+    form.addEventListener('submit', () => { corrInserted = false; }, { once: true });
   });
 
   // Build & Re-parse (programmatically submit)
@@ -227,6 +234,7 @@
     b.dispatchEvent(new Event('input', { bubbles:true }));
     // mark that this is a correction re-try; the page script checks this
     window._corrPending = true;
+    corrInserted = false;   // being submitted now - not lost
     modal.style.display = 'none';
     // programmatic submit (uses the same AJAX handler already bound)
     form.requestSubmit ? form.requestSubmit() : form.submit();
@@ -266,4 +274,25 @@
     btn.addEventListener('click', ()=> openModal('airops_flight'));
     header.appendChild(btn);
   })();
+
+  // Unsaved-work guard: the correction modal exists because an inbound paste
+  // failed to auto-parse, so the operator rebuilds a flight/cargo message
+  // field-by-field. Warn before a reload / nav-link / tab-close loses it -
+  // while the modal is open with typed builder content, or after Insert has
+  // placed reconstructed (unsent) text into the incoming form.
+  window.armUnsavedGuard('radio-correction', () => {
+    const modalOpen = modal && modal.style.display !== 'none';
+    if (modalOpen) {
+      const anyBuilder = Array.from(document.querySelectorAll('.corr-forms input, .corr-forms textarea'))
+                              .some(el => String(el.value||'').trim() !== '');
+      if (anyBuilder) return true;
+      if ((subjEl && String(subjEl.value||'').trim() !== '') ||
+          (bodyEl && String(bodyEl.value||'').trim() !== '')) return true;
+    }
+    if (corrInserted) {
+      const b = document.getElementById('incoming-form')?.querySelector('textarea[name="body"]');
+      return !!(b && String(b.value||'').trim() !== '');
+    }
+    return false;
+  });
 })();

@@ -328,6 +328,28 @@
   window.__NAVIGATING_AWAY = false;
   window.addEventListener('beforeunload', ()=> { window.__NAVIGATING_AWAY = true; });
 
+  // ── Shared "unsaved work" guard ──────────────────────────────────────────
+  // Registers ONE beforeunload listener that shows the browser's "Leave site?"
+  // prompt only when the caller's isDirty() predicate returns truthy. Each
+  // surface owns its predicate (its own "has unsaved content AND not currently
+  // submitting" logic). IMPORTANT: the guard must NOT read __NAVIGATING_AWAY --
+  // this head listener sets that flag true on every unload BEFORE any page
+  // guard runs, so a guard that bypassed on it would never fire. Suppress
+  // intentional navigation by making isDirty() go false first (a submitting
+  // flag, or clearing the fields), not via the global flag. Returns a handle
+  // with .disarm() to remove the listener entirely.
+  window.armUnsavedGuard = function (name, isDirty) {
+    if (typeof isDirty !== 'function') return { disarm: function(){} };
+    var handler = function (e) {
+      var dirty = false;
+      try { dirty = !!isDirty(); } catch (_) { dirty = false; }
+      if (dirty) { e.preventDefault(); e.returnValue = ''; return ''; }
+      return undefined;
+    };
+    window.addEventListener('beforeunload', handler);
+    return { disarm: function(){ try { window.removeEventListener('beforeunload', handler); } catch(_){} } };
+  };
+
   async function beat(){
     const ctrl = new AbortController();
     const tid  = setTimeout(()=>ctrl.abort(), TIMEOUT_MS);

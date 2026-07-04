@@ -157,6 +157,22 @@
         } catch(_){}
       }, 200);
     });
+
+    // Unsaved-work guard: mapping rows + 6 CC addresses + defaults live only in
+    // the DOM until 'Save & Finish'. Snapshot on load; warn on any change
+    // (typed field, or an added/removed row). A clean prefilled rerun load
+    // matches the snapshot, so it stays silent until the operator edits.
+    const wform = document.getElementById('setup-wizard-form');
+    if (wform) {
+      let submitting = false;
+      wform.addEventListener('submit', () => { submitting = true; });
+      const serialize = () => Array.from(wform.querySelectorAll('input, select'))
+        .filter(el => el.type !== 'hidden')
+        .map(el => (el.name||'')+'='+String(el.value||'')).join('|');
+      let snap = null;
+      setTimeout(() => { try { snap = serialize(); } catch(_) { snap = null; } }, 0);
+      window.armUnsavedGuard('setup-wizard', () => !submitting && snap !== null && serialize() !== snap);
+    }
   })();
   </script>
 {% endif %}

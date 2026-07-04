@@ -74,6 +74,7 @@
   const addBtn    = document.getElementById('add-mapping');
   const container = document.getElementById('airport-mappings');
   if (!addBtn || !container) return;
+  let _dirty = false;  // unsaved-changes flag for the beforeunload guard
 
   addBtn.addEventListener('click', () => {
     const template = container.querySelector('.mapping-row').cloneNode(true);
@@ -81,11 +82,13 @@
     const prev = template.querySelector('.airport-warn');
     if (prev) prev.remove();
     container.appendChild(template);
+    _dirty = true;  /* structural add fires no input event */
   });
 
   container.addEventListener('click', (e) => {
     if (e.target.matches('.remove-mapping') && container.children.length > 1) {
       e.target.closest('.mapping-row').remove();
+      _dirty = true;  /* removing a populated row is a real unsaved edit */
     }
   });
 
@@ -117,13 +120,10 @@
   });
 
   // Warn on unsaved changes when navigating away
-  let _dirty = false;
   document.getElementById('mappings-form').addEventListener('input', () => { _dirty = true; });
   document.getElementById('mappings-form').addEventListener('change', () => { _dirty = true; });
   document.getElementById('mappings-form').addEventListener('submit', () => { _dirty = false; });
-  window.addEventListener('beforeunload', (e) => {
-    if (_dirty) { e.preventDefault(); e.returnValue = ''; }
-  });
+  window.armUnsavedGuard('winlink-settings', () => _dirty);
 })();
 </script>
 

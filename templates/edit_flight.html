@@ -140,6 +140,32 @@
     updatePrevMax();
   });
 })();
+
+// Unsaved-work guard: prefilled edit form, so only the operator's DELTA is at
+// risk (corrected cargo weight, remarks, etc.). Dirty-armed off a load-time
+// snapshot; disarms on either the Save or the Delete submit (both intentional).
+// Stays armed for the 'Back to Dashboard' button (accidental-loss exit).
+(function(){
+  const editForm = document.querySelector('.ramp-form-container form:not([action])');
+  if (!editForm) return;
+  let submitting = false;
+  function serialize(){
+    const parts = [];
+    editForm.querySelectorAll('input, select, textarea').forEach(el => {
+      if (el.type === 'hidden') return;
+      if (el.type === 'checkbox' || el.type === 'radio')
+        parts.push((el.name||'')+'#'+el.type+'='+(el.checked ? (el.value||'on') : ''));
+      else parts.push((el.name||'')+'='+String(el.value||''));
+    });
+    return parts.join('|');
+  }
+  let snapshot = null;
+  setTimeout(() => { try { snapshot = serialize(); } catch(_) { snapshot = null; } }, 0);
+  editForm.addEventListener('submit', () => { submitting = true; });
+  document.querySelectorAll('.ramp-form-container form[action]')
+          .forEach(f => f.addEventListener('submit', () => { submitting = true; }));
+  window.armUnsavedGuard('edit-flight', () => !submitting && snapshot !== null && serialize() !== snapshot);
+})();
 </script>
 
 {% endblock %}

@@ -57,6 +57,25 @@
     </div>
   </form>
 
+  <script>
+  (function(){
+    // Unsaved-work guard: a hand-composed Winlink message (recipients + subject +
+    // long body) is typed fresh and persists only on the Send POST. Warn before a
+    // reload / tab-close / mis-clicked Back link loses it. Only the compose form
+    // exists here (the password-gate variant is a different render), so scope to it.
+    const to   = document.getElementById('compose-to');
+    const subj = document.getElementById('compose-subject');
+    const body = document.getElementById('compose-body');
+    if (!body) return;  // password-gate variant has no #compose-body
+    const form = body.closest('form');
+    if (!form) return;
+    let submitting = false;
+    form.addEventListener('submit', () => { submitting = true; });
+    const has = (el) => !!(el && String(el.value||'').trim());
+    window.armUnsavedGuard('winlink-compose', () => !submitting && (has(body) || has(subj) || has(to)));
+  })();
+  </script>
+
   {# ── Send Log ──────────────────────────────────────── #}
   {% if send_log %}
   <hr style="margin:2rem 0 1rem;">

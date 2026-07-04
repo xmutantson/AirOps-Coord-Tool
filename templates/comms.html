@@ -55,6 +55,27 @@
   </div>
 </form>
 
+<script>
+(function(){
+  // Unsaved-work guard: the comms Quick Add holds a transcribed radio/phone/SAT
+  // message (free-text body + notes across several fields) only in the DOM until
+  // the Quick Add POST. Warn before a reload/back loses it. Ignores the prefilled
+  // timestamp and the default-'' direction select.
+  const form = document.querySelector('form.quick-add');
+  if (!form) return;
+  let submitting = false;
+  form.addEventListener('submit', () => { submitting = true; });
+  const names = ['method','from_party','to_party','subject','body','notes'];
+  window.armUnsavedGuard('comms-quickadd', () => {
+    if (submitting) return false;
+    return names.some(n => {
+      const el = form.querySelector('[name="'+n+'"]');
+      return el && String(el.value||'').trim() !== '';
+    });
+  });
+})();
+</script>
+
 <form method="get" action="{{ url_for('comms.comms_index') }}" class="filters" style="display:flex; gap:.75rem; flex-wrap:wrap; align-items:end; margin: .5rem 0 1rem;">
   <div>
     <label for="window">Window</label><br>

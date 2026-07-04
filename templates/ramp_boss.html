@@ -307,7 +307,11 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <!-- these hidden fields power the Advanced panel -->
       <input type="hidden" id="advanced-mode" name="advanced" value="0">
-      <input type="hidden" id="manifest-id"  name="manifest_id" value="{{ d.get('manifest_id','') }}">
+      {# `or ''` not a .get default: .get only defaults when the KEY is absent.
+         A draft row with manifest_id NULL renders 'None' otherwise, and JS
+         treats 'None' as a real session id - the 2026-06-12 drill put every
+         edited draft into one shared session literally named 'None'. #}
+      <input type="hidden" id="manifest-id"  name="manifest_id" value="{{ d.get('manifest_id') or '' }}">
 
       {# ---------------- Prefill helper ---------------- #}
       {% set dir_prefill = d.get('direction','outbound') %}
@@ -333,6 +337,15 @@
         <input type="radio" id="dir-in"  name="direction" value="inbound"
                {% if dir_prefill == 'inbound' %}checked{% endif %}>
         <label for="dir-in">Inbound</label>
+      </div>
+
+      {# Steering: warehouse work does not belong on this form. The 2026-06-12
+         drill crew tried to receive stock here (there is no aircraft in that
+         workflow) and fought the flight-oriented UI for an hour. #}
+      <div class="muted" style="border:1px solid #cfe3ff;background:#f2f8ff;border-radius:8px;padding:.45rem .7rem;margin:.5rem 0;font-size:.9em;">
+        <strong>Ramp Boss = cargo moving on/off an aircraft.</strong>
+        Receiving deliveries or staging warehouse stock (no plane involved)?
+        Use <a href="{{ url_for('inventory.inventory_detail') }}">Inventory &raquo; Scan</a> instead.
       </div>
 
       <!-- tail number + lookup -->
@@ -848,6 +861,12 @@
     const rbAckTs     = document.getElementById('rb-ack-ts');
     const rbPdfLink   = document.getElementById('rb-manifest');
     const manifestId  = document.getElementById('manifest-id');
+    // Defense-in-depth vs the Jinja-None poison: if any render path ever puts
+    // a literal 'None'/'null' in the hidden field again, blank it here so the
+    // session-mint guards (`if (!manifestId.value)`) work as intended.
+    if (manifestId && /^(none|null|undefined)$/i.test((manifestId.value || '').trim())) {
+      manifestId.value = '';
+    }
     const csrfToken   = document.querySelector('input[name="csrf_token"]').value;
     // Centralized headers for XHR/CSRF (aligns with backend CSRF expectations)
     function xhrHeaders(extra = {}) {
@@ -1830,6 +1849,7 @@
 
       /* ── If back-end told us where to go, honour it and bail ───────────── */
       if (j?.redirect){
+          window.__RB_INTENTIONAL_NAV = true;  /* don't trip the unsaved-manifest guard */
           window.location = j.redirect;
           return;
       }
@@ -1933,6 +1953,52 @@
     });
 
 
+
+    /* ── Unsaved-work guard: THE QUEUE IS THE SAVE BUTTON. ──────────────────
+       Everything typed here (main flight fields, the advanced-manifest chips,
+       and the Cargo-Weight running total) lives only in the DOM until Add To
+       Queue / SEND NOW. Navigating away loses it - exactly how the 2026-06-12
+       drill lost a correct 374 lb manifest. Covers BOTH the plain quick-flight
+       path (no manifest opened -> zero chips) and the advanced path.
+       NOTE: does NOT read __NAVIGATING_AWAY (base.html flips that true on every
+       unload before this runs); suppression is via rbSubmitting / the app's own
+       __RB_INTENTIONAL_NAV, and the fields going blank on a successful reset. */
+    function rbSerializeMainForm(){
+      if (!form) return '';
+      const parts = [];
+      ['tail_number','pilot_name','pax_count','cargo_type','cargo_weight',
+       'remarks','flight_code','travel_h','travel_m'].forEach(n => {
+        const el = form.querySelector('[name="'+n+'"]');
+        parts.push(n+'='+(el ? String(el.value||'').trim() : ''));
+      });
+      /* origin/destination auto-fill to defaultOrigin - only count a real change */
+      ['origin','destination'].forEach(n => {
+        const el = form.querySelector('[name="'+n+'"]');
+        const v = el ? String(el.value||'').trim() : '';
+        parts.push(n+'='+((v && v !== defaultOrigin) ? v : ''));
+      });
+      return parts.join('|');
+    }
+    let rbFormSnapshot = null;
+    /* Snapshot after synchronous init (applyDirUI auto-fills origin) settles. */
+    setTimeout(() => { try { rbFormSnapshot = rbSerializeMainForm(); } catch(_) { rbFormSnapshot = ''; } }, 0);
+    function rbHasUnsavedChips(){
+      const lines = document.getElementById('adv-lines');
+      if (!(lines && lines.querySelectorAll('.adv-chip').length)) return false;
+      if (isEditDraft) { try { return (typeof advDirty !== 'undefined') && !!advDirty; } catch(_) { return false; } }
+      return true;  /* fresh session: any chip is unsaved */
+    }
+    function rbRunningTotalActive(){
+      try { if (typeof totalCargo !== 'undefined' && Number(totalCargo) > 0) return true; } catch(_){}
+      const h = document.getElementById('cw-history');
+      return !!(h && h.children && h.children.length);
+    }
+    window.armUnsavedGuard('ramp-boss', () => {
+      if (rbSubmitting || window.__RB_INTENTIONAL_NAV) return false;
+      if (rbHasUnsavedChips()) return true;
+      if (rbRunningTotalActive()) return true;
+      return (rbFormSnapshot !== null && rbSerializeMainForm() !== rbFormSnapshot);
+    });
 
     /* ───────────────── Cargo‑Weight mini‑panel ───────────────── */
     const cwPanel   = document.getElementById('cargo-tools-panel');

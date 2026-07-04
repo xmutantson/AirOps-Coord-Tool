@@ -225,7 +225,9 @@
         const mapped = MAP[canon] || MAP[(air.value||'').trim().toUpperCase()] || '';
         if (mapped && !toEl.value.trim()) toEl.value=mapped;
       }
+      let qSent = false;  // set true after a successful send (disarms the guard)
       function openModal(){
+        qSent = false;
         overlay.style.display='flex';
         // Don’t default to our own origin; avoid accidental self-targets
         air.value = selectedDropdownAirport() || '';
@@ -273,8 +275,17 @@
           return;
         }
         const ok = !!j.ok;
-        if (ok){ flash.textContent='✅ AOCT query sent via PAT.'; setTimeout(()=>flash.textContent='', 5000); }
+        if (ok){ qSent = true; flash.textContent='✅ AOCT query sent via PAT.'; setTimeout(()=>flash.textContent='', 5000); }
         else { alert('PAT send failed (check PAT config and recipient).'); }
+      });
+
+      // Unsaved-work guard: the compose modal holds a typed categories list plus
+      // destination callsign(s), persisted only on 'Send via PAT'. Warn before a
+      // reload/close loses it. Only arms while the modal is open with typed
+      // content (the prefilled airport doesn't count); silent once sent or closed.
+      window.armUnsavedGuard('remote-aoct-query', () => {
+        if (qSent || !overlay || overlay.style.display !== 'flex') return false;
+        return (String(cats.value||'').trim() !== '') || (String(toEl.value||'').trim() !== '');
       });
     })();
 
