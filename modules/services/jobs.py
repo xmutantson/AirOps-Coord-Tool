@@ -437,24 +437,31 @@ def _pat_read_message0():
             continue
         if not in_detail:
             continue
-        if (not in_body) and s.lower().startswith("attachments"):
+        if in_body:
+            # Body region: NEVER header-match here. ICS form bodies contain
+            # operational-period lines like "From: 6/13/2026 0600" and
+            # "To: 6/13/2026 1800" which used to overwrite the real sender,
+            # pollute the To list, and vanish from the stored body.
+            ls = s.lower()
+            if ls.startswith("[message receipt requested]") or line.startswith("==="):
+                break
+            body_lines.append(line)
+            continue
+        # --- header region only below this point ---
+        if s.lower().startswith("attachments"):
             # attachments header/footer area; ignore until body starts
             continue
         if s.startswith("To:"):
             to_addrs.append(s.split(":", 1)[1].strip())
             continue
         if s.startswith("From:"):
-            sender = s.split(":", 1)[1].strip()
+            if not sender:  # first wins; later matches would be suspect anyway
+                sender = s.split(":", 1)[1].strip()
             continue
         if s.startswith("Subject:"):
             subject = s.split(":", 1)[1].strip()
             continue
-        if in_body:
-            ls = s.lower()
-            if ls.startswith("[message receipt requested]") or line.startswith("==="):
-                break
-            body_lines.append(line)
-        elif (not in_body) and (s == "") and subject:
+        if (s == "") and subject:
             in_body = True
     return {"mid": mid, "subject": subject, "from": sender, "to": ", ".join(to_addrs), "body": "\n".join(body_lines).rstrip()}
 

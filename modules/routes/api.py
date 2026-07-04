@@ -144,6 +144,9 @@ def api_prev_max_cargo():
 
 @bp.post('/api/manifest/<string:mid>/scan')
 def api_manifest_scan(mid: str):
+    mid = clean_mid(mid)
+    if not mid:
+        return jsonify({'status': 'error', 'error': 'bad_manifest_id'}), 400
     """
     Apply a single scan against the pending session.
        • Build (no baseline):       add → pending 'out' +1; remove → pending 'out' -1 (not below 0)
@@ -329,6 +332,9 @@ def api_manifest_scan(mid: str):
 
 @bp.get('/api/manifest/<string:mid>/items')
 def api_manifest_items(mid: str):
+    mid = clean_mid(mid)
+    if not mid:
+        return jsonify({'items': []})  # poison/blank session: nothing to merge
     """Return net chips for this session (optionally including an existing flight baseline)."""
     flight_id = request.args.get('flight_id', type=int, default=None)
     draft_id  = request.args.get('draft_id',  type=int, default=None)

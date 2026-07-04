@@ -396,7 +396,7 @@ def ramp_boss():
                 c.commit()
 
                 # ── 1. turn the *committed* manifest into flight_cargo rows ──
-                mid = request.form.get('manifest_id','')
+                mid = clean_mid(request.form.get('manifest_id',''))
                 if mid and action != 'update_ignored':
                     # Aggregate session rows (pending 0/1): OUT − IN
                     rows = c.execute("""
@@ -493,7 +493,7 @@ def ramp_boss():
                     fid    = match['id']
 
                     # ── attach any committed Advanced-Cargo manifest ──
-                    mid = request.form.get('manifest_id','')
+                    mid = clean_mid(request.form.get('manifest_id',''))
                     if mid:
                         rows = c.execute("""
                           SELECT
@@ -547,7 +547,7 @@ def ramp_boss():
                                   (fid, datetime.utcnow().isoformat(), json.dumps(data)))
 
                     # ── attach any committed Advanced-Cargo manifest ──
-                    mid = request.form.get('manifest_id','')
+                    mid = clean_mid(request.form.get('manifest_id',''))
                     if mid:
                         rows = c.execute("""
                           SELECT
@@ -603,7 +603,7 @@ def ramp_boss():
                     pass
 
                 # Auto-extract cargo from remarks into inventory (if no manifest session was used)
-                mid_used = request.form.get('manifest_id', '').strip()
+                mid_used = clean_mid(request.form.get('manifest_id', ''))
                 if not mid_used and data.get('remarks'):
                     try:
                         parsed_items = parse_adv_manifest(data['remarks'])
@@ -745,7 +745,7 @@ def ramp_boss():
 def queue_flight():
     """Save this RampBoss form as a draft in queued_flights + record its cargo."""
     # --- Collect form inputs ---
-    mid               = request.form.get('manifest_id','')
+    mid               = clean_mid(request.form.get('manifest_id',''))
     # HARD GATE for Ramp-Boss-origin "Add to Queue": require a destination.
     # (Quick Add has its own minimal route that permits missing destination.)
     if not (request.form.get('destination','') or '').strip():
@@ -1194,9 +1194,9 @@ def send_queued_flight(qid):
             """, data | {'flight_code': flight_code}).lastrowid
 
         # ── rebuild the manifest exactly like edit_queued_flight does ──
-        mid = (request.form.get('manifest_id','') or '').strip()
+        mid = clean_mid(request.form.get('manifest_id',''))
         if not mid:
-            mid = (q.get('manifest_id') or '').strip()
+            mid = clean_mid(q.get('manifest_id'))
         if not mid:
             mrow = c.execute("SELECT session_id FROM flight_cargo WHERE queued_id=? ORDER BY id DESC, timestamp DESC LIMIT 1", (qid,)).fetchone()
             if mrow and mrow['session_id']:
@@ -1524,7 +1524,7 @@ def delete_queued_flight(qid):
 @bp.route('/api/queued_manifest/<int:qid>')
 def api_queued_manifest(qid):
     # If we have a live Advanced manifest open, merge that in:
-    mid = request.args.get('manifest_id','').strip()
+    mid = clean_mid(request.args.get('manifest_id',''))
     # NOTE: rows returned here drive the Edit-Manifest chips (snapshot view)
     if mid:
         # Cut-line: newest timestamp already captured in the queued snapshot
@@ -1644,14 +1644,14 @@ def edit_queued_flight(qid):
               travel_time,
               request.form.get('cargo_type','').strip(),
               request.form.get('remarks','').strip(),
-              (request.form.get('manifest_id','') or '').strip(),
+              clean_mid(request.form.get('manifest_id','')),
               qid
             ))
             # refresh the snapshot to match the **current** manifest (replace-not-append)
             # recover manifest id if the form didn't send it
-            mid   = (request.form.get('manifest_id','') or '').strip()
+            mid   = clean_mid(request.form.get('manifest_id',''))
             if not mid:
-                mid = (draft.get('manifest_id') or '').strip()
+                mid = clean_mid(draft.get('manifest_id'))
             if not mid:
                 mrow = c.execute("SELECT session_id FROM flight_cargo WHERE queued_id=? ORDER BY id DESC, timestamp DESC LIMIT 1", (qid,)).fetchone()
                 if mrow and mrow['session_id']:
@@ -1902,7 +1902,7 @@ def delete_flight_cargo(fcid):
        inventory_entries row; if the effect exists only as *pending* in
        this session, edit/delete that pending row instead. """
     # Current Adv session; if the client didn't send it, fall back to the row's session_id.
-    sid = (request.form.get('manifest_id','') or '').strip()
+    sid = clean_mid(request.form.get('manifest_id',''))
     now = datetime.utcnow().isoformat()
     with sqlite3.connect(DB_FILE) as c:
         c.row_factory = sqlite3.Row
@@ -2329,6 +2329,9 @@ def _stock_avail_for_key(c, name: str, wpu: float) -> int:
 # ──────────────────────────────────────────────────────────────────────────
 @bp.post('/api/manifest/<manifest_id>/gate')
 def api_manifest_gate(manifest_id: str):
+    manifest_id = clean_mid(manifest_id)
+    if not manifest_id:
+        return jsonify(error='bad_manifest_id'), 400
     data = request.get_json(silent=True) or {}
     name = (data.get('sanitized_name') or data.get('name') or '').strip()
     try: wpu = float(data.get('weight_per_unit'))
@@ -2378,6 +2381,9 @@ def api_manifest_gate(manifest_id: str):
 # ──────────────────────────────────────────────────────────────────────────
 @bp.post('/api/manifest/<manifest_id>/adopt_snapshot')
 def api_manifest_adopt_snapshot(manifest_id: str):
+    manifest_id = clean_mid(manifest_id)
+    if not manifest_id:
+        return jsonify(error='bad_manifest_id'), 400
     try:
         data = request.get_json(silent=True) or {}
         draft_id = int(data.get('draft_id') or 0)
@@ -2408,6 +2414,9 @@ def api_manifest_adopt_snapshot(manifest_id: str):
 # ──────────────────────────────────────────────────────────────────────────
 @bp.post('/api/manifest/<manifest_id>/delete_key')
 def api_manifest_delete_key(manifest_id: str):
+    manifest_id = clean_mid(manifest_id)
+    if not manifest_id:
+        return jsonify(error='bad_manifest_id'), 400
     try:
         return _api_manifest_delete_key_impl(manifest_id)
     except Exception:
@@ -2663,6 +2672,9 @@ def _api_manifest_delete_key_impl(manifest_id: str):
 
 @bp.post('/api/manifest/<manifest_id>/nudge')
 def api_manifest_nudge(manifest_id: str):
+    manifest_id = clean_mid(manifest_id)
+    if not manifest_id:
+        return jsonify(error='bad_manifest_id'), 400
     """
     Scanner-friendly adjuster used by the FE for 'Remove' ticks in Edit-Manifest.
     Supports going below the baseline by spawning committed reverse rows.

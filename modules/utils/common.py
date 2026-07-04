@@ -4606,6 +4606,20 @@ def clear_airport_cache() -> None:
 #   • “Remove” in Build    → decrement the 'out' row; delete at qty=0
 #   • Always bump pending_ts so the reaper won’t purge active work
 # ─────────────────────────────────────────────────────────────────────────────
+_BAD_MIDS = {'', 'none', 'null', 'undefined'}
+
+def clean_mid(mid) -> str:
+    """Normalize a manifest/session id arriving from a form, JSON body, or URL.
+
+    Jinja renders Python None as the string 'None' (e.g. the hidden manifest
+    input on an edit-draft page whose manifest_id column is NULL), and JS then
+    treats 'None' as a perfectly good truthy session id. During the 2026-06-12
+    Gorge drill every draft edited that way silently shared ONE global session
+    literally named 'None', so all five tails displayed the same manifest.
+    Returns '' for any such poison value so `if mid:` gates behave."""
+    s = str(mid or '').strip()
+    return '' if s.lower() in _BAD_MIDS else s
+
 # Canonical AOT label format: AOT-{category_id}-{hex hash}. New labels mint a
 # 12-hex hash (48-bit — collision-safe across a ~50-airport network); 6-hex is
 # accepted for tags printed before the widening, and the optional -XXXX suffix

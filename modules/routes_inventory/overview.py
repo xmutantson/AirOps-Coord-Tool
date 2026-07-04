@@ -112,7 +112,10 @@ def inventory_advance_data():
 def inventory_advance_line():
     """Single endpoint: add / delete / commit pending lines by `action`."""
     action = request.form.get('action')
-    mid     = request.form['manifest_id']
+    from modules.utils.common import clean_mid
+    mid     = clean_mid(request.form['manifest_id'])
+    if not mid:
+        return jsonify(success=False, message="Missing or invalid manifest session."), 400
     # Any manual panel activity keeps the whole session out of the reaper
     try:
         from modules.utils.common import touch_pending_session
