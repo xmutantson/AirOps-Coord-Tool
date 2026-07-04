@@ -182,6 +182,19 @@
     </button>
   </form>
 
+  <!-- ── Soft Reset: clear flight board + inventory (danger!) ──────── -->
+  <form method="POST" action="{{ url_for('admin.admin') }}" style="margin-top:1rem"
+        onsubmit="return confirm('Soft reset: permanently clear the flight board (flights, queued drafts, manifests), all inventory stock, cargo requests, and remote snapshots?\n\nKEPT: item catalog (barcodes + categories), staff, comms log, and settings.\n\nThis cannot be undone. Continue?');">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button name="soft_reset" value="1" class="danger">
+      Soft Reset (clear flight board &amp; inventory)
+    </button>
+    <small style="display:block; color:#666; margin-top:.25rem;">
+      Clears flights, drafts, manifests, stock, cargo requests, and remote snapshots.
+      Keeps the item catalog, staff, comms, and settings.
+    </small>
+  </form>
+
   <!-- ── NetOps Feeder (Remote Push) ───────────────────────────── -->
   <hr>
   <h3>NetOps Feeder</h3>

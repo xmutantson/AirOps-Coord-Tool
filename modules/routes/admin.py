@@ -206,6 +206,51 @@ def admin():
             )
             return _ret('auth.setup')
 
+        # ── Soft Reset: clear flight board + inventory ops; keep catalog/config ──
+        if 'soft_reset' in request.form:
+            # Operational data cleared for a fresh incident/drill. Deliberately
+            # KEEPS the item catalog (inventory_barcodes, inventory_categories),
+            # staff, comms log, locates, Winlink messages, and all preferences.
+            SOFT_RESET_TABLES = [
+                # flight board + manifests
+                'flights', 'flight_history', 'flight_cargo', 'queued_flights',
+                # local inventory stock movements (catalog is preserved)
+                'inventory_entries',
+                # cargo request loop
+                'cargo_requests', 'cargo_requests_v2',
+                'cargo_request_sources', 'cargo_request_links',
+                # cached remote-airport inventory snapshots
+                'remote_inventory', 'remote_inventory_rows',
+            ]
+            cleared = []
+            with sqlite3.connect(DB_FILE) as c:
+                for tbl in SOFT_RESET_TABLES:
+                    try:
+                        c.execute(f"DELETE FROM {tbl}")
+                        cleared.append(tbl)
+                    except sqlite3.OperationalError:
+                        pass  # table absent on this DB version — skip
+                c.commit()
+            try:
+                _reset_autoincrements(cleared)
+            except Exception:
+                pass
+            try:
+                run_migrations()  # keep schema current after the wipe
+            except Exception:
+                pass
+            try:
+                from app import publish_inventory_event
+                publish_inventory_event()
+            except Exception:
+                pass
+            flash(
+              "♻️ Soft reset complete: flight board, stock, cargo requests, and "
+              "remote snapshots cleared. Item catalog, staff, comms, and settings kept.",
+              "success"
+            )
+            return _ret('admin.admin')
+
         # ── Change App Password ─────────────────────────────
         if 'change_password' in request.form:
             new_pw     = request.form.get('new_password','')
