@@ -339,15 +339,6 @@
         <label for="dir-in">Inbound</label>
       </div>
 
-      {# Steering: warehouse work does not belong on this form. The 2026-06-12
-         drill crew tried to receive stock here (there is no aircraft in that
-         workflow) and fought the flight-oriented UI for an hour. #}
-      <div class="muted" style="border:1px solid #cfe3ff;background:#f2f8ff;border-radius:8px;padding:.45rem .7rem;margin:.5rem 0;font-size:.9em;">
-        <strong>Ramp Boss = cargo moving on/off an aircraft.</strong>
-        Receiving deliveries or staging warehouse stock (no plane involved)?
-        Use <a href="{{ url_for('inventory.inventory_detail') }}">Inventory &raquo; Scan</a> instead.
-      </div>
-
       <!-- tail number + lookup -->
       <label for="tail">Tail Number*</label>
       <div class="lookup-row" style="gap:.5rem; flex-wrap:wrap">
@@ -1999,6 +1990,52 @@
       if (rbRunningTotalActive()) return true;
       return (rbFormSnapshot !== null && rbSerializeMainForm() !== rbFormSnapshot);
     });
+
+    /* ── Warehouse-intake misuse nudge ─────────────────────────────────────
+       Instead of a persistent sign, catch the actual mistake: a hardware
+       scanner burst typed into a FLIGHT field that never legitimately receives
+       a barcode (pilot/pax/remarks/cargo type). Humans cannot type a run of
+       characters at <40ms each, so a fast run of 8+ printable keys (ignoring
+       OS auto-repeat) is a scanner. On detection we clear the junk it dumped
+       and offer a one-time jump to Material Handling (Inventory Scan). This is
+       exactly the 2026-06-12 drill failure, addressed at the moment it happens
+       with zero layout cost. */
+    (function scanMisuseNudge(){
+      const SCAN_URL = "{{ url_for('inventory.inventory_detail') }}";
+      const WATCH = ['pilot_name','pax_count','remarks','cargo_type'];
+      let nudged = false, lastTs = 0, run = 0;
+      document.addEventListener('keydown', (e) => {
+        if (nudged) return;
+        const ae = document.activeElement;
+        if (!ae || (ae.tagName !== 'INPUT' && ae.tagName !== 'TEXTAREA')) return;
+        if (WATCH.indexOf(ae.name) === -1) return;
+        const k = e.key || '';
+        if (e.repeat) { run = 0; return; }          /* held key, not a scan */
+        if (k.length !== 1) {                         /* Enter / nav resets the run */
+          if (k === 'Enter' && run >= 8) fire(ae);
+          run = 0; return;
+        }
+        const now = (window.performance && performance.now) ? performance.now() : Date.now();
+        run = (now - lastTs <= 40) ? run + 1 : 1;
+        lastTs = now;
+        if (run >= 8) fire(ae);
+      }, true);
+      function fire(field){
+        if (nudged) return;
+        nudged = true;
+        try { field.value = ''; } catch(_) {}       /* the burst was barcode junk */
+        try {
+          if (sessionStorage.getItem('rb_scan_nudge_off')) return;
+        } catch(_) {}
+        const go = confirm(
+          'That looked like a scanned item barcode going into a flight field.\n\n' +
+          'Receiving or staging warehouse stock with no aircraft involved? ' +
+          'That belongs in Material Handling.\n\nGo there now?'
+        );
+        if (go) { window.__RB_INTENTIONAL_NAV = true; window.location = SCAN_URL; }
+        else { try { sessionStorage.setItem('rb_scan_nudge_off','1'); } catch(_) {} }
+      }
+    })();
 
     /* ───────────────── Cargo‑Weight mini‑panel ───────────────── */
     const cwPanel   = document.getElementById('cargo-tools-panel');
