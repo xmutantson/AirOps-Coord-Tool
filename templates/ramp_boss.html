@@ -309,6 +309,7 @@
     <form id="rb-form" method="POST">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <!-- these hidden fields power the Advanced panel -->
+      <input type="hidden" id="arrival-request-id" name="arrival_request_id" value="{{ arrival_request_id|default('') }}">
       <input type="hidden" id="advanced-mode" name="advanced" value="0">
       {# `or ''` not a .get default: .get only defaults when the KEY is absent.
          A draft row with manifest_id NULL renders 'None' otherwise, and JS
@@ -855,6 +856,14 @@
     const rbAckTs     = document.getElementById('rb-ack-ts');
     const rbPdfLink   = document.getElementById('rb-manifest');
     const manifestId  = document.getElementById('manifest-id');
+    const arrivalRequestId = document.getElementById('arrival-request-id');
+    function newArrivalRequestId(){
+      const bytes = new Uint8Array(16);
+      crypto.getRandomValues(bytes);
+      return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+    }
+    if (arrivalRequestId && !arrivalRequestId.value) arrivalRequestId.value = newArrivalRequestId();
+
     // Defense-in-depth vs the Jinja-None poison: if any render path ever puts
     // a literal 'None'/'null' in the hidden field again, blank it here so the
     // session-mint guards (`if (!manifestId.value)`) work as intended.
@@ -1864,6 +1873,7 @@
           // Preserve direction toggle across reset
           const prevDir = dirRadios.find(r => r.checked)?.value || 'outbound';
           form.reset();
+          if (arrivalRequestId) arrivalRequestId.value = newArrivalRequestId();
           const dirToRestore = dirRadios.find(r => r.value === prevDir);
           if (dirToRestore) dirToRestore.checked = true;
           applyDirUI();
@@ -1932,6 +1942,7 @@
       // Preserve direction toggle across reset
       const prevDir = dirRadios.find(r => r.checked)?.value || 'outbound';
       form.reset();
+      if (arrivalRequestId) arrivalRequestId.value = newArrivalRequestId();
       const dirToRestore = dirRadios.find(r => r.value === prevDir);
       if (dirToRestore) dirToRestore.checked = true;
       applyDirUI();

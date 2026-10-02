@@ -344,13 +344,21 @@ def ramp_boss():
                 c.row_factory = sqlite3.Row
                 c.execute("BEGIN IMMEDIATE")
                 from modules.services.inventory import require_direct_session, attach_manifest_to_flight, apply_inbound_items, InventoryConflict
+                from modules.services.arrivals import resolve_arrival_request, record_arrival_request
                 mid = clean_mid(request.form.get('manifest_id',''))
                 try:
+                    arrival_key, arrival_hash, replay = resolve_arrival_request(c,
+                        request.form.get('arrival_request_id'),data,mid,fcode)
+                    if replay is not None:
+                        replay['action'] = 'update_ignored'
+                        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                            return jsonify(replay)
+                        return redirect(url_for('core.dashboard'))
                     require_direct_session(c,mid)
                 except InventoryConflict as exc:
                     return jsonify(exc.payload()), 409
 
-
+                allocation_mid = mid or None
                 # try to find the most-recent, still-open outbound leg
                 match = c.execute("""
                           SELECT id, eta FROM flights
@@ -390,31 +398,19 @@ def ramp_boss():
 
                 else:
                     # ----- no match → insert a standalone inbound row -----
-                    # Duplicate-arrival guard: same tail & arrival time already logged?
-                    dup = c.execute("""
-                        SELECT id FROM flights
-                         WHERE is_ramp_entry=1 AND direction='inbound'
-                           AND tail_number=? AND IFNULL(eta,'')=?
-                           AND complete=1
-                         ORDER BY id DESC LIMIT 1
-                    """, (data['tail_number'], arrival)).fetchone()
-                    if dup:
-                        fid = dup['id']
-                        action = 'update_ignored'
-                    else:
-                        action = 'new'
-                        fid = c.execute("""
-                            INSERT INTO flights(
-                               is_ramp_entry,direction,pilot_name,pax_count,tail_number,
-                               airfield_takeoff,takeoff_time,airfield_landing,eta,
-                               cargo_type,cargo_weight,remarks,complete,flight_code)
-                            VALUES (1,'inbound',:pilot_name,:pax_count,:tail_number,
-                                    :airfield_takeoff,'',:airfield_landing,:eta,
-                                    :cargo_type,:cargo_weight,:remarks,1,:flight_code)
-                        """, data | {'flight_code': fcode}).lastrowid
-                        c.execute("""INSERT INTO flight_history(flight_id,timestamp,data)
-                                     VALUES (?,?,?)""",
-                                  (fid, datetime.utcnow().isoformat(), json.dumps(data)))
+                    action = 'new'
+                    fid = c.execute("""
+                        INSERT INTO flights(
+                           is_ramp_entry,direction,pilot_name,pax_count,tail_number,
+                           airfield_takeoff,takeoff_time,airfield_landing,eta,
+                           cargo_type,cargo_weight,remarks,complete,flight_code)
+                        VALUES (1,'inbound',:pilot_name,:pax_count,:tail_number,
+                                :airfield_takeoff,'',:airfield_landing,:eta,
+                                :cargo_type,:cargo_weight,:remarks,1,:flight_code)
+                    """, data | {'flight_code': fcode}).lastrowid
+                    c.execute("""INSERT INTO flight_history(flight_id,timestamp,data)
+                                 VALUES (?,?,?)""",
+                              (fid, datetime.utcnow().isoformat(), json.dumps(data)))
 
                     # ── attach any committed Advanced-Cargo manifest ──
                     if mid and action != 'update_ignored':
@@ -423,12 +419,14 @@ def ramp_boss():
                 if action != 'update_ignored' and not mid and data.get('remarks'):
                     parsed = parse_adv_manifest(data['remarks'])
                     if parsed:
-                        auto_mid = f'arrival:{fid}'
+                        auto_mid = allocation_mid = f'arrival:{fid}'
                         items = [dict(category_id=guess_category_id_for_name(sanitize_name(it['name'])) or 1,
                             sanitized_name=sanitize_name(it['name']),raw_name=it['name'],size_lb=it['size_lb'],
                             qty=it['qty'],origin=it.get('origin','')) for it in parsed]
                         apply_inbound_items(c,auto_mid,items,import_id='arrival',sanitize=sanitize_name)
                         attach_manifest_to_flight(c,auto_mid,fid,'in')
+
+                record_arrival_request(c,arrival_key,arrival_hash,fid,allocation_mid,action)
 
             # Route to Radio outbox only if we actually created/updated something
             if action != 'update_ignored':
@@ -565,6 +563,7 @@ def ramp_boss():
       default_origin=default_origin,
       active='ramp_boss',
       advanced_data=advanced_data,
+      arrival_request_id=uuid.uuid4().hex,
       enable_adv_manifest_scan=(scan_pref == 'yes'),
       webeoc_activity_popup=webeoc_popup
     )

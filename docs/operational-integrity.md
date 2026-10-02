@@ -219,3 +219,45 @@ Limits remain: actual application startup/migrations, browser/CSRF integration,
 real PDF rendering, target Python/Pi performance, stress/crash recovery, hardware,
 and production data were not exercised. The D: follow-up report identifies the
 exact final local commit, final test logs, mutation-path audit, and source hashes.
+
+
+## Arrival request identity follow-up
+
+Independent verification of `ca6dfad474a664ad0daa5958110d6446fded91a8`
+accepted the original nine findings and four follow-up repairs, but found that
+retrying an arrival which completed an outbound flight could create another
+inbound flight and import the same physical cargo twice.
+
+`modules/services/arrivals.py` persists an `arrival_requests` mapping from request
+identity and normalized payload hash to flight, receipt allocation, and saved
+response. The route resolves this identity under `BEGIN IMMEDIATE` before
+checking a manifest's open state or selecting update versus insert. The mapping,
+flight/history writes, receipt import, and allocation closure commit together.
+A replay returns the original flight with `action=update_ignored`, without new
+cargo, history, outbox changes, or post-commit task effects. Reusing an ID with
+changed details returns `arrival_conflict`. A removed flight returns
+`arrival_closed`; the mapping is retained rather than reimporting cargo.
+
+The form supplies `arrival_request_id`, retaining it through failed/lost responses
+and replacing it after successful form reset. Distinct IDs allow legitimate
+separate arrivals with identical tail/time/cargo. The old tail/time-only duplicate
+heuristic is removed. Legacy clients omitting an ID receive a stable identity
+from the normalized payload. Identical legacy payloads replay indefinitely;
+these clients must send a fresh ID to distinguish a separate identical event.
+This unavoidable ambiguity is not resolved by guessing a time window or flight ID.
+Pre-upgrade arrivals without a stored mapping are not automatically reconstructed.
+
+Nine new offline route tests cover legacy outbound replay, lost responses on both
+flight paths, identical distinct events, retry before selection of a later open
+leg, explicit closed-manifest retry, changed-payload rejection, identity-write
+failure rollback on both paths, concurrent requests, and cancellation/retry.
+The full suite is 105 tests. The unchanged independent extra suite is five cases;
+its observed arrival blocker now passes along with the four prior controls.
+Existing migration and explicit reset paths include the new metadata table;
+no live database migration or reset was performed. Export producers are unchanged.
+
+Post-commit task notifications retain their existing best-effort behavior. A crash
+between the core transaction and those ancillary actions can leave an action
+missing; retries do not replay it. A transactional notification outbox, browser
+refresh/draft recovery, real PDF rendering, full application integration, and
+field crash/power-loss testing remain outside this offline repair.

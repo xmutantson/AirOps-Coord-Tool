@@ -1246,6 +1246,8 @@ def run_migrations():
     with sqlite3.connect(get_db_file()) as c:
         c.execute("BEGIN IMMEDIATE")
         ensure_mutation_schema(c)
+        from modules.services.arrivals import ensure_arrival_schema
+        ensure_arrival_schema(c)
     ensure_column("queued_flights", "pilot_ack_boot_id",      "TEXT")
     ensure_column("queued_flights", "manifest_pdf_path",      "TEXT")
 
