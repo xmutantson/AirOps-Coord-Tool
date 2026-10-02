@@ -1,3 +1,4 @@
+from modules.services.inventory import insert_entry, InventoryConflict
 # rebuilt clean by fix_inventory_routes_rewrite.py
 import hashlib
 import sqlite3
@@ -41,110 +42,27 @@ def inventory_detail():
         session["inv_direction"] = dirn
         ts    = datetime.utcnow().isoformat()
 
-        # ---- Enforce no overdraw on OUTBOUND ----
-        if dirn == "out":
-            row = dict_rows(
-                """
-                SELECT
-                  COALESCE(SUM(
-                    CASE WHEN direction='in'  THEN quantity
-                         WHEN direction='out' THEN -quantity
-                    END
-                  ), 0) AS avail
-                  FROM inventory_entries
-                 WHERE (pending IS NULL OR pending=0)
-                   AND category_id=?
-                   AND sanitized_name=?
-                   AND ABS(weight_per_unit - ?) < 0.001
-                """,
-                (cat_id, noun, wpu_lbs),
-            )[0]
-            on_hand = row["avail"] or 0
-
-            if qty > on_hand:
-                msg = f"Cannot exceed available qty ({on_hand})"
-                # AJAX path
-                if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-                    return jsonify({"message": msg}), 400
-
-                # Non-AJAX: flash + re-render with advanced_data rebuilt
-                flash(msg, "error")
-                categories = dict_rows("SELECT id, display_name FROM inventory_categories")
-                cats = dict_rows(
-                    """
-                    SELECT id AS cid, display_name AS cname
-                      FROM inventory_categories
-                     ORDER BY display_name
-                    """
-                )
-                advanced_data = {
-                    "all_categories": [
-                        {"id": str(c["cid"]), "display_name": c["cname"]} for c in cats
-                    ],
-                    "stock_categories": [],
-                    "items": {},
-                    "sizes": {},
-                    "avail": {},
-                }
-                rows = dict_rows(
-                    """
-                    SELECT category_id AS cid,
-                           sanitized_name,
-                           weight_per_unit,
-                           SUM(
-                             CASE WHEN direction='in'  THEN quantity
-                                  WHEN direction='out' THEN -quantity
-                             END
-                           ) AS qty
-                      FROM inventory_entries
-                     WHERE pending=0
-                     GROUP BY category_id, sanitized_name, weight_per_unit
-                     HAVING qty>0
-                    """
-                )
-                for r in rows:
-                    cid = str(r["cid"])
-                    # availability
-                    advanced_data["avail"].setdefault(cid, {}) \
-                        .setdefault(r["sanitized_name"], {})[str(r["weight_per_unit"])] = r["qty"]
-                    # items & sizes
-                    advanced_data["items"].setdefault(cid, []).append(r["sanitized_name"])
-                    advanced_data["sizes"].setdefault(cid, {}) \
-                        .setdefault(r["sanitized_name"], []).append(str(r["weight_per_unit"]))
-                    # stock-only categories
-                    if not any(c["id"] == cid for c in advanced_data["stock_categories"]):
-                        name = next((c["cname"] for c in cats if str(c["cid"]) == cid), "")
-                        advanced_data["stock_categories"].append(
-                            {"id": cid, "display_name": name}
-                        )
-
-                return render_template(
-                    "inventory_detail.html",
-                    initial_direction=session.get("inv_direction", "inbound"),
-                    categories=categories,
-                    inv_weight_unit=session.get(
-                        "inv_weight_unit", request.cookies.get("mass_unit", "lbs")
-                    ),
-                    scanner_mode=request.cookies.get("scanner_mode", "prompt"),
-                    active="inventory",
-                    advanced_data=advanced_data,
-                    form_data=request.form,
-                )
-
-        # ---- Insert entry ----
-        origin = (request.form.get('origin') or '').strip()
-        with sqlite3.connect(DB_FILE) as c:
-            cur = c.execute(
-                """
-                INSERT INTO inventory_entries(
-                    category_id, raw_name, sanitized_name,
-                    weight_per_unit, quantity, total_weight,
-                    direction, timestamp, origin
-                ) VALUES (?,?,?,?,?,?,?,?,?)
-                """,
-                (cat_id, raw, noun, wpu_lbs, qty, total, dirn, ts, origin),
-            )
-            eid = cur.lastrowid
+        try:
+            with sqlite3.connect(DB_FILE) as c:
+                c.execute("BEGIN IMMEDIATE")
+                eid, origin, ts = insert_entry(
+                    c, category_id=cat_id, name=noun, raw_name=raw,
+                    weight=wpu_lbs, qty=qty, direction=dirn,
+                    origin=request.form.get('origin'))
+        except InventoryConflict as exc:
+            if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+                return jsonify(exc.payload()), 409
+            flash(str(exc), "error")
+            categories = dict_rows("SELECT id, display_name FROM inventory_categories")
+            # Preserve the operator's typed entry on a classic form conflict.
+            return render_template(
+                "inventory_detail.html", categories=categories, active="inventory",
+                initial_direction=session.get("inv_direction", "in"),
+                inv_weight_unit=session.get("inv_weight_unit", "lbs"),
+                scanner_mode=request.cookies.get("scanner_mode", "prompt"),
+                form_data=request.form,
+                advanced_data={"all_categories": categories, "stock_categories": [],
+                               "items": {}, "sizes": {}, "avail": {}}), 409
 
         # Success flash (tiny and useful for scanner workflows)
         try:
@@ -320,23 +238,14 @@ def inventory_edit(entry_id: int):
         dirn        = request.form["direction"]
 
         origin = (request.form.get('origin') or '').strip()
-        with sqlite3.connect(DB_FILE) as c:
-            c.execute(
-                """
-                UPDATE inventory_entries
-                   SET category_id=?,
-                       raw_name=?, sanitized_name=?,
-                       weight_per_unit=?, quantity=?, total_weight=?, direction=?,
-                       origin=?
-                 WHERE id=?
-                """,
-                (
-                    int(request.form["category"]),
-                    raw, noun,
-                    wpu, qty, total, dirn,
-                    origin, entry_id,
-                ),
-            )
+        from modules.services.inventory import mutate_inventory_entry, InventoryConflict
+        try:
+            with sqlite3.connect(DB_FILE) as c:
+                c.row_factory = sqlite3.Row
+                c.execute('BEGIN IMMEDIATE')
+                mutate_inventory_entry(c, entry_id, (int(request.form['category']),raw,noun,wpu,qty,dirn,origin))
+        except InventoryConflict as exc:
+            return jsonify(exc.payload()), 409
         return redirect(url_for("inventory.inventory_detail"))
 
     return render_template(
@@ -351,6 +260,12 @@ def inventory_edit(entry_id: int):
 @bp.route("/delete/<int:entry_id>", methods=["POST"])
 def inventory_delete(entry_id: int):
     """Delete a single inventory entry and return to detail page."""
-    with sqlite3.connect(DB_FILE) as c:
-        c.execute("DELETE FROM inventory_entries WHERE id = ?", (entry_id,))
+    from modules.services.inventory import mutate_inventory_entry, InventoryConflict
+    try:
+        with sqlite3.connect(DB_FILE) as c:
+            c.row_factory = sqlite3.Row
+            c.execute('BEGIN IMMEDIATE')
+            mutate_inventory_entry(c, entry_id)
+    except InventoryConflict as exc:
+        return jsonify(exc.payload()), 409
     return redirect(url_for("inventory.inventory_detail"))

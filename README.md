@@ -27,15 +27,14 @@ A Flask web app for tracking aircraft operations during emergencies. Runs on a R
 ### Install
 
 ```bash
-# Create the working directory
+# Run these copy commands from the repository checkout.
 mkdir -p /home/pi/docker/aoct/data
-cd /home/pi/docker/aoct
+cp deploy/docker-compose.yml deploy/start.sh /home/pi/docker/aoct/
+sudo cp deploy/aoct.service /etc/systemd/system/
+chmod +x /home/pi/docker/aoct/start.sh
 
-# Copy deploy files from the repo's deploy/ directory
-cp deploy/docker-compose.yml .
-cp deploy/start.sh .
-cp deploy/aoct.service /etc/systemd/system/
-chmod +x start.sh
+# First installation needs an image download. Later boots use the cached image.
+bash /home/pi/docker/aoct/start.sh --update
 
 # Enable the systemd service (starts on boot)
 sudo systemctl daemon-reload
@@ -46,7 +45,7 @@ sudo systemctl start aoct
 ```
 
 The `start.sh` script handles hardware detection:
-- Checks for DigiRig USB devices (`/dev/snd`, `/dev/digrig-ptt`)
+- Checks for USB and DigiRig devices (`/dev/bus/usb`, `/dev/snd`, `/dev/digrig-ptt`)
 - Writes a `docker-compose.override.yml` with only the devices that exist
 - Container starts even if the DigiRig is unplugged (radio features degrade gracefully)
 - Brother QL label printer is auto-discovered via mDNS on the LAN
@@ -55,10 +54,32 @@ The `start.sh` script handles hardware detection:
 
 ```bash
 cd /home/pi/docker/aoct
-bash start.sh
+bash start.sh --update
 ```
 
-This pulls the latest image and restarts the container.
+This explicitly pulls the configured image, then starts it. A pull failure stops
+the update before the running container is changed. A normal `bash start.sh` or
+systemd start uses the locally cached image with pulling and building disabled;
+it works offline and fails clearly if the image has never been downloaded.
+
+For a field deployment, pin a tested image digest in `/home/pi/docker/aoct/.env`:
+
+```text
+AOCT_IMAGE=ghcr.io/xmutantson/aircraft_ops_tool@sha256:<tested-image-digest>
+```
+
+Replace the placeholder with the actual tested digest. Without `AOCT_IMAGE`, the
+existing `latest` default remains. Record the digest and previous deployment
+configuration before changing it. The startup script prints the Compose image
+inventory; use `docker inspect --format '{{.Image}}' <container-name>` to record
+the exact image ID running on the field unit.
+
+Starting a container does not certify application or radio readiness. Before an
+exercise, verify the flight board, a synthetic cargo workflow, and the required
+integrations. Image rollback is not database rollback: restore a matching backup
+if a newer image changed the database schema. See
+[operational verification notes](docs/operational-integrity.md) for the remaining
+release and field-validation work.
 
 ### Manage
 
@@ -133,6 +154,17 @@ pip install -r requirements.txt
 python app.py
 # open http://localhost:5150
 ```
+
+### Offline regression tests
+
+```bash
+python -B -m unittest discover -s tests -v
+```
+
+The suite uses synthetic data and mocks external processes. It does not start
+the application, PAT, Docker, or hardware services. Deployment-script tests need
+Bash (Git Bash on Windows); they skip if it is unavailable. These focused tests
+do not replace a staging build, browser checks, or the multi-operator field drill.
 
 ## Tech Stack
 

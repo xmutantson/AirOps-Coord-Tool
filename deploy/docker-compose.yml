@@ -1,6 +1,8 @@
 services:
   aircraft_ops_tool:
-    image: ghcr.io/xmutantson/aircraft_ops_tool:latest
+    # Set AOCT_IMAGE in the deployment directory's .env to pin a tested digest.
+    image: ${AOCT_IMAGE:-ghcr.io/xmutantson/aircraft_ops_tool:latest}
+    restart: unless-stopped
     network_mode: host
     volumes:
     - ./data:/app/data

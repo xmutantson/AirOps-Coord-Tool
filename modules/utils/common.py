@@ -1232,6 +1232,7 @@ def run_migrations():
     ensure_column("flights", "pilot_ack_method",      "TEXT")   # 'typed' | 'drawn'
     ensure_column("flights", "pilot_ack_signature_b64","TEXT")  # base64 PNG (no data: prefix)
     ensure_column("flights", "pilot_ack_signed_at",   "TEXT")
+    ensure_column("flights", "pilot_ack_manifest_hash", "TEXT")
     # Optional metadata for gating/audit + manifest storage
     ensure_column("flights", "pilot_ack_boot_id",     "TEXT")
     ensure_column("flights", "manifest_pdf_path",     "TEXT")
@@ -1239,6 +1240,14 @@ def run_migrations():
     ensure_column("queued_flights", "pilot_ack_method",       "TEXT")
     ensure_column("queued_flights", "pilot_ack_signature_b64","TEXT")
     ensure_column("queued_flights", "pilot_ack_signed_at",    "TEXT")
+    ensure_column("queued_flights", "pilot_ack_manifest_hash", "TEXT")
+    ensure_column("queued_flights", "snapshot_ledger_ids", "TEXT")
+    from modules.services.inventory import ensure_mutation_schema
+    with sqlite3.connect(get_db_file()) as c:
+        c.execute("BEGIN IMMEDIATE")
+        ensure_mutation_schema(c)
+        from modules.services.arrivals import ensure_arrival_schema
+        ensure_arrival_schema(c)
     ensure_column("queued_flights", "pilot_ack_boot_id",      "TEXT")
     ensure_column("queued_flights", "manifest_pdf_path",      "TEXT")
 
@@ -1338,7 +1347,9 @@ def cleanup_pending():
     try:
         cutoff = (datetime.utcnow() - timedelta(minutes=15)).isoformat()
         with connect(get_db_file(), timeout=30) as c:
-            c.execute("DELETE FROM inventory_entries WHERE pending=1 AND pending_ts<=?", (cutoff,))
+            from modules.services.inventory import expire_pending_entries
+            c.execute('BEGIN IMMEDIATE')
+            expire_pending_entries(c,cutoff)
     except _sqlite3.OperationalError as e:
         # benign under load; try later rather than crashing the request
         if "locked" in str(e).lower():
@@ -4377,18 +4388,14 @@ def insert_inventory_entry_and_reconcile(
     Convenience wrapper used by routes: insert the entry and immediately
     apply it to any open batches so cue cards tick down live.
     """
-    ts = timestamp_iso or datetime.utcnow().isoformat()
-    tw = float(total_weight) if total_weight is not None else float(size_lb) * int(qty)
+    from modules.services.inventory import insert_entry
     with sqlite3.connect(get_db_file()) as c:
-        c.execute("""
-          INSERT INTO inventory_entries(
-            category_id, raw_name, sanitized_name,
-            weight_per_unit, quantity, total_weight,
-            direction, timestamp, session_id, pending, source, origin
-          ) VALUES (?,?,?,?,?,?, ?,?,?, 0,?,?)
-        """, (int(category_id), raw_name or sanitized_name, sanitized_name,
-              float(size_lb), int(qty), tw, direction, ts, session_id or "", source,
-              origin or ""))
+        c.execute('BEGIN IMMEDIATE')
+        eid,_,_ = insert_entry(c,category_id=category_id,name=sanitized_name,raw_name=raw_name,
+            weight=size_lb,qty=qty,direction=direction,session_id=session_id or None,
+            source=source,origin=origin)
+        if timestamp_iso:
+            c.execute('UPDATE inventory_entries SET timestamp=? WHERE id=?', (timestamp_iso,eid))
     try:
         apply_inventory_entry_to_batches(direction, sanitized_name, float(size_lb), int(qty))
     except Exception:
@@ -4642,6 +4649,9 @@ def touch_pending_session(session_id: str) -> None:
         return
     try:
         with connect(get_db_file(), timeout=30) as c:
+            from modules.services.inventory import require_open_session
+            c.execute('BEGIN IMMEDIATE')
+            require_open_session(c,sid)
             c.execute(
                 "UPDATE inventory_entries SET pending_ts=? WHERE pending=1 AND session_id=?",
                 (datetime.utcnow().isoformat(), sid))
@@ -4668,167 +4678,31 @@ def lookup_barcode(barcode: str) -> dict | None:
         'weight_per_unit': float(r['weight_per_unit']),
     }
 
-def _pending_row_get(c, session_id: str, cat_id: int, name: str, wpu: float, direction: str):
-    return c.execute("""
-      SELECT id, quantity
-        FROM inventory_entries
-       WHERE pending=1 AND session_id=?
-         AND category_id=? AND LOWER(sanitized_name)=LOWER(?)
-         AND CAST(weight_per_unit AS REAL)=CAST(? AS REAL)
-         AND direction=?
-       LIMIT 1
-    """, (session_id, int(cat_id), name, float(wpu), direction)).fetchone()
-
 def upsert_scan_pending(*, session_id: str, category_id: int, sanitized_name: str,
                         weight_per_unit: float, direction: str, delta_qty: int,
-                        origin: str = "") -> int:
-    """
-    Apply a ±delta_qty to the single pending row for this item+direction.
-    Returns the resulting pending quantity for that row (0 ⇒ deleted).
-    """
-    from datetime import datetime
-    ts = datetime.utcnow().isoformat()
+                        origin: str | None = None) -> tuple[int, str]:
+    """Apply a scan while holding the same lock for reservation check and write."""
+    from modules.services.inventory import adjust_pending
     with sqlite3.connect(get_db_file()) as c:
-        c.row_factory = sqlite3.Row
         c.execute("BEGIN IMMEDIATE")
-        row = _pending_row_get(c, session_id, category_id, sanitized_name, weight_per_unit, direction)
-        if row:
-            new_q = max(0, int(row['quantity']) + int(delta_qty))
-            if new_q <= 0:
-                c.execute("DELETE FROM inventory_entries WHERE id=?", (row['id'],))
-                c.commit()
-                return 0
-            c.execute("""
-              UPDATE inventory_entries
-                 SET quantity=?, total_weight=?*?,
-                     pending_ts=?, timestamp=?, source='scanner'
-               WHERE id=?
-            """, (new_q, float(weight_per_unit), new_q, ts, ts, row['id']))
-            c.commit()
-            return new_q
-        # create new when delta > 0
-        if int(delta_qty) > 0:
-            c.execute("""
-              INSERT INTO inventory_entries(
-                category_id, raw_name, sanitized_name,
-                weight_per_unit, quantity, total_weight,
-                direction, timestamp, pending, pending_ts, session_id, source, origin
-              ) VALUES (?,?,?,?,?,?, ?, ?,1, ?, ?, 'scanner', ?)
-            """, (
-              int(category_id), sanitized_name, sanitized_name,
-              float(weight_per_unit), int(delta_qty), float(weight_per_unit)*int(delta_qty),
-              direction, ts, ts, session_id, origin or ''
-            ))
-            c.commit()
-            return int(delta_qty)
-        # delta <= 0 with no row → effectively 0
-        c.commit()
-        return 0
+        return adjust_pending(c, session_id=session_id, category_id=category_id,
+                              name=sanitized_name, weight=weight_per_unit,
+                              direction=direction, delta=delta_qty, origin=origin)
 
-def aggregate_manifest_net(
-    session_id: str,
-    flight_id: int | None = None,
-    queued_id: int | None = None
-) -> list[dict]:
-    """
-    Return net chips for UI/exports:
-      • Start with existing baseline rows:
-          - flight_cargo.flight_id (when editing a sent flight), OR
-          - flight_cargo.queued_id (when editing a queued draft)
-      • Add session inventory_entries (pending 0/1)
-      • For OUTBOUND: sum 'out' positively, 'in' negatively (taking from stock)
-      • For INBOUND: sum 'in' positively (adding to stock)
-    Output rows: [{category_id, sanitized_name, weight_per_unit, qty, total, direction}...]
-    Only positive net qty are returned.
-    """
+def aggregate_manifest_net(session_id: str, flight_id: int | None = None,
+                           queued_id: int | None = None) -> list[dict]:
+    """Return each source's snapshot and subsequent deltas exactly once."""
+    from modules.services.inventory import manifest_rows
     with sqlite3.connect(get_db_file()) as c:
-        c.row_factory = sqlite3.Row
-        base_out = {}  # for outbound (direction='out' entries)
-        base_in = {}   # for inbound (direction='in' entries)
-
-        if flight_id is not None:
-            for r in c.execute("""
-                SELECT category_id, sanitized_name, weight_per_unit, quantity,
-                       COALESCE(origin,'') AS origin
-                  FROM flight_cargo
-                 WHERE flight_id=?
-            """, (int(flight_id),)):
-                key = (int(r['category_id']), r['sanitized_name'].lower().strip(), float(r['weight_per_unit']), (r['origin'] or '').strip())
-                base_out[key] = base_out.get(key, 0) + int(r['quantity'])
-        elif queued_id is not None:
-            for r in c.execute("""
-                SELECT category_id, sanitized_name, weight_per_unit, quantity,
-                       COALESCE(origin,'') AS origin
-                  FROM flight_cargo
-                 WHERE queued_id=?
-            """, (int(queued_id),)):
-                key = (int(r['category_id']), r['sanitized_name'].lower().strip(), float(r['weight_per_unit']), (r['origin'] or '').strip())
-                base_out[key] = base_out.get(key, 0) + int(r['quantity'])
-
-        # Aggregate outbound entries (out - in cancellations)
-        for r in c.execute("""
-          SELECT category_id, sanitized_name, weight_per_unit, COALESCE(origin,'') AS origin,
-                 SUM(CASE direction WHEN 'out' THEN quantity ELSE -quantity END) AS net_qty
-            FROM inventory_entries
-           WHERE session_id=? AND pending IN (0,1) AND direction='out'
-           GROUP BY category_id, sanitized_name, weight_per_unit, origin
-          UNION ALL
-          SELECT category_id, sanitized_name, weight_per_unit, COALESCE(origin,'') AS origin,
-                 SUM(CASE direction WHEN 'out' THEN quantity ELSE -quantity END) AS net_qty
-            FROM inventory_entries
-           WHERE session_id=? AND pending IN (0,1) AND direction='in'
-                 AND category_id IN (SELECT DISTINCT category_id FROM inventory_entries WHERE session_id=? AND direction='out')
-           GROUP BY category_id, sanitized_name, weight_per_unit, origin
-        """, (session_id, session_id, session_id)):
-            key = (int(r['category_id']), r['sanitized_name'].lower().strip(), float(r['weight_per_unit']), (r['origin'] or '').strip())
-            base_out[key] = base_out.get(key, 0) + int(r['net_qty'] or 0)
-
-        # Aggregate inbound entries separately (positive for 'in')
-        for r in c.execute("""
-          SELECT category_id, sanitized_name, weight_per_unit, COALESCE(origin,'') AS origin,
-                 SUM(quantity) AS net_qty
-            FROM inventory_entries
-           WHERE session_id=? AND pending IN (0,1) AND direction='in'
-           GROUP BY category_id, sanitized_name, weight_per_unit, origin
-        """, (session_id,)):
-            key = (int(r['category_id']), r['sanitized_name'].lower().strip(), float(r['weight_per_unit']), (r['origin'] or '').strip())
-            base_in[key] = base_in.get(key, 0) + int(r['net_qty'] or 0)
-
-        out = []
-        # Add outbound items
-        for (cid, name, wpu, origin), qty in base_out.items():
-            if qty and qty > 0:
-                out.append({
-                    'category_id': cid,
-                    'sanitized_name': name,
-                    'weight_per_unit': wpu,
-                    'qty': int(qty),
-                    'total': float(wpu) * int(qty),
-                    'direction': 'out',
-                    'origin': origin
-                })
-        # Add inbound items (only those not already in outbound with same key)
-        for (cid, name, wpu, origin), qty in base_in.items():
-            if qty and qty > 0 and (cid, name, wpu, origin) not in base_out:
-                out.append({
-                    'category_id': cid,
-                    'sanitized_name': name,
-                    'weight_per_unit': wpu,
-                    'qty': int(qty),
-                    'total': float(wpu) * int(qty),
-                    'direction': 'in',
-                    'origin': origin
-                })
-        return sorted(out, key=lambda d: (d['sanitized_name'], d['weight_per_unit']))
+        return manifest_rows(c, session_id, queued_id, flight_id)
 
 def flip_session_pending_to_committed(session_id: str):
     """After a send/commit, turn session pendings into committed rows (pending=0)."""
+    from modules.services.inventory import commit_manifest_session
     with sqlite3.connect(get_db_file()) as c:
-        c.execute("""
-          UPDATE inventory_entries
-             SET pending=0
-           WHERE session_id=? AND pending=1
-        """, (session_id,))
+        c.execute('BEGIN IMMEDIATE')
+        commit_manifest_session(c,session_id)
+
 
 def lookup_callsign_for_airport(code: str) -> str:
     """

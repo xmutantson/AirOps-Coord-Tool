@@ -112,6 +112,7 @@ def admin():
             # NOTE: Excludes winlink tables (outgoing_messages, winlink_messages,
             # winlink_message_files) and personnel (staff, staff_shifts) per design.
             WARGAME_TABLES = [
+              'arrival_requests', 'manifest_reversals', 'manifest_import_items', 'cargo_deletions', 'manifest_allocations',
               'flights',
               'incoming_messages',
               'flight_history',
@@ -212,6 +213,7 @@ def admin():
             # KEEPS the item catalog (inventory_barcodes, inventory_categories),
             # staff, comms log, locates, Winlink messages, and all preferences.
             SOFT_RESET_TABLES = [
+                'arrival_requests', 'manifest_reversals', 'manifest_import_items', 'cargo_deletions', 'manifest_allocations',
                 # flight board + manifests
                 'flights', 'flight_history', 'flight_cargo', 'queued_flights',
                 # local inventory stock movements (catalog is preserved)

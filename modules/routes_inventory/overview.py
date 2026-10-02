@@ -1,3 +1,4 @@
+from modules.services.inventory import insert_entry, InventoryConflict, validate_session_commit
 
 import sqlite3
 import json
@@ -55,7 +56,7 @@ def inventory_advance_data():
              /*   in  −  out   → available   */
              SUM(
                CASE
-                 WHEN e.direction = 'in'  THEN  e.quantity
+                 WHEN e.direction = 'in' AND COALESCE(e.pending,0)=0 THEN e.quantity
                  WHEN e.direction = 'out' THEN -e.quantity
                END
              ) AS qty
@@ -70,8 +71,9 @@ def inventory_advance_data():
       SELECT category_id AS cid, sanitized_name, weight_per_unit,
              COALESCE(origin,'') AS origin
         FROM inventory_entries
-       WHERE COALESCE(origin,'') != ''
-       GROUP BY category_id, sanitized_name, weight_per_unit, origin
+       GROUP BY category_id, sanitized_name, weight_per_unit, COALESCE(origin,'')
+       HAVING SUM(CASE WHEN direction='in' AND COALESCE(pending,0)=0 THEN quantity
+                       WHEN direction='out' THEN -quantity ELSE 0 END)>0
     """)
 
     # Build stocked categories list (for outbound - only pick from stock)
@@ -136,35 +138,6 @@ def inventory_advance_line():
             wpu  = float(request.form['size'])
             qty  = int(request.form['qty'])
 
-            # check stock availability with detailed breakdown
-            in_qty  = dict_rows(
-              "SELECT COALESCE(SUM(quantity),0) AS v FROM inventory_entries "
-              "WHERE category_id=? AND sanitized_name=? AND weight_per_unit=? "
-              "  AND direction='in' AND pending=0",
-              (cat_id,name,wpu)
-            )[0]['v']
-            out_committed = dict_rows(
-              "SELECT COALESCE(SUM(quantity),0) AS v FROM inventory_entries "
-              "WHERE category_id=? AND sanitized_name=? AND weight_per_unit=? "
-              "  AND direction='out' AND pending=0",
-              (cat_id,name,wpu)
-            )[0]['v']
-            out_pending = dict_rows(
-              "SELECT COALESCE(SUM(quantity),0) AS v FROM inventory_entries "
-              "WHERE category_id=? AND sanitized_name=? AND weight_per_unit=? "
-              "  AND direction='out' AND pending=1",
-              (cat_id,name,wpu)
-            )[0]['v']
-            out_qty = out_committed + out_pending
-            avail = in_qty - out_qty
-            if qty > avail:
-                # Build detailed error message (only show pending in other manifests, not shipped)
-                parts = [f"Only {avail} available"]
-                if out_pending > 0:
-                    parts.append(f"{out_pending} pending in other manifests")
-                msg = parts[0] + " (" + ", ".join(parts[1:]) + ")" if len(parts) > 1 else parts[0]
-                return jsonify(success=False, message=msg), 400
-
             raw       = name
             sanitized = name
         else:
@@ -174,31 +147,21 @@ def inventory_advance_line():
             qty       = int(request.form['qty'])
 
         total = wpu * qty
-        ts    = datetime.utcnow().isoformat()
-
-        # decide source: ramp-panel vs. inventory-detail
-        src = 'ramp'
-        origin = (request.form.get('origin') or '').strip()
-        with sqlite3.connect(DB_FILE) as c:
-            cur = c.execute("""
-              INSERT INTO inventory_entries(
-                category_id, raw_name, sanitized_name,
-                weight_per_unit, quantity, total_weight,
-                direction, timestamp, pending, pending_ts, session_id, source, origin
-              ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """, (
-              cat_id, raw, sanitized,
-              wpu, qty, total,
-              ('in' if direction.startswith('in') else 'out'),
-              ts, 1, ts, mid, src, origin
-            ))
-            eid = cur.lastrowid
-            # current running total for this manifest/session (pending only)
-            tot = c.execute(
-              "SELECT COALESCE(SUM(total_weight),0) FROM inventory_entries "
-              "WHERE pending=1 AND session_id=?",
-              (mid,)
-            ).fetchone()[0] or 0.0
+        try:
+            with sqlite3.connect(DB_FILE) as c:
+                c.execute("BEGIN IMMEDIATE")
+                eid, origin, ts = insert_entry(
+                    c, category_id=cat_id, name=sanitized, raw_name=raw,
+                    weight=wpu, qty=qty,
+                    direction=('in' if direction.startswith('in') else 'out'),
+                    origin=request.form.get('origin'),
+                    session_id=mid, pending=True, source='ramp')
+                tot = c.execute(
+                    "SELECT COALESCE(SUM(total_weight),0) FROM inventory_entries "
+                    "WHERE pending=1 AND session_id=?", (mid,)
+                ).fetchone()[0] or 0.0
+        except InventoryConflict as exc:
+            return jsonify(success=False, **exc.payload()), 409
 
         return jsonify(success=True,
                        entry_id=eid,
@@ -213,68 +176,28 @@ def inventory_advance_line():
 
     # ─── DELETE branch ────────────────────────────────────────────────
     elif action == 'delete':
-        eid   = int(request.form['entry_id'])
-        purge = request.form.get('purge') == '1'
-        comp_id = None                    # ← ensure it’s always defined
-        ts    = datetime.utcnow().isoformat()
-
-        with sqlite3.connect(DB_FILE) as c:
-            c.row_factory = sqlite3.Row
-
-            # allow both *pending* rows (still editable) **and** rows that were
-            # already committed earlier in this manifest
-            row = c.execute(
-              "SELECT * FROM inventory_entries WHERE id=? AND session_id=?",
-              (eid, mid)
-            ).fetchone()
-
-            if not row:
-                return jsonify(success=False, message='Row not found'), 404
-
-            is_committed = (row['pending'] == 0)
-
-            # HARD-PURGE  (Back-button or ❌ on a *pending* chip)
-            if purge:
-                if is_committed:
-                    return jsonify(success=False,
-                                   message='Cannot purge committed row'), 400
-                c.execute("DELETE FROM inventory_entries WHERE id=?", (eid,))
-
-            # SOFT-DELETE  (❌ on a *committed* snapshot chip)
-            else:
-                # insert an equal-and-opposite *pending* row to cancel it out
-                rev = 'in' if row['direction'] == 'out' else 'out'
-                cur = c.execute("""
-                  INSERT INTO inventory_entries(
-                    category_id, raw_name, sanitized_name,
-                    weight_per_unit, quantity, total_weight,
-                    direction, timestamp, pending, pending_ts,
-                    session_id, source
-                  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-                """, (
-                  row['category_id'], row['raw_name'], row['sanitized_name'],
-                  row['weight_per_unit'], row['quantity'], row['total_weight'],
-                  rev, ts, 1, ts, mid, 'adv-delete'
-                ))
-                comp_id = cur.lastrowid
-
-                # we keep the original committed row for audit;
-                # if it was still pending we already deleted it via purge
-
-            # fresh pending total for this manifest (only pending rows count)
-            tot = c.execute(
-              "SELECT COALESCE(SUM(total_weight),0) FROM inventory_entries "
-              "WHERE pending=1 AND session_id=?", (mid,)
-            ).fetchone()[0] or 0.0
-
-        return jsonify(success=True,
-                       manifest_total=float(tot),
-                       comp_id=(comp_id if not purge else None))
+        from modules.services.inventory import reverse_manifest_entry
+        try:
+            with sqlite3.connect(DB_FILE) as c:
+                c.row_factory = sqlite3.Row
+                c.execute('BEGIN IMMEDIATE')
+                result = reverse_manifest_entry(c,source_table='inventory_entries',
+                    source_id=int(request.form['entry_id']),session_id=mid,pending=True,
+                    purge=request.form.get('purge') == '1')
+                tot = c.execute('SELECT COALESCE(SUM(total_weight),0) FROM inventory_entries WHERE pending=1 AND session_id=?', (mid,)).fetchone()[0]
+        except InventoryConflict as exc:
+            return jsonify(success=False,**exc.payload()), 409
+        return jsonify(success=True,manifest_total=float(tot),comp_id=result['comp_id'])
 
     elif action == 'commit':
         # mark all session rows committed
         with sqlite3.connect(DB_FILE) as c:
             c.row_factory = sqlite3.Row
+            c.execute("BEGIN IMMEDIATE")
+            try:
+                validate_session_commit(c, mid)
+            except InventoryConflict as exc:
+                return jsonify(success=False, **exc.payload()), 409
             # preserve any explicit source such as 'chip-delete'
             c.execute("""
               UPDATE inventory_entries
@@ -286,7 +209,8 @@ def inventory_advance_line():
                 FROM inventory_entries
                WHERE session_id=? AND pending=1
             """, (mid,)).fetchall()
-            c.execute("UPDATE inventory_entries SET pending=0 WHERE session_id=?", (mid,))
+            from modules.services.inventory import commit_manifest_session
+            commit_manifest_session(c,mid)
 
         # Wargame: batch‑level SLA via reconciliation; Legacy: per‑entry timers
         if get_preference('wargame_mode') == 'yes':
@@ -323,12 +247,13 @@ def inventory_advance_line():
 
     elif action == 'purge':
         eid = int(request.form['entry_id'])
-        with sqlite3.connect(DB_FILE) as c:
-            c.execute(
-              "DELETE FROM inventory_entries "
-              " WHERE id=? AND pending=1 AND session_id=?",
-              (eid, mid)
-            )
+        from modules.services.inventory import purge_pending_entry
+        try:
+            with sqlite3.connect(DB_FILE) as c:
+                c.execute('BEGIN IMMEDIATE')
+                purge_pending_entry(c,mid,eid)
+        except InventoryConflict as exc:
+            return jsonify(success=False,**exc.payload()), 409
         return jsonify(success=True)
 
     return jsonify(success=False), 400

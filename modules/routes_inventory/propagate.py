@@ -174,27 +174,17 @@ def propagate_apply():
     where_sql, params = _where_for(op, names, old_wpu)
     summary_before = _preview_summary(where_sql, params)
 
-    changed = 0
-    with sqlite3.connect(DB_FILE) as c:
-        if op == "category":
-            q = f"UPDATE inventory_entries SET category_id=? WHERE {where_sql}"
-            cur = c.execute(q, (new_cat, *params))
-            changed = cur.rowcount or 0
-        elif op == "name":
-            # keep raw_name aligned with sanitized_name for simplicity
-            q = f"UPDATE inventory_entries SET sanitized_name=?, raw_name=? WHERE {where_sql}"
-            cur = c.execute(q, (new_name, new_name, *params))
-            changed = cur.rowcount or 0
-        else:
-            # Update weight_per_unit and recompute total_weight = quantity * new_wpu
-            q = f"""
-                UPDATE inventory_entries
-                   SET weight_per_unit = ?,
-                       total_weight    = (quantity * ?)
-                 WHERE {where_sql}
-            """
-            cur = c.execute(q, (new_wpu, new_wpu, *params))
-            changed = cur.rowcount or 0
+    from modules.services.inventory import InventoryConflict, propagate_inventory_entries
+    try:
+        with sqlite3.connect(DB_FILE) as c:
+            c.execute('BEGIN IMMEDIATE')
+            ids = [row[0] for row in c.execute(f'SELECT id FROM inventory_entries WHERE {where_sql}', params)]
+            changed = propagate_inventory_entries(c,ids,
+                category_id=new_cat if op == 'category' else None,
+                name=new_name if op == 'name' else None,
+                weight=new_wpu if op == 'weight' else None)
+    except InventoryConflict as exc:
+        return jsonify(ok=False,**exc.payload()), 409
 
     try:
         publish_inventory_event()

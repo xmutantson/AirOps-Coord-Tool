@@ -554,10 +554,10 @@ def aoct_send():
     if scheduler.get_job('winlink_poll') is None:
         # keep parity with other senders that require poller alive
         return jsonify({'ok': False, 'message': 'WinLink polling not running'}), 400
-    sent = send_winlink_message(to, subject, body)
-    if not sent:
+    composed = send_winlink_message(to, subject, body)
+    if not composed:
         return jsonify({'ok': False, 'message': 'PAT compose failed'}), 502
-    return jsonify({'ok': True})
+    return jsonify({'ok': True, 'status': 'composed'})
 
 @bp.get('/inbox', endpoint='winlink_inbox')
 def winlink_inbox():
