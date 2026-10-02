@@ -1,6 +1,6 @@
 
 from markupsafe import escape
-import sqlite3, re, os, json, subprocess, threading
+import sqlite3, re, os, json, subprocess
 from datetime import datetime, timezone
 
 from typing import Tuple, Optional, List, Dict
@@ -605,8 +605,11 @@ def get_send_as_callsign() -> str:
 
 def send_winlink_message(to_addr: str, subject: str, body: str, metadata: Optional[Dict] = None) -> bool:
     """
-    Minimal helper to send a text Winlink message via PAT.
-    Records in winlink_messages and outgoing_messages on success.
+    Compose a text message into PAT's outbox, waiting at most 60 seconds.
+
+    True means PAT composition succeeded, not transmission or delivery. Record
+    local outbound history only after composition succeeds. History is best-effort:
+    its failure must not report a failed compose and invite a duplicate retry.
     """
     to_addr = (to_addr or "").strip()
     if not to_addr:
@@ -616,7 +619,30 @@ def send_winlink_message(to_addr: str, subject: str, body: str, metadata: Option
         return False
     cmd = ["pat", "compose", "--from", cs, "-s", subject, to_addr]
 
-    # Record to DB FIRST (fast), then fire PAT in background (slow)
+    # Do not hold a database transaction while waiting for PAT.
+    try:
+        subprocess.run(
+            cmd,
+            input=body or "",
+            text=True,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        try: app.logger.error("PAT compose timed out (60s): %s", " ".join(cmd))
+        except Exception: pass
+        return False
+    except subprocess.CalledProcessError as err:
+        try: app.logger.error("PAT compose failed: %s\n%s", err, err.stderr or err.stdout)
+        except Exception: pass
+        return False
+    except OSError as err:
+        try: app.logger.error("PAT compose could not start: %s", err)
+        except Exception: pass
+        return False
+
     try:
         # Best-guess operator (local side): cookie if present, else station callsign
         operator = (
@@ -684,28 +710,8 @@ def send_winlink_message(to_addr: str, subject: str, body: str, metadata: Option
             except Exception:
                 pass
     except Exception:
-        pass
-
-    # Fire PAT compose in background AFTER DB is written — avoids lock contention
-    def _pat_compose_bg():
-        try:
-            subprocess.run(
-                cmd,
-                input=body or "",
-                text=True,
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=60,
-            )
-        except subprocess.TimeoutExpired:
-            try: app.logger.error("PAT compose timed out (60s): %s", " ".join(cmd))
-            except Exception: pass
-        except subprocess.CalledProcessError as err:
-            try: app.logger.error("PAT send failed: %s\n%s", err, err.stderr or err.stdout)
-            except Exception: pass
-
-    threading.Thread(target=_pat_compose_bg, daemon=True).start()
+        try: app.logger.exception("PAT composition succeeded, but outbound history could not be recorded")
+        except Exception: pass
     return True
 
 # ─────────────────────────────────────────────────────────────────────────────

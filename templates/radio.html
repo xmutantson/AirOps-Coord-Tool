@@ -274,6 +274,7 @@ function stripDartFooter(s){
 
       // Send via PAT (ad-hoc)
       sendBtn.onclick = async ()=>{
+        if (sendBtn.disabled) return;
         const to = document.getElementById('aoct-to').value.trim().toUpperCase();
         if (!to){ alert('Enter a destination callsign.'); return; }
         const fd = new URLSearchParams({
@@ -281,17 +282,24 @@ function stripDartFooter(s){
           subject: document.getElementById('aoct-subj').value,
           body:    document.getElementById('aoct-body').value
         });
-        const r = await fetch('{{ url_for("radio.aoct_send") }}', {
-          method: 'POST',
-          headers: {'Content-Type':'application/x-www-form-urlencoded'},
-          body: fd
-        });
-        const j = await r.json().catch(()=>({ok:false}));
-        if (!r.ok || !j.ok){
-          alert(j.message || 'PAT send failed.');
-        } else {
-          alert('AOCT reply sent via PAT.');
-          close();
+        sendBtn.disabled = true;
+        try {
+          const r = await fetch('{{ url_for("radio.aoct_send") }}', {
+            method: 'POST',
+            headers: {'Content-Type':'application/x-www-form-urlencoded'},
+            body: fd
+          });
+          const j = await r.json();
+          if (!r.ok || !j.ok){
+            alert(j.message || 'PAT composition could not be confirmed. Check the PAT outbox before retrying.');
+          } else {
+            alert('AOCT reply composed in the PAT outbox. Transmission is not confirmed.');
+            close();
+          }
+        } catch (_) {
+          alert('The request could not be confirmed. Check the PAT outbox before retrying to avoid a duplicate reply.');
+        } finally {
+          sendBtn.disabled = !canSend;
         }
       };
 

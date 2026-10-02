@@ -88,12 +88,13 @@
         if (name && Number.isFinite(wpu) && wpu>0) return { name, wpu };
         return null;
       }
-      function makeNudgeBody(name, wpu, qty){
+      function makeNudgeBody(name, wpu, qty, origin){
         return JSON.stringify({
           sanitized_name: name,
           weight_per_unit: Number(wpu),
           qty: Number(qty)||1,
           op: 'remove',
+          origin,
           draft_id: (typeof window.draftId === 'number' ? window.draftId : null)
         });
       }
@@ -123,7 +124,7 @@
               else headers['Content-Type'] = 'application/json';
               // A) structured -> build full /nudge body
               if (name && wpu>0){
-                const newInit = Object.assign({}, init, { method:'POST', body: makeNudgeBody(name,wpu,qty), headers });
+                const newInit = Object.assign({}, init, { method:'POST', body: makeNudgeBody(name,wpu,qty,obj.origin), headers });
                 return _origFetch.call(this, newUrl, newInit);
               }
               // B) barcode-only -> let backend resolve barcode for /nudge
@@ -133,6 +134,7 @@
                   headers,
                   body: JSON.stringify({
                     barcode: obj.barcode,
+                    origin: obj.origin,
                     op: 'remove',
                     qty: qty || 1,
                     draft_id: (typeof window.draftId === 'number' ? window.draftId : null)
@@ -203,12 +205,13 @@
               try { origSetHeader.call(this, 'Content-Type', 'application/json'); } catch(_){}
               // A) structured
               if (name && wpu>0){
-                body = makeNudgeBody(name, wpu, qty);
+                body = makeNudgeBody(name, wpu, qty, parsed.origin);
               }
               // B) barcode-only
               else if (parsed && parsed.barcode){
                 body = JSON.stringify({
                   barcode: parsed.barcode,
+                  origin: parsed.origin,
                   op: 'remove',
                   qty: qty || 1,
                   draft_id: (typeof window.draftId === 'number' ? window.draftId : null)
@@ -2158,8 +2161,10 @@
       _advOriginSelect = document.createElement('select');
       _advOriginSelect.id = 'adv-origin-select';
       _advOriginSelect.style.cssText = 'min-width:10ch; padding:.4rem;';
-      _advOriginSelect.innerHTML = '<option value="">Choose origin…</option>' +
-        origins.map(o => `<option value="${o}">${o}</option>`).join('');
+      const placeholder = new Option('Choose origin...', '', true, true);
+      placeholder.disabled = true;
+      _advOriginSelect.add(placeholder);
+      origins.forEach(o => _advOriginSelect.add(new Option(o || '(No source recorded)', o)));
       container.insertBefore(_advOriginSelect, advOriginEl);
     }
   }
@@ -2289,166 +2294,37 @@
     return _catIdForItem(name) || _catIdByName(window._lastCatName||'') || Number((_allCategoriesList()||[])[0]?.id ?? NaN);
   }
 
-  // Delete-by-key (client-governed compensators):
-  //  • Compute NET from the on-screen chips.
-  //  • If NET>0 ⇒ mint one INBOUND compensator (qty=NET) then delete the key (no server auto-comp).
-  //  • If NET<0 ⇒ mint one OUTBOUND compensator via /nudge (qty=|NET|) then delete the key (no server auto-comp).
-  //  • Remove all chips, refresh totals/remarks/stock.
+  // The server owns source-specific reversal and reservation accounting.
   async function deleteByKey(name, wpu, origin){
-    // Per-key reentry guard (prevents double compensation & double delete)
     const gateKey = `${normName(name)}|${Number(wpu)}|${(origin||'').toLowerCase().trim()}`;
     if (window.__RB_DELETING.has(gateKey)) return;
     window.__RB_DELETING.add(gateKey);
     try {
-    const mid = manifestId.value;
-    if (!mid) return;
-    // Clear any UI clamp offset applied to this key
-    try {
-      if (window.__RB_CLAMP_OFFSETS) {
-        window.__RB_CLAMP_OFFSETS.delete(gateKey);
-      }
-    } catch(_){}
-
-    // Compute NET from on-screen state
-    const net = computeNetForKey(name, wpu, origin);
-
-    // ── Snapshot guard: only compensate what happened *this session*.
-    // Baseline (from the queued draft) must NOT be compensated.
-    const inSnapshot = !!window.__RB_FORCE_SNAPSHOT;
-    const baseMap = window.__RB_SNAPSHOT_BASE || new Map();
-    const baseQty = Number(baseMap.get(gateKey) || 0);
-    // How much should we actually put back INBOUND?
-    //  - live mode: everything (net)
-    //  - snapshot mode: only the session delta above baseline
-    const compInboundQty = Math.max(0, net - (inSnapshot ? baseQty : 0));
-
-    // Fast path: nothing to undo (usually hidden X in this state, but safe)
-    // We still delete the key rows to keep the manifest tidy.
-    async function postDeleteNoComp(){
-      const r = await fetch(`/api/manifest/${encodeURIComponent(mid)}/delete_key`, {
-        method: 'POST',
-        headers: xhrHeaders({ 'Content-Type':'application/json' }),
-        body: JSON.stringify({
-          sanitized_name: name,
-          weight_per_unit: Number(wpu),
-          origin: origin || '',
-          draft_id: (typeof draftId !== 'undefined' ? draftId : null),
-          flight_id: (typeof flightId !== 'undefined' ? flightId : null),
-          // explicit: do NOT let server mint compensators
-          prefer_compensate: false
-        })
+      const mid = manifestId.value;
+      if (!mid) return;
+      const response = await fetch(`/api/manifest/${encodeURIComponent(mid)}/delete_key`, {
+        method:'POST', headers:xhrHeaders({'Content-Type':'application/json'}),
+        body:JSON.stringify({sanitized_name:name, weight_per_unit:Number(wpu),
+          origin:origin || '',
+          draft_id:typeof draftId !== 'undefined' ? draftId : null,
+          flight_id:typeof flightId !== 'undefined' ? flightId : null})
       });
-      if (!r.ok) throw new Error('delete_key failed');
-    }
-
-    // 1) Apply client-minted compensator if needed
-    if (compInboundQty > 0){
-      // We took `net` out -> put it back INBOUND in one shot (requires category), then commit.
-      const catId = _resolveCategoryIdForKey(name, wpu, origin);
-      if (!(Number.isFinite(catId) && catId > 0)){
-        showToast('Delete aborted — need a category for the compensator. Pick a category and retry.', 'error');
-        return;
-      }
-      const params = new URLSearchParams({
-        csrf_token:  csrfToken,
-        action:      'add',
-        manifest_id: mid,
-        direction:   'inbound',
-        category:    String(catId),
-        // inbound: free-entry fields
-        name:        name,
-        weight:      String(Number(wpu)),
-        wunit:       'lbs',
-        qty:         String(compInboundQty),
-        origin:      origin || ''
-      });
-      let ok = false;
-      try {
-        const addRes = await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
-          method: 'POST',
-          body:   params
-        });
-        if (!addRes.ok) throw new Error('inbound compensator add failed');
-        // Commit immediately so stock is corrected now
-        const commitRes = await fetch("{{ url_for('inventory.inventory_advance_line') }}", {
-          method:'POST',
-          body: new URLSearchParams({
-            csrf_token : csrfToken,
-            action     : 'commit',
-            manifest_id: mid
-          })
-        });
-        if (!commitRes.ok) throw new Error('inbound compensator commit failed');
-        ok = true;
-      } catch(_){
-        showToast('Delete aborted — failed to apply inbound compensator.', 'error');
-        return;
-      }
-      if (!ok) { showToast('Delete aborted — compensator error.', 'error'); return; }
-    }
-    else if (net < 0){
-      // We brought |net| IN -> take it back OUT via /nudge (structured remove).
-      const qty = Math.abs(net);
-      try{
-        const r = await fetch(`/api/manifest/${encodeURIComponent(mid)}/nudge`, {
-          method: 'POST',
-          headers: xhrHeaders({ 'Content-Type':'application/json' }),
-          body: JSON.stringify({
-            sanitized_name: name,
-            weight_per_unit: Number(wpu),
-            qty,
-            op: 'remove',
-            draft_id: (typeof window.draftId === 'number' ? window.draftId : null)
-          })
-        });
-        if (!r.ok) throw new Error('outbound compensator (nudge) failed');
-      } catch(_){
-        showToast('Delete aborted — failed to apply outbound compensator.', 'error');
-        return;
-      }
-    }
-    // else net === 0 -> no compensator
-
-    // 2) Delete the key WITHOUT server-side auto-compensation
-    try {
-      await postDeleteNoComp();
-    } catch(_){
-      showToast('Delete failed on server.', 'error');
-      return;
-    }
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Delete failed. No change made.');
+      if (window.__RB_CLAMP_OFFSETS) window.__RB_CLAMP_OFFSETS.delete(gateKey);
+      if (window.__RB_FORCE_SNAPSHOT) (window.__RB_ZEROED = window.__RB_ZEROED || new Set()).add(gateKey);
+      removeChipsForKey(name,wpu,origin);
+      if (window._rbScanRefresh) await window._rbScanRefresh();
+      await fetchInventory();
+      if (window.refreshFromDOM) window.refreshFromDOM();
+      advDirty = true; advDone.disabled = false;
+      applyMatchingBorders();
+      showToast(`Removed "${name}" (${wpu} lb) from this source.`, 'success');
+    } catch(error) {
+      showToast(error.message || 'Delete failed. Refresh before retrying.', 'error');
     } finally {
-      // always release the per-key delete gate
       window.__RB_DELETING.delete(gateKey);
     }
-
-    // Snapshot: mark this key as "zeroed" so it won't respawn on next refresh
-    try {
-      if (window.__RB_FORCE_SNAPSHOT) (window.__RB_ZEROED = window.__RB_ZEROED || new Set()).add(gateKey);
-    } catch(_){}
-
-    // 3) Remove all matching chips (baseline + any Δ) from the DOM
-    removeChipsForKey(name, wpu, origin);
-    // Refresh chips/remarks and stock UI without calling scoped functions
-    try { if (window._rbScanRefresh) await window._rbScanRefresh(); } catch(_){}
-    try { await fetchInventory(); } catch(_){}
-    try { if (window.refreshFromDOM) window.refreshFromDOM(); } catch(_){}
-    try { advDirty = true; advDone.disabled = false; } catch(_){}
-    try { applyMatchingBorders(); } catch(_){}
-
-    // Hint message reflecting what we just did
-    try {
-      if (net > 0) {
-        if (inSnapshot && compInboundQty === 0) {
-          showToast(`Removed "${name}" (${wpu} lb). No stock change (baseline only).`, 'info');
-        } else {
-          showToast(`Removed "${name}" (${wpu} lb) — returned ×${compInboundQty} to stock.`, 'success');
-        }
-      } else if (net < 0) {
-        showToast(`Removed "${name}" (${wpu} lb) — took ×${Math.abs(net)} back out of stock.`, 'success');
-      } else {
-        showToast(`Removed "${name}" (${wpu} lb). No stock change.`, 'info');
-      }
-    } catch(_){}
   }
   function rebuildAvailIndex(){
     const idx = new Map();
@@ -3278,7 +3154,7 @@
       })();
       try { await window._rbScanRefreshing; } finally { window._rbScanRefreshing = null; }
     }
-    async function scan(barcode, confirmDup){
+    async function scan(barcode, confirmDup, selectedOrigin){
       if (scanBusy) return;
       // NEW: micro de-dup for twitchy scanners
       const now = Date.now();
@@ -3363,6 +3239,8 @@
         }
         return p;
       })();
+      if (selectedOrigin !== undefined) payload.origin = selectedOrigin;
+      else if (isInbound) payload.origin = _getAdvOrigin();
       // Mark that an ADD just happened so snapshot refresh can override ZEROED once.
       if (!useNudge && mode === 'add') {
         try { window.__RB_LAST_ADD_TS = Date.now(); } catch(_) {}
@@ -3381,8 +3259,22 @@
         return;
       }
       if (resp.status === 409) {
-        setFB('Out of stock — reverted', 'scan-warn', 2500);
         scanBusy = false;
+        if (j && j.error === 'origin_required' && Array.isArray(j.origins)) {
+          const choices = j.origins.map((o,i) => `${i+1}. ${o || '(No source recorded)'}`).join('\n');
+          const answer = window.prompt('Choose cargo source by number:\n' + choices);
+          if (answer !== null) {
+            const n = Number(answer);
+            if (Number.isInteger(n) && n >= 1 && n <= j.origins.length) {
+              lastScan = {code:'',t:0};
+              await scan(barcode, confirmDup, j.origins[n-1]);
+              return;
+            }
+          }
+          setFB('Scan cancelled - choose a source to continue', 'scan-warn', 3000);
+        } else {
+          setFB((j && j.message) || 'Out of stock - no change made', 'scan-warn', 3500);
+        }
         return;
       }
       if (!resp.ok){
@@ -3402,7 +3294,7 @@
         scanBusy = false;
         const nm = (j.item && j.item.sanitized_name) || 'This item';
         const ok = confirm('"' + nm + '" is already on this manifest from the tail-number lookup (x' + j.lookup_qty + ').\n\nScanning adds another on top. Add anyway?');
-        if (ok) { lastScan = { code:'', t:0 }; scan(barcode, true); }
+        if (ok) { lastScan = { code:'', t:0 }; scan(barcode, true, selectedOrigin); }
         else { setFB('Skipped - already added from the tail lookup', 'scan-warn', 3000); }
         return;
       }
@@ -3928,6 +3820,9 @@
       if (!advWeight.value) return showError('Please enter a weight');
     }
     const advOriginEl = document.getElementById('adv-origin');
+    if (_advOriginSelect && _advOriginSelect.selectedIndex === 0) {
+      alert('Choose a cargo source before adding this item.'); return;
+    }
     const params = new URLSearchParams({
       csrf_token:  csrfToken,
       action:      'add',

@@ -2,6 +2,7 @@
 import csv
 import hashlib
 import io
+from modules.services.inventory import insert_entry, InventoryConflict
 import sqlite3
 from datetime import datetime
 from typing import Iterable
@@ -610,39 +611,17 @@ def api_scan_barcode():
     total  = wpu * qty
     ts     = datetime.utcnow().isoformat()
 
-    # Enforce no overdraw for OUTBOUND (same rule as /detail)
-    if dir_io == "out":
-        avail = dict_rows("""
-          SELECT COALESCE(SUM(
-            CASE WHEN direction='in' THEN quantity
-                 WHEN direction='out' THEN -quantity END
-          ),0) AS avail
-            FROM inventory_entries
-           WHERE (pending IS NULL OR pending=0)
-             AND category_id=? AND sanitized_name=? AND ABS(weight_per_unit - ?) < 0.001
-        """, (cat_id, name, wpu))[0]["avail"] or 0
-        if qty > avail:
-            return jsonify({"status": "error", "message": f"Only {int(avail)} available"}), 400
+    try:
+        with sqlite3.connect(DB_FILE) as c:
+            c.execute("BEGIN IMMEDIATE")
+            eid, origin, ts = insert_entry(
+                c, category_id=cat_id, name=name, raw_name=raw, weight=wpu,
+                qty=qty, direction=dir_io, origin=data.get('origin'),
+                session_id=mid, pending=not commit, source='barcode-scan')
+    except InventoryConflict as exc:
+        return jsonify(exc.payload()), 409
 
-    origin = (data.get('origin') or '').strip()
     with sqlite3.connect(DB_FILE) as c:
-        cur = c.execute("""
-          INSERT INTO inventory_entries(
-            category_id, raw_name, sanitized_name,
-            weight_per_unit, quantity, total_weight,
-            direction, timestamp, pending, pending_ts, session_id, source, origin
-          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (
-          cat_id, raw, name,
-          wpu, qty, total,
-          dir_io, ts,
-          (0 if commit else 1),
-          (None if commit else ts),
-          mid,
-          "barcode-scan", origin
-        ))
-        eid = cur.lastrowid
-
         # Track last_seen / seen_count (for both requested + canonical if different)
         codes = {barcode}
         if m.get("requested_barcode") and m["requested_barcode"] != m["barcode"]:

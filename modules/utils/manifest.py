@@ -7,7 +7,7 @@ Manifest & Pilot Ack utilities
            data/manifests/<YYYY>/<MM>/<queue_id>.pdf
 """
 from __future__ import annotations
-import os, io, re, sqlite3
+import os, io, re, sqlite3, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from flask import render_template, current_app
@@ -199,7 +199,7 @@ def build_manifest_pdf(app, queue_row) -> tuple[bytes, str]:
     # Canonical path (timestamped filename to avoid collisions/regens)
     dt = datetime.now(timezone.utc)
     tail = _sanitize_tail(queue_row.get('tail_number') or '')
-    fname = f"{dt:%Y%m%d-%H%M%S}_{tail}_Q{qid}.pdf"
+    fname = f"{dt:%Y%m%d-%H%M%S}_{tail}_Q{qid}_{uuid.uuid4().hex}.pdf"
     out = STORE_ROOT / f"{dt.year:04d}" / f"{dt.month:02d}" / fname
     _ensure_dir(out)
     out.write_bytes(pdf_bytes)

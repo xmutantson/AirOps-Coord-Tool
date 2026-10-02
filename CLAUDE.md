@@ -64,7 +64,9 @@
 - **Local dev:** `python app.py` or `./entrypoint.sh` → `http://localhost:5150`
 - **Docker build + push:** via WSL (see Tech Stack above)
 - **Deploy update:** `docker compose pull && docker compose up -d`
-- **No formal test suite** — testing is manual and field-based
+- **Offline regression suite:** `python -B -m unittest discover -s tests -v`
+  (standard library runner; focused tests isolate application startup and mock
+  external services). Manual staging and field validation are still required.
 - **Linting:** Ruff, mypy (Python); ESLint + Prettier (JS) — configs in place
 
 ## Key Architecture Notes
