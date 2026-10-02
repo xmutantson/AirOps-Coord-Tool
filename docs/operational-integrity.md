@@ -148,3 +148,74 @@ The D: implementation report records the exact local commit, final test logs,
 independent file hash, and remaining validation limits. Actual WeasyPrint,
 browser/Flask application integration, Docker builds, Python 3.10/Pi runtime,
 hardware, production data, and field concurrency/latency remain unverified.
+
+## Re-review follow-up: shared manifest mutations
+
+The independent review of `e9dc0227b7027025cd72f46c9b3e8bd0cef045e4`
+verified the nine original scenarios and accepted the four documented contract
+adaptations. It identified four adjacent blockers; this follow-up repairs all
+four through shared services in `modules/services/inventory.py`:
+
+- Advanced-panel and legacy row deletion now use `reverse_manifest_entry`.
+  Compensation is capped to the remaining allocation, stock-checked, and keyed
+  by source table, source row, and manifest. Pending reversal cancellation clears
+  only that uncommitted operation's identity. Retries after commit are no-ops.
+- Legacy inbound snapshot removal goes through `remove_manifest_item` and
+  `insert_entry`, so competing reservations can reject the entire transaction,
+  including its pending changes and snapshot deletion.
+- Inbound imports require an open session under `BEGIN IMMEDIATE`. Accepted items
+  persist `(session_id, import_id, item_id, payload_hash, entry_id)` in
+  `manifest_import_items`. Retrying partial success does not replay accepted rows;
+  corrected skipped items can be accepted. Changing an already accepted identity
+  returns a conflict. An additional deliberate import requires a new import ID.
+- `manifest_reversals` replaces the numeric-ID-only deletion lookup. Equal IDs in
+  `flight_cargo` and `inventory_entries` are distinct, as are different manifests.
+  Legacy calls prefer an existing matching snapshot; ambiguous missing-snapshot
+  retries return `source_required` instead of deleting unrelated ledger cargo.
+  Clients can disambiguate with `source_table` plus `manifest_id`.
+
+Old ledger tombstones migrate with their retained source row. Legacy direct
+flight allocations are backfilled as closed when the terminal guard is installed.
+SQLite INSERT/UPDATE/DELETE guards protect terminal session movements against
+writers that bypass the Python service. These are application database changes,
+not operating-system/security-setting changes. No live migration was executed.
+
+### Mutation-path inventory
+
+| Legitimate path | Shared invariant / disposition |
+| --- | --- |
+| Manual inventory and barcode additions | `insert_entry` / `adjust_pending`: finite positive items, funding, exact source, open session, write transaction |
+| Advanced add/delete/purge/commit | Shared insert, referenced reversal, pending cancellation, and `commit_manifest_session` |
+| Scanner/key/nudge removal | `remove_manifest_item`: source/category identity, capped committed reversal, reservation funding; unbacked snapshots require reconciliation |
+| Generic receipt edit/delete | Existing guarded correction service; session-linked movements remain immutable through generic inventory controls |
+| Bulk category/name/weight propagation | Shared atomic correction checks old/new stock keys after the full batch, rejects session-linked movements, and preserves reservation funding across name casing; exporter format is unchanged |
+| Parsed inbound import | Durable per-import/per-item identity and payload equality, with partial validation results |
+| Queue creation/save/send | One session owner, guarded pending promotion, saved revision; send transfers approved cargo and closes ownership without appending movements |
+| Legacy direct outbound form | Routes into the queue/sign/send workflow instead of dispatching through a separate ledger path |
+| Direct inbound / auto-detected arrival | Import, attachment, flight/history writes, and session closure share one transaction; auto-import uses stable `arrival:<flight_id>` identity |
+| Whole-draft deletion | Shared atomic ownership-aware net reversal; unbacked legacy snapshot returns are rejected. As before, deleting an inbound draft retains already received stock |
+| Explicit finalized-flight cancellation | Stock-checked compensators outside the closed session; flight deletion and allocation state are atomic; repeat deletion is harmless |
+| Reconcile insert / pending-commit utility wrappers | Shared insert/commit gates; caller timestamps are preserved for new entries |
+| Pending heartbeat and expiration | State checks; expiration removes only pending movements and cancels associated uncommitted reversal records |
+| Training seed | Unscoped committed receipt seeding, unchanged; no reservation-reversing operation |
+| Explicit incident/training reset | Clears mutation/ownership metadata before ledger rows within the existing reset transaction; no reset was executed in this work |
+| Inventory exports / NetOps | Read-only producer shape unchanged: distinct package weights remain distinct rows |
+
+Legacy imports with existing `adv-detect` rows but no durable import identity are
+rejected for review rather than guessed/replayed. Already inconsistent or
+unattributable historical snapshots are not automatically repaired. Closed
+historical pending rows are retained for reconciliation rather than silently
+reaped. A pending reversal canceled by Back/expiration can be deliberately retried.
+
+The full offline suite has 96 passing cases, including 24 new mutation tests.
+The unchanged independent re-review suite has 21 passing cases (13 original
+scenarios and eight adjacent/control tests). Coverage includes competing reversal
+and import requests, partial import retry, database failures between ledger and
+identity writes, inbound funding rollback, cross-table/session ID collisions,
+legacy tombstone migration, pending cancellation/expiry, and actual extracted
+arrival routes. Existing tests and external assertions were not weakened.
+
+Limits remain: actual application startup/migrations, browser/CSRF integration,
+real PDF rendering, target Python/Pi performance, stress/crash recovery, hardware,
+and production data were not exercised. The D: follow-up report identifies the
+exact final local commit, final test logs, mutation-path audit, and source hashes.

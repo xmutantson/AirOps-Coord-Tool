@@ -1242,9 +1242,10 @@ def run_migrations():
     ensure_column("queued_flights", "pilot_ack_signed_at",    "TEXT")
     ensure_column("queued_flights", "pilot_ack_manifest_hash", "TEXT")
     ensure_column("queued_flights", "snapshot_ledger_ids", "TEXT")
-    from modules.services.inventory import ensure_allocation_schema
+    from modules.services.inventory import ensure_mutation_schema
     with sqlite3.connect(get_db_file()) as c:
-        ensure_allocation_schema(c)
+        c.execute("BEGIN IMMEDIATE")
+        ensure_mutation_schema(c)
     ensure_column("queued_flights", "pilot_ack_boot_id",      "TEXT")
     ensure_column("queued_flights", "manifest_pdf_path",      "TEXT")
 
@@ -1344,7 +1345,9 @@ def cleanup_pending():
     try:
         cutoff = (datetime.utcnow() - timedelta(minutes=15)).isoformat()
         with connect(get_db_file(), timeout=30) as c:
-            c.execute("DELETE FROM inventory_entries WHERE pending=1 AND pending_ts<=?", (cutoff,))
+            from modules.services.inventory import expire_pending_entries
+            c.execute('BEGIN IMMEDIATE')
+            expire_pending_entries(c,cutoff)
     except _sqlite3.OperationalError as e:
         # benign under load; try later rather than crashing the request
         if "locked" in str(e).lower():
@@ -4383,18 +4386,14 @@ def insert_inventory_entry_and_reconcile(
     Convenience wrapper used by routes: insert the entry and immediately
     apply it to any open batches so cue cards tick down live.
     """
-    ts = timestamp_iso or datetime.utcnow().isoformat()
-    tw = float(total_weight) if total_weight is not None else float(size_lb) * int(qty)
+    from modules.services.inventory import insert_entry
     with sqlite3.connect(get_db_file()) as c:
-        c.execute("""
-          INSERT INTO inventory_entries(
-            category_id, raw_name, sanitized_name,
-            weight_per_unit, quantity, total_weight,
-            direction, timestamp, session_id, pending, source, origin
-          ) VALUES (?,?,?,?,?,?, ?,?,?, 0,?,?)
-        """, (int(category_id), raw_name or sanitized_name, sanitized_name,
-              float(size_lb), int(qty), tw, direction, ts, session_id or "", source,
-              origin or ""))
+        c.execute('BEGIN IMMEDIATE')
+        eid,_,_ = insert_entry(c,category_id=category_id,name=sanitized_name,raw_name=raw_name,
+            weight=size_lb,qty=qty,direction=direction,session_id=session_id or None,
+            source=source,origin=origin)
+        if timestamp_iso:
+            c.execute('UPDATE inventory_entries SET timestamp=? WHERE id=?', (timestamp_iso,eid))
     try:
         apply_inventory_entry_to_batches(direction, sanitized_name, float(size_lb), int(qty))
     except Exception:
@@ -4648,6 +4647,9 @@ def touch_pending_session(session_id: str) -> None:
         return
     try:
         with connect(get_db_file(), timeout=30) as c:
+            from modules.services.inventory import require_open_session
+            c.execute('BEGIN IMMEDIATE')
+            require_open_session(c,sid)
             c.execute(
                 "UPDATE inventory_entries SET pending_ts=? WHERE pending=1 AND session_id=?",
                 (datetime.utcnow().isoformat(), sid))
@@ -4694,12 +4696,11 @@ def aggregate_manifest_net(session_id: str, flight_id: int | None = None,
 
 def flip_session_pending_to_committed(session_id: str):
     """After a send/commit, turn session pendings into committed rows (pending=0)."""
+    from modules.services.inventory import commit_manifest_session
     with sqlite3.connect(get_db_file()) as c:
-        c.execute("""
-          UPDATE inventory_entries
-             SET pending=0
-           WHERE session_id=? AND pending=1
-        """, (session_id,))
+        c.execute('BEGIN IMMEDIATE')
+        commit_manifest_session(c,session_id)
+
 
 def lookup_callsign_for_airport(code: str) -> str:
     """

@@ -1188,7 +1188,8 @@
             } catch(_) {}
           }
           // Apply to inventory (committed inbound entries)
-          const payload = { manifest_id: manifestId.value, items };
+          const payload = { manifest_id: manifestId.value, import_id: 'inbound:' + manifestId.value,
+            items: items.map((item, index) => ({ ...item, item_id: String(index) })) };
           // Helpful console breadcrumb while we're stabilizing
           const ap = await fetch('/api/apply_adv_manifest', {
             method: 'POST',
