@@ -153,26 +153,19 @@ def build_manifest_pdf(app, queue_row) -> tuple[bytes, str]:
                 "sanitized_name": name,
                 "wpu": round(wpu_f, 2) if wpu_f else None,
                 "qty": qty_i,
-                "total": round(total_f, 1),
+                "total": total_f,
                 "origin": origin,
             })
 
-    # Fallback: parse "Manifest: …" from cargo_type/remarks if no normalized rows exist
-    if not rows:
-        cargo_txt   = (queue_row.get('cargo_type') or '').strip()
-        remarks_txt = (queue_row.get('remarks') or '').strip()
-        parsed = _parse_manifest_items(" ".join([cargo_txt, remarks_txt]).strip())
-        rows = parsed
-
-    # Totals for the PDF (grand total weight & quantity)
-    try:
-        total_weight = round(sum(float(r.get("total") or 0) for r in rows), 1)
-    except Exception:
-        total_weight = 0.0
-    try:
-        total_qty = sum(int(r.get("qty") or 0) for r in rows)
-    except Exception:
-        total_qty = 0
+    # Signed documents and dispatch use the same numeric source. Remarks are
+    # descriptive text, never an independent itemized weight ledger.
+    from modules.services.inventory import cargo_weight_lbs
+    total_weight = sum(float(r['total']) for r in rows) if rows else cargo_weight_lbs(queue_row.get('cargo_weight'))
+    total_qty = sum(int(r['qty']) for r in rows)
+    from modules.services.manifest_images import validate_signature, signature_fetcher
+    queue_row = dict(queue_row)
+    queue_row['pilot_ack_signature_b64'] = validate_signature(queue_row.get('pilot_ack_signature_b64'))
+    fetcher = signature_fetcher(queue_row['pilot_ack_signature_b64'])
 
     # Template render (uses same template already in repo)
     html = render_template(
@@ -191,10 +184,10 @@ def build_manifest_pdf(app, queue_row) -> tuple[bytes, str]:
     try:
         css_path = os.path.join(base_dir, "static", "style.css")
         if CSS is not None and os.path.exists(css_path):
-            stylesheets.append(CSS(filename=css_path))
+            stylesheets.append(CSS(filename=css_path, url_fetcher=fetcher))
     except Exception:
         pass
-    pdf_bytes = HTML(string=html, base_url=base_dir).write_pdf(stylesheets=stylesheets)
+    pdf_bytes = HTML(string=html, base_url=base_dir, url_fetcher=fetcher).write_pdf(stylesheets=stylesheets)
 
     # Canonical path (timestamped filename to avoid collisions/regens)
     dt = datetime.now(timezone.utc)
@@ -333,7 +326,8 @@ def render_manifest_pdf(html: str) -> Tuple[str, bytes]:
     """
     if not HTML:
         raise RuntimeError("WeasyPrint is not installed; unable to render PDF")
-    doc = HTML(string=html)
+    from modules.services.manifest_images import signature_fetcher
+    doc = HTML(string=html, url_fetcher=signature_fetcher(''))
     pdf_bytes = doc.write_pdf()
     ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
     return (f"manifest-{ts}.pdf", pdf_bytes)

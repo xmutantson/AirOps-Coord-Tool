@@ -40,7 +40,7 @@ Offline startup, explicit updates, and failure ordering have regression tests
 using a mocked Docker shell function. Real Docker Compose, image builds,
 multi-architecture images, and hardware behavior require separate validation.
 
-## Offline validation
+## Initial 93b71bf offline validation
 
 `python -B -m unittest discover -s tests -v` passes 50 tests: 22 inventory,
 12 acknowledgement, 9 Winlink, and 7 deployment cases. These include real
@@ -95,3 +95,56 @@ this implementation does not establish whether those tasks were completed.
   release work. No dependencies were upgraded speculatively in this change.
 - The field unit's real database and hardware have not been inspected or changed.
   Historical stock discrepancies need a separately reviewed reconciliation.
+
+## Independent review follow-up (October 2, 2026)
+
+The review of `93b71bffe7a48de3bea8fe09edc1c1900634bbf2` identified nine
+reliability findings. This follow-up implements local fixes for each finding:
+
+| Finding | Implementation and regression evidence |
+| --- | --- |
+| Duplicate drafts consume one allocation twice | Durable session ownership; retries return the same queued ID; closed sessions cannot be queued or scanned again. Legacy duplicate drafts cannot reverse the owner's allocation. |
+| Delete/dispatch race returns shipped stock | Deletion takes `BEGIN IMMEDIATE` before reading the draft or cargo; both transaction orderings are tested. |
+| Legacy cargo deletion compensates repeatedly | Persistent source-row deletion records make compensation idempotent under the same write lock. |
+| Receipt edit/delete underfunds reservations | Generic corrections validate both affected stock keys and roll back conflicts; session movements must be changed through the manifest. Dispatch independently rechecks committed stock. |
+| Stale page signs unseen changes | Queue views carry a saved-revision digest; acknowledgment requires exactly that digest under the write lock. Missing tokens fail closed. |
+| Removing cargo loses the cutline | Applied ledger IDs live on the draft, independently of cargo rows. Empty snapshots, same timestamps, later pending commits, and legacy chip removal are covered. |
+| Typed PDF weight differs from dispatch | PDF and dispatch use the same typed-weight parser when cargo is not itemized. Remarks are descriptive and cannot override weight. Decimal dispatch weights are retained. |
+| Source reversal merges case-distinct origins | Reversals preserve stored source strings exactly. |
+| Dispatch accepts a missing signed PDF | Dispatch requires the preserved file; every new acknowledgment creates an artifact even for older clients requesting `build_pdf=no`. |
+
+Signature hardening is static code work with benign unit tests: strict PNG/base64
+validation, bounded request/image bytes and decoded pixels, single-frame images,
+in-memory PNG normalization, and a PDF fetcher restricted to the validated
+signature. No exploit reproduction or network resource fetch is performed.
+
+Schema additions are additive: `queued_flights.snapshot_ledger_ids`,
+`manifest_allocations`, and `cargo_deletions`. Legacy snapshots adopt their old
+timestamp cutline once; subsequent saves use explicit ledger membership. Legacy
+acknowledgments need renewal after the revision format changes. Already-corrupt
+historical inventory/snapshots are not automatically repaired. Old clients must
+reload updated pages to send the required revision token. Generic edits to
+session-linked inventory are rejected to keep signed/saved allocations coherent.
+
+The repository offline suite now has 72 passing tests (the original 50 plus 22
+follow-up regressions). Original baseline fixtures now simulate a reviewed
+revision and a persisted stub artifact; their invariant assertions are retained.
+Three baseline dispatch scenarios explicitly seed stock. PDF rendering remains
+stubbed, while the real PDF builder and Jinja template prepare weight totals.
+
+The external independent suite is retained byte-for-byte and rerun separately.
+It passes 9 of 13 tests; four tests require review of changed fixture contracts:
+its forced nested dispatch now encounters the deletion write lock; its receipt
+test ignores the rejected deletion and therefore observes a valid funded flight;
+its duplicate-send test directly posts no revision token; and its stale-page test
+inherits the updated baseline helper which explicitly reviews the current
+revision. Separate repository tests exercise stale/missing tokens directly,
+blocked receipt corrections plus legacy corruption, both race orderings, and
+one allocation/one dispatch. The external assertions were not edited to obtain
+a green result. Treat those four independent results as outstanding independent
+review work, not a fully passing external suite.
+
+The D: implementation report records the exact local commit, final test logs,
+independent file hash, and remaining validation limits. Actual WeasyPrint,
+browser/Flask application integration, Docker builds, Python 3.10/Pi runtime,
+hardware, production data, and field concurrency/latency remain unverified.

@@ -906,12 +906,13 @@
         ackSend.onclick = null;
       }
       async function doAck(){
-        if (!confirm('Confirm pilot acknowledgement and generate manifest?')) return;
+        const typed = prompt('Pilot name (digital signature):', '');
+        if (!typed) return;
         try{
           const r = await fetch('/ramp/pilot_ack/{{ d.id }}', {
             method:'POST',
             headers: xhrHeaders({ 'Content-Type':'application/json' }),
-            body: JSON.stringify({ build_pdf: 'yes' })
+            body: JSON.stringify({ build_pdf: 'yes', typed_name: typed, expected_revision: {{ draft.expected_revision | tojson }} })
           });
           const j = await r.json().catch(()=>({}));
           if (!r.ok) throw new Error(j.message || 'Pilot Ack failed');

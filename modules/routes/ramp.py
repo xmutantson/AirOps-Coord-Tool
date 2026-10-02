@@ -796,30 +796,13 @@ def queue_flight():
                 return jsonify(exc.payload()), 409
             flash(str(exc), 'error')
             return redirect(url_for('ramp.ramp_boss'))
-        # NEW: reject identical queue duplicates in a short window (double-click guard)
-        try:
-            cutoff = (datetime.utcnow() - timedelta(seconds=30)).isoformat()
-            qdup = c.execute("""
-              SELECT id FROM queued_flights
-               WHERE direction=? AND tail_number=?
-                 AND airfield_takeoff=? AND airfield_landing=?
-                 AND COALESCE(travel_time,'')=? AND COALESCE(cargo_type,'')=?
-                 AND COALESCE(remarks,'')=? AND COALESCE(cargo_weight,'')=?  -- guard weight too
-                 AND created_at >= ?
-               ORDER BY id DESC LIMIT 1
-            """, (
-              direction, tail_number,
-              airfield_takeoff, airfield_landing,
-              travel_time, cargo_type, remarks, typed_cargo_wt, cutoff
-            )).fetchone()
-        except Exception:
-            qdup = None
-        if qdup:
-            qid = qdup['id']
-            c.commit()
-            flash(f"Duplicate ignored; using draft {qid}.", 'info')
-            if request.headers.get('X-Requested-With')=='XMLHttpRequest':
-                return jsonify({'status':'queued','qid':qid})
+        from modules.services.inventory import claim_manifest, save_ledger_cutline
+        owner = claim_manifest(c, mid)
+        if owner:
+            if owner[2] != 'queued':
+                return jsonify(error='manifest_conflict', message='This manifest has already been closed. Start a new manifest.'), 409
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return jsonify(status='queued', qid=owner[0])
             return redirect(url_for('ramp.queued_flights'))
 
         cur = c.execute("""
@@ -903,6 +886,9 @@ def queue_flight():
             ).fetchone()[0] or 0.0
             c.execute("UPDATE queued_flights SET cargo_weight=? WHERE id=?",
                       (cw_total, qid))
+        if mid:
+            claim_manifest(c, mid, qid)
+            save_ledger_cutline(c, qid, mid)
         # end snapshot
 
         # --- Canonicalize remarks + cargo_type from snapshot (only if snapshot exists) ---
@@ -1025,10 +1011,7 @@ def queued_flights():
     except Exception:
         pass
     base_sql = """
-      SELECT id, direction, tail_number, pilot_name,
-             airfield_takeoff, airfield_landing,
-             travel_time, cargo_type, remarks, created_at,
-             COALESCE(pilot_ack_signed_at,'') AS pilot_ack_signed_at
+      SELECT *
         FROM queued_flights
        WHERE 1=1
     """
@@ -1043,7 +1026,15 @@ def queued_flights():
         where.append(f"AND airfield_landing IN ({ph})")
         params.extend(airport_idents)
     sql = " ".join([base_sql, *where, "ORDER BY created_at DESC"])
-    rows = dict_rows(sql, tuple(params))
+    with sqlite3.connect(DB_FILE) as c:
+        c.row_factory = sqlite3.Row
+        c.execute('BEGIN')
+        rows = [dict(r) for r in c.execute(sql, tuple(params))]
+        for draft in rows:
+            draft['expected_revision'] = manifest_fingerprint(c, draft)
+            if (not acknowledgement_is_current(c, draft) or
+                    not os.path.isfile(draft.get('manifest_pdf_path') or '')):
+                draft['pilot_ack_signed_at'] = None
 
     return render_template(
         'queued_flights.html',
@@ -1088,10 +1079,7 @@ def queued_flights_table_partial():
     except Exception:
         pass
     base_sql = """
-      SELECT id, direction, tail_number, pilot_name,
-             airfield_takeoff, airfield_landing,
-             travel_time, cargo_type, remarks, created_at,
-             COALESCE(pilot_ack_signed_at,'') AS pilot_ack_signed_at
+      SELECT *
         FROM queued_flights
        WHERE 1=1
     """
@@ -1106,7 +1094,15 @@ def queued_flights_table_partial():
         where.append(f"AND airfield_landing IN ({ph})")
         params.extend(airport_idents)
     sql = " ".join([base_sql, *where, "ORDER BY created_at DESC"])
-    rows = dict_rows(sql, tuple(params))
+    with sqlite3.connect(DB_FILE) as c:
+        c.row_factory = sqlite3.Row
+        c.execute('BEGIN')
+        rows = [dict(r) for r in c.execute(sql, tuple(params))]
+        for draft in rows:
+            draft['expected_revision'] = manifest_fingerprint(c, draft)
+            if (not acknowledgement_is_current(c, draft) or
+                    not os.path.isfile(draft.get('manifest_pdf_path') or '')):
+                draft['pilot_ack_signed_at'] = None
 
     return render_template('partials/_queued_flights_table.html', queued=rows)
 
@@ -1134,6 +1130,16 @@ def send_queued_flight(qid):
                 return jsonify(error='pilot_ack_required', message=msg), 400
             flash(msg, 'error')
             return redirect(request.referrer or url_for('ramp.queued_flights'))
+
+        from modules.services.inventory import require_manifest_owner, validate_allocated_stock, InventoryConflict
+        mid = queue_manifest_id(c, q)
+        try:
+            require_manifest_owner(c, mid, qid)
+            validate_allocated_stock(c, mid)
+        except InventoryConflict as exc:
+            return jsonify(exc.payload()), 409
+        if not q.get('manifest_pdf_path') or not os.path.isfile(q['manifest_pdf_path']):
+            return jsonify(error='signed_pdf_required', message='Signed PDF unavailable; acknowledge the current manifest again.'), 409
 
         # ── take-off & ETA come **from the browser** when available ─────────────
         cli_dep = request.form.get("takeoff_time","").strip()
@@ -1193,61 +1199,7 @@ def send_queued_flight(qid):
                         :cargo_type,:cargo_weight,:remarks,:flight_code)
             """, data | {'flight_code': flight_code}).lastrowid
 
-        # ── rebuild the manifest exactly like edit_queued_flight does ──
         mid = queue_manifest_id(c, q)
-        if mid:
-            # 1️⃣ pull the merged state into Python
-            row_dir = 'in' if q['direction']=='inbound' else 'out'
-            # Only include *newer than snapshot* inventory rows to avoid double-counting
-            snap_latest = c.execute(
-                "SELECT MAX(timestamp) FROM flight_cargo WHERE queued_id=?",
-                (qid,)
-            ).fetchone()[0]
-            rows = c.execute("""
-              SELECT
-                category_id,
-                sanitized_name,
-                weight_per_unit,
-                SUM(CASE direction WHEN ? THEN quantity ELSE -quantity END)        AS net_qty,
-                SUM(CASE direction WHEN ? THEN total_weight ELSE -total_weight END) AS net_total,
-                MAX(timestamp) AS latest_ts,
-                COALESCE(MAX(origin),'') AS origin
-              FROM (
-                SELECT category_id, sanitized_name, weight_per_unit,
-                       quantity, total_weight, direction, timestamp,
-                       COALESCE(origin,'') AS origin
-                  FROM flight_cargo
-                 WHERE queued_id = ?
-                UNION ALL
-                SELECT category_id, sanitized_name, weight_per_unit,
-                       quantity, total_weight, direction, timestamp,
-                       COALESCE(origin,'') AS origin
-                  FROM inventory_entries
-                 WHERE session_id = ? AND pending IN (0,1)
-                   AND ( ? IS NULL OR timestamp > ? )
-              )
-              GROUP BY category_id, sanitized_name, weight_per_unit, origin
-              HAVING net_qty > 0
-            """, (row_dir, row_dir, qid, mid, snap_latest, snap_latest)).fetchall()
-
-            # 2️⃣ delete the old snapshot rows
-            c.execute("DELETE FROM flight_cargo WHERE queued_id = ?", (qid,))
-
-            # 3️⃣ re-insert exactly what we just fetched
-            for cat, name, wpu, qty, tot, ts, orig in rows:
-                c.execute("""
-                  INSERT INTO flight_cargo(
-                    queued_id, session_id, category_id, sanitized_name,
-                    weight_per_unit, quantity, total_weight,
-                    direction, timestamp, origin
-                  ) VALUES (?,?,?,?,?,?,?,?,?,?)
-                """, (
-                  qid, mid,
-                  cat, name, wpu,
-                  qty, tot,
-                  row_dir, ts, orig
-                ))
-
         # now move all associated cargo rows onto this flight
         c.execute("""
           UPDATE flight_cargo
@@ -1273,18 +1225,11 @@ def send_queued_flight(qid):
         ).fetchone()[0] or 0.0
         # If there is no manifest content, fall back to the draft’s typed cargo weight
         # Parse typed draft weight safely (handles "1200 lbs", "1200 lb", or plain number)
-        cw_raw = (q.get('cargo_weight') or '')
-        try:
-            cw_s = str(cw_raw).lower().strip()
-            if cw_s.endswith('lbs'): cw_s = cw_s[:-3]
-            if cw_s.endswith('lb'):  cw_s = cw_s[:-2]
-            draft_fallback = float(cw_s.strip() or 0.0)
-        except Exception:
-            draft_fallback = 0.0
-        effective_tot  = tot if rows else draft_fallback
+        from modules.services.inventory import cargo_weight_lbs
+        effective_tot = tot if c.execute('SELECT 1 FROM flight_cargo WHERE flight_id=? LIMIT 1', (fid,)).fetchone() else cargo_weight_lbs(q.get('cargo_weight'))
         c.execute("""
           UPDATE flights
-             SET cargo_weight     = printf('%.0f lbs', ?),
+             SET cargo_weight     = printf('%g lbs', ?),
                  cargo_weight_real = ?
            WHERE id=?
         """, (effective_tot, effective_tot, fid))
@@ -1326,6 +1271,8 @@ def send_queued_flight(qid):
               q.get('pilot_ack_signature_b64'), q.get('pilot_ack_signed_at'),
               q.get('pilot_ack_manifest_hash'), q.get('manifest_pdf_path'), fid))
 
+        if mid:
+            c.execute("UPDATE manifest_allocations SET state='sent',flight_id=? WHERE session_id=?", (fid,mid))
         # delete the draft record
         c.execute("DELETE FROM queued_flights WHERE id=?", (qid,))
 
@@ -1357,12 +1304,19 @@ def send_queued_flight(qid):
 
 @bp.route('/delete_queued_flight/<int:qid>', methods=['POST','GET'])
 def delete_queued_flight(qid):
-    # load draft direction
-    draft = dict_rows("SELECT direction FROM queued_flights WHERE id=?", (qid,))
-    direction = (draft[0]['direction'] if draft else '') or ''
-
     with sqlite3.connect(DB_FILE) as c:
         c.row_factory = sqlite3.Row
+        c.execute('BEGIN IMMEDIATE')
+        draft = c.execute('SELECT * FROM queued_flights WHERE id=?', (qid,)).fetchone()
+        if draft is None or dict(draft).get('consumed'):
+            return redirect(url_for('ramp.queued_flights'))
+        draft = dict(draft)
+        direction = draft['direction']
+        from modules.services.inventory import claim_manifest
+        mid = queue_manifest_id(c, draft)
+        owner = claim_manifest(c, mid, qid)
+        # A duplicate legacy draft never owns the allocation or its reversal.
+        owns = not owner or (owner[0] == qid and owner[2] == 'queued')
         # read the latest snapshot inside the txn
         snap = c.execute("""
             SELECT category_id, sanitized_name, weight_per_unit,
@@ -1377,21 +1331,21 @@ def delete_queued_flight(qid):
 
         # Only compensate for OUTBOUND drafts. Inbound drafts are snapshots of inbound
         # receipts already committed by /api/apply_adv_manifest.
-        if direction == 'outbound':
+        if owns and direction == 'outbound':
             now_iso = datetime.utcnow().isoformat()
 
             # 1) snapshot net per key (out=+qty, in=-qty)
             base_net = {}      # (cat_id, name_lower, wpu_float, origin) -> net_qty
             name_case = {}     # representative cased name per key
             origin_case = {}   # representative origin per key
-            sess_ids = set()
+            sess_ids = {mid} if mid else set()
             for r in snap:
                 try:
-                    orig = (r['origin'] or '').strip()
+                    orig = r['origin'] or ''
                     k = (int(r['category_id']),
                          (r['sanitized_name'] or '').strip().lower(),
                          float(r['weight_per_unit']),
-                         orig.lower())
+                         orig)
                     sgn = 1 if r['direction'] == 'out' else -1
                     base_net[k] = base_net.get(k, 0) + sgn * int(r['quantity'] or 0)
                     if k not in name_case and r['sanitized_name']:
@@ -1421,8 +1375,8 @@ def delete_queued_flight(qid):
                    GROUP BY session_id, category_id, LOWER(sanitized_name), CAST(weight_per_unit AS REAL), COALESCE(origin,'')
                 """, tuple(sess_ids)).fetchall()
                 for r in rows:
-                    orig = (r['origin'] or '').strip()
-                    k  = (int(r['cat']), (r['key_name'] or '').strip(), float(r['wpu']), orig.lower())
+                    orig = r['origin'] or ''
+                    k  = (int(r['cat']), (r['key_name'] or '').strip(), float(r['wpu']), orig)
                     sk = (str(r['sid']),) + k
                     q  = int(r['net_qty'] or 0)
                     sess_net_by_key[k] = sess_net_by_key.get(k, 0) + q
@@ -1493,6 +1447,9 @@ def delete_queued_flight(qid):
                   sid, 'queue-delete/sess', orig
                 ))
 
+        if owns and mid:
+            c.execute("DELETE FROM inventory_entries WHERE session_id=? AND pending=1", (mid,))
+            c.execute("UPDATE manifest_allocations SET state='deleted' WHERE session_id=?", (mid,))
         # remove cargo and draft
         c.execute("DELETE FROM flight_cargo WHERE queued_id=?", (qid,))
         c.execute("DELETE FROM queued_flights WHERE id=?", (qid,))
@@ -1502,83 +1459,19 @@ def delete_queued_flight(qid):
 
 @bp.route('/api/queued_manifest/<int:qid>')
 def api_queued_manifest(qid):
-    # If we have a live Advanced manifest open, merge that in:
-    mid = clean_mid(request.args.get('manifest_id',''))
-    # NOTE: rows returned here drive the Edit-Manifest chips (snapshot view)
-    if mid:
-        # Cut-line: newest timestamp already captured in the queued snapshot
-        snap_latest_row = dict_rows(
-            "SELECT MAX(timestamp) AS t FROM flight_cargo WHERE queued_id=?",
-            (qid,)
-        )
-        snap_latest = (snap_latest_row[0]['t'] if snap_latest_row else None)
-        # Use the DRAFT direction to decide the sign when merging live commits.
-        drow = dict_rows("SELECT direction FROM queued_flights WHERE id=?", (qid,))
-        row_dir = 'in' if (drow and (drow[0].get('direction') == 'inbound')) else 'out'
-        # Build a signed aggregate; return positives as normal and negatives as Δ (reverse) rows.
-        rows = dict_rows(f"""
-          WITH agg AS (
-            SELECT
-              x.category_id                       AS cat,
-              ic.display_name                     AS category_name,
-              x.sanitized_name                    AS sanitized,
-              x.weight_per_unit                   AS wpu,
-              SUM(x.q_signed)                     AS net_qty,
-              SUM(x.t_signed)                     AS net_total
-            FROM (
-              SELECT category_id, sanitized_name, weight_per_unit,
-                     quantity                      AS q_signed,
-                     total_weight                  AS t_signed
-                FROM flight_cargo
-               WHERE queued_id = ?
-              UNION ALL
-              SELECT category_id, sanitized_name, weight_per_unit,
-                     CASE direction WHEN ? THEN quantity ELSE -quantity END      AS q_signed,
-                     CASE direction WHEN ? THEN total_weight ELSE -total_weight END AS t_signed
-                FROM inventory_entries
-               WHERE session_id = ? AND pending = 0
-                 AND ( ? IS NULL OR timestamp > ? )   -- ► only newer than snapshot
-              UNION ALL
-              /* Include current pending edits so chips show immediately after baseline clears */
-              SELECT category_id, sanitized_name, weight_per_unit,
-                     CASE direction WHEN ? THEN quantity ELSE -quantity END      AS q_signed,
-                     CASE direction WHEN ? THEN total_weight ELSE -total_weight END AS t_signed
-                FROM inventory_entries
-               WHERE session_id = ? AND pending = 1
-            ) x
-            JOIN inventory_categories ic ON ic.id = x.category_id
-            GROUP BY x.category_id, x.sanitized_name, x.weight_per_unit, COALESCE(x.origin,'')
-          )
-          SELECT NULL AS entry_id, category_name, sanitized,
-                 net_total  AS total, wpu, net_qty AS qty, 0 AS delta
-            FROM agg WHERE net_qty > 0
-          UNION ALL
-          SELECT NULL, category_name, sanitized,
-                 ABS(net_total) AS total, wpu, ABS(net_qty) AS qty, 1 AS delta
-            FROM agg WHERE net_qty < 0
-          ORDER BY category_name, sanitized, wpu
-        """, (
-          qid,
-          row_dir, row_dir, mid, snap_latest, snap_latest,
-          row_dir, row_dir, mid
-        ))
-    else:
-        # no live manifest → show only the saved snapshot
-        rows = dict_rows("""
-          SELECT
-            fc.id                  AS entry_id,
-            ic.display_name        AS category_name,
-            fc.sanitized_name      AS sanitized,
-            fc.total_weight        AS total,
-            fc.weight_per_unit     AS wpu,
-            fc.quantity            AS qty,
-            0                      AS delta
-          FROM flight_cargo fc
-          JOIN inventory_categories ic
-            ON ic.id = fc.category_id
-          WHERE fc.queued_id = ?
-        """, (qid,))
-    return jsonify(rows), 200, {'Content-Type':'application/json'}
+    from modules.services.inventory import manifest_rows
+    with sqlite3.connect(DB_FILE) as c:
+        c.row_factory = sqlite3.Row
+        c.execute('BEGIN')
+        draft = c.execute('SELECT * FROM queued_flights WHERE id=?', (qid,)).fetchone()
+        if not draft:
+            return jsonify([]), 404
+        mid = queue_manifest_id(c, dict(draft))
+        categories = dict(c.execute('SELECT id,display_name FROM inventory_categories'))
+        rows = [dict(entry_id=None, category_name=categories.get(r['category_id'],''),
+                     sanitized=r['sanitized_name'],total=r['total'],wpu=r['weight_per_unit'],
+                     qty=r['qty'],origin=r['origin'],delta=0) for r in manifest_rows(c,mid,queued_id=qid)]
+    return jsonify(rows)
 
 @bp.route('/edit_queued_flight/<int:qid>', methods=['GET','POST'])
 def edit_queued_flight(qid):
@@ -1607,6 +1500,20 @@ def edit_queued_flight(qid):
                 return redirect(url_for('ramp.queued_flights'))
             draft = dict(fresh)
 
+            from modules.services.inventory import (require_manifest_owner, InventoryConflict,
+                manifest_rows, applied_ledger_ids, save_ledger_cutline)
+            mid = queue_manifest_id(c, draft)
+            posted_mid = clean_mid(request.form.get('manifest_id',''))
+            if mid and posted_mid and mid != posted_mid:
+                return jsonify(error='manifest_conflict', message='A saved draft cannot change manifest identity.'), 409
+            mid = mid or posted_mid
+            try:
+                require_manifest_owner(c, mid, qid)
+            except InventoryConflict as exc:
+                return jsonify(exc.payload()), 409
+            if request.form['direction'] != draft['direction'] and c.execute(
+                    'SELECT 1 FROM flight_cargo WHERE queued_id=?', (qid,)).fetchone():
+                return jsonify(error='manifest_conflict', message='Remove cargo before changing direction.'), 409
             c.execute("""
               UPDATE queued_flights SET
                 direction=?, pilot_name=?, pax_count=?, tail_number=?,
@@ -1628,88 +1535,21 @@ def edit_queued_flight(qid):
               clean_mid(request.form.get('manifest_id','')),
               qid
             ))
-            # refresh the snapshot to match the **current** manifest (replace-not-append)
-            # recover manifest id if the form didn't send it
-            mid   = clean_mid(request.form.get('manifest_id',''))
-            if not mid:
-                mid = clean_mid(draft.get('manifest_id'))
-            if not mid:
-                mrow = c.execute("SELECT session_id FROM flight_cargo WHERE queued_id=? ORDER BY id DESC, timestamp DESC LIMIT 1", (qid,)).fetchone()
-                if mrow and mrow['session_id']:
-                    mid = mrow['session_id']
-            rows  = []                       # ← default when no live session
             committed_now = False
             if mid:
-                row_dir = 'in' if request.form['direction']=='inbound' else 'out'
-                # Only treat this POST as a new commit if the manifest has newer rows
-                # than our saved snapshot. This protects operator-edited remarks unless
-                # they actually hit "Done" in this edit session.
-                inv_latest = c.execute(
-                    "SELECT MAX(timestamp) FROM inventory_entries "
-                    " WHERE session_id=? AND pending=0", (mid,)
-                ).fetchone()[0]
-                snap_latest = c.execute(
-                    "SELECT MAX(timestamp) FROM flight_cargo WHERE queued_id=?",
-                    (qid,)
-                ).fetchone()[0]
-                # If there is no snapshot yet, use the draft's creation time as the cut line.
-                cutline = snap_latest or draft.get('created_at')
-                committed_now = bool(inv_latest and cutline and inv_latest > cutline)
-
-                # 1️⃣ collect a **combined** view (old snapshot + new edits)
-                #    (We will only apply it if committed_now is True.)
-                rows = c.execute("""
-                  SELECT
-                    category_id,
-                    sanitized_name,
-                    weight_per_unit,
-                    SUM(CASE direction WHEN ? THEN quantity ELSE -quantity END)        AS net_qty,
-                    SUM(CASE direction WHEN ? THEN total_weight ELSE -total_weight END) AS net_total,
-                    MAX(timestamp)                  AS latest_ts,
-                    COALESCE(MAX(origin),'') AS origin
-                  FROM (
-                    /* previous snapshot rows */
-                    SELECT category_id, sanitized_name, weight_per_unit,
-                           quantity, total_weight, direction, timestamp,
-                           COALESCE(origin,'') AS origin
-                      FROM flight_cargo
-                     WHERE queued_id = ?
-
-                    UNION ALL
-
-                    /* newly-committed edits this session */
-                    SELECT category_id, sanitized_name, weight_per_unit,
-                           quantity, total_weight, direction, timestamp,
-                           COALESCE(origin,'') AS origin
-                      FROM inventory_entries
-                     WHERE session_id = ?
-                       AND pending = 0
-                       AND ( ? IS NULL OR timestamp > ? )   -- ► only deltas since snapshot/draft cut line
-                  )
-                  GROUP BY category_id, sanitized_name, weight_per_unit, origin
-                  HAVING net_qty > 0
-                """, (row_dir, row_dir, qid, mid, cutline, cutline)).fetchall()
-
-            # 2️⃣ Replace snapshot only if a *new* commit happened now
-            if mid and committed_now:
-                c.execute("DELETE FROM flight_cargo WHERE queued_id=?", (qid,))
-                for cat_id, name, wpu, qty, tot, ts, orig in rows:
-                    c.execute("""
-                      INSERT INTO flight_cargo(
-                        queued_id, session_id, category_id, sanitized_name,
-                        weight_per_unit, quantity, total_weight,
-                        direction, timestamp, origin
-                      ) VALUES (?,?,?,?,?,?,?,?,?,?)
-                    """, (
-                      qid, mid,
-                      cat_id, name, wpu,
-                      qty,  tot,
-                      row_dir, ts, orig
-                    ))
-            # ──────────────────────────────────────────────────────────
-            #  Re-compute the new total weight for this draft and store
-            #  it, so the “Cargo Weight” input is pre-filled next time.
-            # ──────────────────────────────────────────────────────────
+                applied = applied_ledger_ids(c, qid, mid)
+                committed = {r[0] for r in c.execute('SELECT id FROM inventory_entries WHERE session_id=? AND COALESCE(pending,0)=0', (mid,))}
+                committed_now = bool(committed - applied)
+                if committed_now:
+                    rows = manifest_rows(c, mid, queued_id=qid, include_pending=False)
+                    c.execute('DELETE FROM flight_cargo WHERE queued_id=?', (qid,))
+                    for item in rows:
+                        c.execute("""INSERT INTO flight_cargo(queued_id,session_id,category_id,sanitized_name,
+                            weight_per_unit,quantity,total_weight,direction,timestamp,origin)
+                            VALUES (?,?,?,?,?,?,?,?,?,?)""", (qid,mid,item['category_id'],item['sanitized_name'],
+                            item['weight_per_unit'],item['qty'],item['total'],item['direction'],
+                            datetime.utcnow().isoformat(),item['origin']))
+                save_ledger_cutline(c, qid, mid)
             nrows = c.execute(
                 "SELECT COUNT(*) FROM flight_cargo WHERE queued_id=?",
                 (qid,)
@@ -1724,6 +1564,8 @@ def edit_queued_flight(qid):
                     "UPDATE queued_flights SET cargo_weight=? WHERE id=?",
                     (cw_total, qid)
                 )
+            elif committed_now:
+                c.execute('UPDATE queued_flights SET cargo_weight=0 WHERE id=?', (qid,))
             else:
                 # no snapshot rows → keep the operator's posted value if provided
                 if str(typed_cargo_wt or '').strip():
@@ -1802,6 +1644,14 @@ def edit_queued_flight(qid):
             )
         return redirect(url_for('ramp.queued_flights'))
 
+    with sqlite3.connect(DB_FILE) as c:
+        c.row_factory = sqlite3.Row
+        c.execute('BEGIN')
+        row = c.execute('SELECT * FROM queued_flights WHERE id=?', (qid,)).fetchone()
+        if row is None:
+            return redirect(url_for('ramp.queued_flights'))
+        draft = dict(row)
+        draft['expected_revision'] = manifest_fingerprint(c, draft)
     # GET → render Ramp-Boss with a ‘draft’ object for pre-fill
     return render_template('ramp_boss.html',
                            draft=draft,
@@ -1888,6 +1738,10 @@ def delete_flight_cargo(fcid):
         c.row_factory = sqlite3.Row
         c.execute("BEGIN IMMEDIATE")
 
+        from modules.services.inventory import ensure_allocation_schema, require_open_session, InventoryConflict
+        ensure_allocation_schema(c)
+        if c.execute('SELECT 1 FROM cargo_deletions WHERE source_id=?', (fcid,)).fetchone():
+            return jsonify(status='ok', comp_id=None)
         # A chip can reference either:
         #   • the saved snapshot row in flight_cargo      (legacy)
         #   • a committed inventory_entries row created   (new)
@@ -1914,6 +1768,26 @@ def delete_flight_cargo(fcid):
         except Exception:
             sid = sid or ''
 
+        if sid != (r['session_id'] or '') or not sid or (src_table == 'flight_cargo' and r['flight_id']):
+            return jsonify(error='manifest_conflict'), 409
+        try:
+            require_open_session(c, sid)
+        except InventoryConflict as exc:
+            return jsonify(exc.payload()), 409
+        # Capture the cutline before changing a legacy snapshot; the compensator
+        # must not be applied a second time after its chip has disappeared.
+        from modules.services.inventory import applied_ledger_ids, require_manifest_owner
+        saved_ids = None
+        qid = r['queued_id'] if src_table == 'flight_cargo' else None
+        if qid and 'snapshot_ledger_ids' in {col[1] for col in c.execute('PRAGMA table_info(queued_flights)')}:
+            draft = c.execute('SELECT id FROM queued_flights WHERE id=?', (qid,)).fetchone()
+            if draft is None:
+                return jsonify(error='manifest_conflict'), 409
+            try:
+                require_manifest_owner(c, sid, qid)
+            except InventoryConflict as exc:
+                return jsonify(exc.payload()), 409
+            saved_ids = applied_ledger_ids(c, qid, sid)
         # If this key exists in the session as *pending* in the same direction,
         # decrement/delete that pending row (availability was never reduced).
         same_dir = r['direction']
@@ -1927,7 +1801,7 @@ def delete_flight_cargo(fcid):
         """, (sid, r['category_id'], r['sanitized_name'], r['weight_per_unit'], same_dir, r['origin'] or '')).fetchone()
 
         comp_id = None
-        if pen:
+        if pen and src_table == 'flight_cargo':
             new_q = max(0, int(pen['quantity']) - int(r['quantity']))
             if new_q <= 0:
                 c.execute("DELETE FROM inventory_entries WHERE id=?", (pen['id'],))
@@ -2008,6 +1882,18 @@ def delete_flight_cargo(fcid):
             # Do NOT also flip the original to pending (avoids over-credit).
             pass
 
+        if saved_ids is not None:
+            import json
+            saved_ids.update(row[0] for row in c.execute("""SELECT id FROM inventory_entries
+                WHERE session_id=? AND category_id=? AND LOWER(sanitized_name)=LOWER(?)
+                  AND weight_per_unit=? AND COALESCE(origin,'')=? AND COALESCE(pending,0)=0""",
+                (sid,r['category_id'],r['sanitized_name'],r['weight_per_unit'],r['origin'] or '')))
+            c.execute("""UPDATE queued_flights SET snapshot_ledger_ids=?,cargo_weight=(
+                SELECT COALESCE(SUM(total_weight),0) FROM flight_cargo WHERE queued_id=?) WHERE id=?""",
+                (json.dumps(sorted(saved_ids)),qid,qid))
+            invalidate_stale_acknowledgement(c, qid)
+        c.execute('INSERT INTO cargo_deletions VALUES (?,?)', (src_table,fcid))
+
     return jsonify(status='ok', comp_id=comp_id)
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -2027,8 +1913,15 @@ def flight_ack(flight_id):
       • At least one of typed_name or signature_data must be present.
       • If signature_data is present → method='drawn', else 'typed'.
     """
+    if request.content_length is None or request.content_length > 512 * 1024:
+        return jsonify(ok=False, error='signature_request_size', message='Signature request must have a bounded body of at most 512 KiB.'), 413
     typed = (request.form.get('typed_name') or '').strip()
     sig   = (request.form.get('signature_data') or '').strip()
+    from modules.services.manifest_images import validate_signature
+    try:
+        sig = validate_signature(sig)
+    except ValueError as exc:
+        return jsonify(ok=False, error='invalid_signature', message=str(exc)), 400
     if not typed and not sig:
         msg = 'Type name or draw a signature.'
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
@@ -2084,17 +1977,31 @@ def ramp_pilot_ack(queue_id: int):
     Accepts form or JSON:
       - typed_name (optional if signature_data present)
       - signature_data (data:image/png;base64,...; optional if typed_name present)
-      - build_pdf = yes|no  (optional; default yes)
+      - expected_revision (required, from the displayed saved manifest)
+      - build_pdf retained for compatibility; signed copies are always built
     Returns JSON: { ok, pdf_url? }
     """
+    if request.content_length is None or request.content_length > 512 * 1024:
+        return jsonify(ok=False, error='signature_request_size', message='Signature request must have a bounded body of at most 512 KiB.'), 413
     payload = request.get_json(silent=True) or request.form
-    typed = (payload.get('typed_name') or '').strip()
-    sig = (payload.get('signature_data') or '').strip()
+    if not hasattr(payload, 'get'):
+        return jsonify(ok=False, error='invalid_signature'), 400
+    typed = payload.get('typed_name') or ''
+    sig = payload.get('signature_data') or ''
+    if not isinstance(typed, str) or not isinstance(sig, str):
+        return jsonify(ok=False, error='invalid_signature'), 400
+    typed = typed.strip()
+    sig = sig.strip()
     if not typed and not sig:
         return jsonify(ok=False, error='signature_required',
                        message='Type name or draw a signature.'), 400
+    from modules.services.manifest_images import validate_signature
+    try:
+        sig = validate_signature(sig)
+    except ValueError as exc:
+        return jsonify(ok=False, error='invalid_signature', message=str(exc)), 400
     now_iso = datetime.utcnow().isoformat()
-    build_pdf = (str(payload.get('build_pdf', 'yes')).lower() != 'no')
+    build_pdf = True  # Acknowledgement requires its immutable artifact.
     with sqlite3.connect(DB_FILE) as c:
         c.row_factory = sqlite3.Row
         c.execute("BEGIN IMMEDIATE")
@@ -2106,6 +2013,13 @@ def ramp_pilot_ack(queue_id: int):
             return jsonify(ok=False, error='manifest_changes_pending',
                            message='Save cargo changes before acknowledging the manifest.'), 409
         digest = manifest_fingerprint(c, draft)
+        if payload.get('expected_revision') != digest:
+            return jsonify(ok=False, error='revision_conflict', message='Manifest changed or page is stale. Reload and review before acknowledging.'), 409
+        from modules.services.inventory import require_manifest_owner, InventoryConflict
+        try:
+            require_manifest_owner(c, queue_manifest_id(c, draft), queue_id)
+        except InventoryConflict as exc:
+            return jsonify(exc.payload()), 409
         draft.update(pilot_ack_name=typed, pilot_ack_method='drawn' if sig else 'typed',
                      pilot_ack_signature_b64=sig or None, pilot_ack_signed_at=now_iso,
                      pilot_ack_manifest_hash=digest)
@@ -2264,35 +2178,19 @@ def _effective_for_key(c, session_id: str, name: str, wpu: float,
     effective = snapshot qty (queued/flight rows tied to this session) + committed deltas since that snapshot,
                 signed in the snapshot's row_dir ('out' => outs positive, ins negative; inverse for inbound).
     """
-    row_dir = _row_dir_for_session(c, session_id, draft_id, flight_id)
-    snap_latest_row = c.execute("""
-        SELECT MAX(timestamp) AS t FROM flight_cargo
-         WHERE ( session_id = ? OR
-                 (queued_id = ? AND ? IS NOT NULL) OR
-                 (flight_id = ? AND ? IS NOT NULL) )
-    """, (session_id, draft_id, draft_id, flight_id, flight_id)).fetchone()
-    snap_latest = (snap_latest_row['t'] if snap_latest_row else None)
+    from modules.services.inventory import manifest_rows
+    rows = manifest_rows(c,session_id,queued_id=draft_id,flight_id=flight_id,include_pending=False)
+    effective = sum(r['qty'] for r in rows if r['sanitized_name'] == name.lower().strip() and r['weight_per_unit'] == float(wpu))
+    row_dir = rows[0]['direction'] if rows else _row_dir_for_session(c,session_id,draft_id,flight_id)
+    column, ref = ('queued_id',draft_id) if draft_id is not None else ('flight_id',flight_id)
+    if ref is not None:
+        snap_qty = c.execute(f"""SELECT COALESCE(SUM(quantity),0) FROM flight_cargo
+            WHERE {column}=? AND LOWER(sanitized_name)=LOWER(?) AND weight_per_unit=?""", (ref,name,wpu)).fetchone()[0]
+    else:
+        snap_qty = c.execute("""SELECT COALESCE(SUM(quantity),0) FROM flight_cargo
+            WHERE session_id=? AND LOWER(sanitized_name)=LOWER(?) AND weight_per_unit=?""", (session_id,name,wpu)).fetchone()[0]
+    return int(effective), int(snap_qty), int(effective-snap_qty), row_dir, None
 
-    snap_qty = c.execute("""
-        SELECT COALESCE(SUM(quantity),0) AS q
-          FROM flight_cargo
-         WHERE LOWER(sanitized_name)=LOWER(?) AND CAST(weight_per_unit AS REAL)=CAST(? AS REAL)
-           AND ( session_id = ? OR
-                 (queued_id = ? AND ? IS NOT NULL) OR
-                 (flight_id = ? AND ? IS NOT NULL) )
-    """, (name, wpu, session_id, draft_id, draft_id, flight_id, flight_id)).fetchone()['q'] or 0
-
-    comm_net = c.execute("""
-        SELECT COALESCE(SUM(CASE direction WHEN ? THEN quantity ELSE -quantity END),0) AS net_q
-          FROM inventory_entries
-         WHERE session_id=? AND LOWER(sanitized_name)=LOWER(?)
-           AND CAST(weight_per_unit AS REAL)=CAST(? AS REAL)
-           AND pending=0
-           AND (? IS NULL OR timestamp > ?)
-    """, (row_dir, session_id, name, wpu, snap_latest, snap_latest)).fetchone()['net_q'] or 0
-
-    effective = int(snap_qty) + int(comm_net)
-    return int(effective), int(snap_qty), int(comm_net), row_dir, snap_latest
 
 def _stock_avail_for_key(c, name: str, wpu: float) -> int:
     """
@@ -2377,14 +2275,23 @@ def api_manifest_adopt_snapshot(manifest_id: str):
         return jsonify(error='invalid payload'), 400
     if not draft_id:
         return jsonify(error='missing draft_id'), 400
+    from modules.services.inventory import require_manifest_owner, InventoryConflict
     with sqlite3.connect(DB_FILE) as c:
         c.row_factory = sqlite3.Row
-        # Only adopt snapshot rows that don't already belong to some session
-        c.execute("""
-          UPDATE flight_cargo
-             SET session_id=?
-           WHERE queued_id=? AND IFNULL(session_id,'')=''
-        """, (manifest_id, draft_id))
+        c.execute('BEGIN IMMEDIATE')
+        draft = c.execute('SELECT * FROM queued_flights WHERE id=?', (draft_id,)).fetchone()
+        if not draft or dict(draft).get('consumed'):
+            return jsonify(error='not_found'), 404
+        existing = queue_manifest_id(c, dict(draft))
+        if existing and existing != manifest_id:
+            return jsonify(error='manifest_conflict'), 409
+        try:
+            require_manifest_owner(c, manifest_id, draft_id)
+        except InventoryConflict as exc:
+            return jsonify(exc.payload()), 409
+        c.execute("UPDATE flight_cargo SET session_id=? WHERE queued_id=? AND IFNULL(session_id,'')=''", (manifest_id,draft_id))
+        c.execute('UPDATE queued_flights SET manifest_id=? WHERE id=?', (manifest_id,draft_id))
+        invalidate_stale_acknowledgement(c, draft_id)
     return jsonify(ok=True)
 
 # ──────────────────────────────────────────────────────────────────────────

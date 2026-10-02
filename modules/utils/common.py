@@ -1241,6 +1241,10 @@ def run_migrations():
     ensure_column("queued_flights", "pilot_ack_signature_b64","TEXT")
     ensure_column("queued_flights", "pilot_ack_signed_at",    "TEXT")
     ensure_column("queued_flights", "pilot_ack_manifest_hash", "TEXT")
+    ensure_column("queued_flights", "snapshot_ledger_ids", "TEXT")
+    from modules.services.inventory import ensure_allocation_schema
+    with sqlite3.connect(get_db_file()) as c:
+        ensure_allocation_schema(c)
     ensure_column("queued_flights", "pilot_ack_boot_id",      "TEXT")
     ensure_column("queued_flights", "manifest_pdf_path",      "TEXT")
 

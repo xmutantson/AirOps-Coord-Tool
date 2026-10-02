@@ -238,23 +238,14 @@ def inventory_edit(entry_id: int):
         dirn        = request.form["direction"]
 
         origin = (request.form.get('origin') or '').strip()
-        with sqlite3.connect(DB_FILE) as c:
-            c.execute(
-                """
-                UPDATE inventory_entries
-                   SET category_id=?,
-                       raw_name=?, sanitized_name=?,
-                       weight_per_unit=?, quantity=?, total_weight=?, direction=?,
-                       origin=?
-                 WHERE id=?
-                """,
-                (
-                    int(request.form["category"]),
-                    raw, noun,
-                    wpu, qty, total, dirn,
-                    origin, entry_id,
-                ),
-            )
+        from modules.services.inventory import mutate_inventory_entry, InventoryConflict
+        try:
+            with sqlite3.connect(DB_FILE) as c:
+                c.row_factory = sqlite3.Row
+                c.execute('BEGIN IMMEDIATE')
+                mutate_inventory_entry(c, entry_id, (int(request.form['category']),raw,noun,wpu,qty,dirn,origin))
+        except InventoryConflict as exc:
+            return jsonify(exc.payload()), 409
         return redirect(url_for("inventory.inventory_detail"))
 
     return render_template(
@@ -269,6 +260,12 @@ def inventory_edit(entry_id: int):
 @bp.route("/delete/<int:entry_id>", methods=["POST"])
 def inventory_delete(entry_id: int):
     """Delete a single inventory entry and return to detail page."""
-    with sqlite3.connect(DB_FILE) as c:
-        c.execute("DELETE FROM inventory_entries WHERE id = ?", (entry_id,))
+    from modules.services.inventory import mutate_inventory_entry, InventoryConflict
+    try:
+        with sqlite3.connect(DB_FILE) as c:
+            c.row_factory = sqlite3.Row
+            c.execute('BEGIN IMMEDIATE')
+            mutate_inventory_entry(c, entry_id)
+    except InventoryConflict as exc:
+        return jsonify(exc.payload()), 409
     return redirect(url_for("inventory.inventory_detail"))

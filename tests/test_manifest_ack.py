@@ -97,8 +97,31 @@ class ManifestAcknowledgementTests(unittest.TestCase):
                   (1 if snapshot else pending, quantity, quantity * 5, direction, timestamp, origin))
 
     def sign(self, build=False):
-        with self.app.test_request_context(json={"typed_name": "Pilot", "build_pdf": "yes" if build else "no"}):
-            return self.env["ramp_pilot_ack"](1)
+        # Simulate reviewing the current saved revision. Stale-client tests post
+        # their captured token (or omit it) directly instead.
+        with self.connect() as c:
+            row = c.execute('SELECT * FROM queued_flights WHERE id=1').fetchone()
+            revision = ack.manifest_fingerprint(c, dict(row)) if row else ''
+        def submit():
+            with self.app.test_request_context(json={"typed_name": "Pilot", "expected_revision": revision,
+                                                     "build_pdf": "yes" if build else "no"}):
+                return self.env["ramp_pilot_ack"](1)
+        if build:
+            return submit()
+        pdf = Path(self.tmp.name) / 'fixture-signed.pdf'
+        fake = types.ModuleType('modules.utils.manifest')
+        def render(*args):
+            pdf.write_bytes(b'OFFLINE SIGNED ARTIFACT FIXTURE')
+            return pdf.read_bytes(), str(pdf)
+        fake.build_manifest_pdf = render
+        with patch.dict('sys.modules', {'modules.utils.manifest': fake}):
+            return submit()
+
+    def fund_stock(self):
+        with self.connect() as c:
+            c.execute("""INSERT INTO inventory_entries (category_id,sanitized_name,weight_per_unit,
+                quantity,total_weight,direction,timestamp,origin,pending)
+                VALUES (1,'Rice',5,10,50,'in','2026-10-02T09:00:00','Warehouse A',0)""")
 
     def send(self, form=None):
         with self.app.test_request_context(method="POST", data=form or {},
@@ -153,6 +176,7 @@ class ManifestAcknowledgementTests(unittest.TestCase):
         self.assertTrue(self.sign().get_json()["ok"])
 
     def test_dispatch_checks_under_write_lock_and_ignores_posted_manifest(self):
+        self.fund_stock()
         self.sign()
         original = self.env["acknowledgement_is_current"]
         checked = []
@@ -186,6 +210,7 @@ class ManifestAcknowledgementTests(unittest.TestCase):
         self.assertEqual(self.dict_rows("SELECT pax_count FROM queued_flights")[0]["pax_count"], "3")
 
     def test_duplicate_flight_code_cannot_merge_signed_manifests(self):
+        self.fund_stock()
         self.sign()
         self.env["_compute_fcode_from_form"] = lambda *args: "EXISTING"
         with self.connect() as c:
@@ -212,6 +237,7 @@ class ManifestAcknowledgementTests(unittest.TestCase):
         self.assertEqual(self.dict_rows("SELECT * FROM flight_cargo"), [])
 
     def test_signed_pdf_is_preserved_and_transferred_to_flight(self):
+        self.fund_stock()
         pdf = Path(self.tmp.name) / "signed.pdf"
         pdf.write_bytes(b"original signed snapshot")
         fake = types.ModuleType("modules.utils.manifest")
@@ -237,6 +263,7 @@ class ManifestAcknowledgementTests(unittest.TestCase):
 
     def test_missing_signed_pdf_requires_renewal_instead_of_regeneration(self):
         self.sign()
+        (Path(self.tmp.name) / "fixture-signed.pdf").unlink()
         with self.app.test_request_context():
             from werkzeug.exceptions import Conflict
             with self.assertRaises(Conflict):

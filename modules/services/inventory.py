@@ -67,6 +67,7 @@ def insert_entry(c, *, category_id, name, weight, qty, direction,
     """Insert one movement using the caller's reserved write transaction."""
     if not c.in_transaction:
         raise RuntimeError("Inventory writes require an explicit transaction")
+    require_open_session(c, session_id)
     _validate_item(category_id, name, weight, qty)
     if direction not in ("in", "out"):
         raise InventoryConflict("Invalid inventory direction.", "invalid_item")
@@ -86,6 +87,7 @@ def insert_entry(c, *, category_id, name, weight, qty, direction,
 
 def validate_session_commit(c, session_id):
     """Reject legacy over-reservations before promoting a manifest's pendings."""
+    require_open_session(c, session_id)
     rows = c.execute("""SELECT DISTINCT category_id,sanitized_name,weight_per_unit,
         COALESCE(origin,'') FROM inventory_entries
         WHERE session_id=? AND direction='out' AND pending=1""", (session_id,)).fetchall()
@@ -103,6 +105,7 @@ def adjust_pending(c, *, session_id, category_id, name, weight, direction, delta
     """One atomic scan, preserving source identity and global reservations."""
     if not c.in_transaction:
         raise RuntimeError("Inventory writes require an explicit transaction")
+    require_open_session(c, session_id)
     if delta > 0:
         _validate_item(category_id, name, weight, delta)
         resolved = (require_stock(c, category_id, name, weight, delta, origin)
@@ -141,12 +144,17 @@ def adjust_pending(c, *, session_id, category_id, name, weight, direction, delta
     return new_qty, resolved
 
 
-def manifest_rows(c, session_id, queued_id=None, flight_id=None):
+def manifest_rows(c, session_id, queued_id=None, flight_id=None, include_pending=True):
     """Snapshot plus subsequent ledger deltas, once, grouped by source.
 
     A queued snapshot copies its session's ledger. Adding that ledger again
     double counts it; use the same snapshot cut line as the save/send paths.
     """
+    queue_columns = {r[1] for r in c.execute('PRAGMA table_info(queued_flights)')}
+    if queued_id is None and flight_id is None and 'manifest_id' in queue_columns:
+        owner = c.execute('SELECT id FROM queued_flights WHERE manifest_id=? ORDER BY id LIMIT 1', (session_id,)).fetchone()
+        if owner:
+            queued_id = owner[0]
     if flight_id is not None:
         where, args = "flight_id=?", (int(flight_id),)
     elif queued_id is not None:
@@ -157,12 +165,22 @@ def manifest_rows(c, session_id, queued_id=None, flight_id=None):
         COALESCE(origin,''),quantity,direction,timestamp FROM flight_cargo
         WHERE {where} ORDER BY id""", args).fetchall()
     cutline = max((r[6] for r in baseline if r[6]), default=None)
+    applied = applied_ledger_ids(c, queued_id, session_id) if queued_id is not None else None
     ledger = c.execute("""SELECT category_id,sanitized_name,weight_per_unit,
-        COALESCE(origin,''),quantity,direction,timestamp FROM inventory_entries
-        WHERE session_id=? AND COALESCE(pending,0) IN (0,1)
-          AND (? IS NULL OR timestamp>?) ORDER BY timestamp,id""",
-        (session_id, cutline, cutline)).fetchall()
+        COALESCE(origin,''),quantity,direction,timestamp,id,pending FROM inventory_entries
+        WHERE session_id=? AND COALESCE(pending,0) IN (0,1) ORDER BY id""", (session_id,)).fetchall()
+    if not include_pending:
+        ledger = [r for r in ledger if not r[8]]
+    if applied is not None:
+        ledger = [r for r in ledger if r[8] == 1 or r[7] not in applied]
+    else:
+        ledger = [r for r in ledger if cutline is None or r[6] > cutline]
     direction = (baseline or ledger)[0][5] if (baseline or ledger) else "out"
+    if queued_id is not None and 'direction' in queue_columns:
+        row = c.execute('SELECT direction FROM queued_flights WHERE id=?', (queued_id,)).fetchone()
+        if row:
+            direction = 'in' if row[0] == 'inbound' else 'out'
+
     totals = {}
     for row in [*baseline, *ledger]:
         key = (int(row[0]), row[1].lower().strip(), float(row[2]), row[3])
@@ -177,6 +195,18 @@ def remove_manifest_item(c, *, session_id, name, weight, qty=1, origin=None,
     """Remove existing cargo only; never mint excess return stock or guess a source."""
     if not c.in_transaction:
         raise RuntimeError("Inventory writes require an explicit transaction")
+    require_open_session(c, session_id)
+    if queued_id is not None or flight_id is not None:
+        column, ref = ('queued_id', queued_id) if queued_id is not None else ('flight_id', flight_id)
+        sessions = {r[0] for r in c.execute(f'SELECT DISTINCT session_id FROM flight_cargo WHERE {column}=?', (ref,))}
+        if sessions - {session_id}:
+            raise InventoryConflict('Cargo belongs to a different manifest.', 'manifest_conflict')
+        columns = {r[1] for r in c.execute('PRAGMA table_info(queued_flights)')}
+        if queued_id is not None and 'manifest_id' in columns:
+            draft = c.execute('SELECT manifest_id FROM queued_flights WHERE id=?', (queued_id,)).fetchone()
+            if not draft or (draft[0] and draft[0] != session_id):
+                raise InventoryConflict('Draft was removed or belongs to another manifest.', 'manifest_conflict')
+            require_manifest_owner(c, session_id, int(queued_id))
     candidates = [r for r in manifest_rows(c, session_id, queued_id, flight_id)
                   if r['sanitized_name'] == name.lower().strip()
                   and r['weight_per_unit'] == float(weight)
@@ -211,6 +241,125 @@ def remove_manifest_item(c, *, session_id, name, weight, qty=1, origin=None,
     return dict(applied=target, effective_qty=effective, origin=resolved,
                 removed=effective == 0, reduced_pending=target-remaining,
                 applied_committed=remaining)
+
+def ensure_allocation_schema(c):
+    # Durable ownership survives an empty manifest and removal of its draft.
+    c.execute("""CREATE TABLE IF NOT EXISTS manifest_allocations (
+        session_id TEXT PRIMARY KEY, queued_id INTEGER, flight_id INTEGER,
+        state TEXT NOT NULL CHECK(state IN ('queued','sent','deleted')))""")
+    c.execute("""CREATE TABLE IF NOT EXISTS cargo_deletions (
+        source_table TEXT NOT NULL, source_id INTEGER NOT NULL,
+        PRIMARY KEY(source_table, source_id))""")
+
+
+def claim_manifest(c, mid, qid=None):
+    """Return the one owner, adopting legacy allocations under the write lock."""
+    if not mid:
+        return None
+    ensure_allocation_schema(c)
+    owner = c.execute("SELECT queued_id,flight_id,state FROM manifest_allocations WHERE session_id=?", (mid,)).fetchone()
+    if owner:
+        return tuple(owner)
+    shipped = c.execute("SELECT flight_id FROM flight_cargo WHERE session_id=? AND flight_id IS NOT NULL LIMIT 1", (mid,)).fetchone()
+    queued = c.execute("""SELECT id FROM queued_flights WHERE manifest_id=?
+        UNION SELECT queued_id FROM flight_cargo WHERE session_id=? AND queued_id IS NOT NULL
+        ORDER BY 1 LIMIT 1""", (mid,mid)).fetchone()
+    if shipped:
+        owner = (None, shipped[0], 'sent')
+    elif queued or qid is not None:
+        owner = (queued[0] if queued else qid, None, 'queued')
+    else:
+        return None
+    c.execute("INSERT INTO manifest_allocations VALUES (?,?,?,?)", (mid,*owner))
+    return owner
+
+
+def require_manifest_owner(c, mid, qid):
+    owner = claim_manifest(c, mid, qid)
+    if owner and (owner[0] != qid or owner[2] != 'queued'):
+        raise InventoryConflict('This manifest allocation belongs to another draft or has already been closed.', 'manifest_conflict')
+
+
+def require_open_session(c, mid):
+    if not mid:
+        return
+    ensure_allocation_schema(c)
+    row = c.execute("SELECT state FROM manifest_allocations WHERE session_id=?", (mid,)).fetchone()
+    if (row and row[0] != 'queued') or c.execute(
+            "SELECT 1 FROM flight_cargo WHERE session_id=? AND flight_id IS NOT NULL LIMIT 1", (mid,)).fetchone():
+        raise InventoryConflict('This manifest is closed. Start a new manifest.', 'manifest_conflict')
+
+
+def applied_ledger_ids(c, qid, mid):
+    """Persistent membership cutline; legacy timestamps are used only on adoption.
+
+    IDs handle equal/backdated timestamps and pending rows committed later. Session
+    movements are immutable through generic inventory editing routes.
+    """
+    import json
+    columns = {r[1] for r in c.execute('PRAGMA table_info(queued_flights)')}
+    if 'snapshot_ledger_ids' in columns:
+        row = c.execute('SELECT snapshot_ledger_ids FROM queued_flights WHERE id=?', (qid,)).fetchone()
+        if row and row[0] is not None:
+            return set(json.loads(row[0]))
+    cutline = c.execute('SELECT MAX(timestamp) FROM flight_cargo WHERE queued_id=?', (qid,)).fetchone()[0]
+    if cutline is None:
+        return set()
+    return {r[0] for r in c.execute("""SELECT id FROM inventory_entries
+        WHERE session_id=? AND COALESCE(pending,0)=0 AND timestamp<=?""", (mid,cutline))}
+
+
+def save_ledger_cutline(c, qid, mid):
+    import json
+    ids = [r[0] for r in c.execute("SELECT id FROM inventory_entries WHERE session_id=? AND COALESCE(pending,0)=0 ORDER BY id", (mid,))]
+    c.execute('UPDATE queued_flights SET snapshot_ledger_ids=? WHERE id=?', (json.dumps(ids),qid))
+
+
+def validate_allocated_stock(c, mid):
+    """Validate committed allocations too, including legacy ledger corruption."""
+    for cid,name,weight,origin in c.execute("""SELECT DISTINCT category_id,sanitized_name,weight_per_unit,
+            COALESCE(origin,'') FROM inventory_entries WHERE session_id=? AND direction='out'""", (mid,)):
+        if available_by_origin(c,cid,name,weight).get(origin,0) < 0:
+            raise InventoryConflict('Allocated cargo is no longer funded by inventory. Correct inventory before dispatch.')
+
+
+def mutate_inventory_entry(c, entry_id, replacement=None):
+    """Generic corrections cannot rewrite manifest movements or underfund stock."""
+    if not c.in_transaction:
+        raise RuntimeError("Inventory corrections require an explicit transaction")
+    row = c.execute('SELECT * FROM inventory_entries WHERE id=?', (entry_id,)).fetchone()
+    if row is None:
+        return
+    old = dict(row)
+    if old.get('session_id'):
+        raise InventoryConflict('Edit manifest cargo through its draft, not the inventory ledger.', 'manifest_conflict')
+    keys = [(old['category_id'],old['sanitized_name'],old['weight_per_unit'],old.get('origin') or '')]
+    if replacement is None:
+        c.execute('DELETE FROM inventory_entries WHERE id=?', (entry_id,))
+    else:
+        cid,raw,name,weight,qty,direction,origin = replacement
+        _validate_item(cid,name,weight,qty)
+        if direction not in ('in','out'):
+            raise InventoryConflict('Invalid inventory direction.', 'invalid_item')
+        keys.append((cid,name,weight,origin))
+        c.execute("""UPDATE inventory_entries SET category_id=?,raw_name=?,sanitized_name=?,
+            weight_per_unit=?,quantity=?,total_weight=?,direction=?,origin=? WHERE id=?""",
+            (cid,raw,name,weight,qty,weight*qty,direction,origin,entry_id))
+    for cid,name,weight,origin in keys:
+        if available_by_origin(c,cid,name,weight).get(origin,0) < 0:
+            raise InventoryConflict('This correction would remove stock already reserved or shipped.')
+
+
+def cargo_weight_lbs(value):
+    import re
+    try:
+        weight = float(re.sub(r'\s*lbs?\s*$', '', str(value or '').strip(), flags=re.I) or 0)
+    except (ValueError, TypeError):
+        raise InventoryConflict('Cargo weight must be a finite nonnegative number.', 'invalid_weight')
+    if not math.isfinite(weight) or weight < 0:
+        raise InventoryConflict('Cargo weight must be a finite nonnegative number.', 'invalid_weight')
+    return weight
+
 
 def get_wargame_seed_items() -> List[Tuple[str, str, int, int]]:
     """

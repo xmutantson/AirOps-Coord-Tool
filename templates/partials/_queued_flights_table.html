@@ -19,7 +19,7 @@
     </thead>
     <tbody>
       {% for q in queued %}
-      <tr data-qid="{{ q.id }}">
+      <tr data-qid="{{ q.id }}" data-revision="{{ q.expected_revision }}">
         <td>
           {{ q.id }}
           <a href="{{ url_for('ramp.edit_queued_flight', qid=q.id) }}"
@@ -90,10 +90,10 @@
                       const r=await fetch('/ramp/pilot_ack/'+this.dataset.qid,{
                         method:'POST',
                         headers:{'X-Requested-With':'XMLHttpRequest','Content-Type':'application/x-www-form-urlencoded'},
-                        body:'typed_name='+encodeURIComponent(name)
+                        body:'typed_name='+encodeURIComponent(name)+'&expected_revision='+encodeURIComponent(this.closest('[data-revision]').dataset.revision)
                       });
                       if(r.ok){ window.location.reload(); }
-                      else { alert('Ack failed'); }
+                      else { const j=await r.json().catch(()=>({})); alert(j.message || 'Ack failed'); }
                     })()">Pilot Ack</button>
           {% endif %}
         </td>

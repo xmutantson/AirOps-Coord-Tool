@@ -82,11 +82,6 @@
   </div>
 
   <script>
-    // Remember which queued rows we’ve successfully acked (survives soft refreshes)
-    // so we don’t re-lock the SEND button when the table re-renders without an ack flag.
-    window._ackedQids = window._ackedQids || new Set();
-    const ACKED = window._ackedQids;
-
     // Robustly resolve a queued_id from a form or element
     function resolveQid(el) {
       const r = (root) => {
@@ -140,8 +135,7 @@
         const btn   = f.querySelector('button[type="submit"]');
         // Single place to decide if this row is acked:
         // - server set data-pilot-ack-at
-        // - or we locally acked it during this session
-        const isAcked = !!ackAt || (qid && ACKED.has(String(qid)));
+        const isAcked = !!ackAt;
 
         // Helper to build a small control row next to the submit button
         function ensureControls() {
@@ -266,9 +260,12 @@
             const qidStr = String(qid);
             try {
               // Minimal prompt UI: name or signature data URL can be posted; start with typed name
+              const revision = btn.closest('[data-revision]')?.dataset.revision || '';
               const typed = prompt('Pilot name (This is a digital signature):', '');
               const fd = new FormData();
-              if (typed) fd.append('typed_name', typed);
+              if (!typed) return;
+              fd.append('typed_name', typed);
+              fd.append('expected_revision', revision);
               fd.append('build_pdf', 'yes');
               const resp = await fetch(`/ramp/pilot_ack/${qid}`, {
                 method: 'POST',
@@ -288,7 +285,6 @@
 
               // 1) Mark as acked locally FIRST (before any refresh)
               const ts = j.pilot_ack_at || new Date().toISOString();
-              ACKED.add(qidStr);
               if (rowForm) rowForm.dataset.pilotAckAt = ts;
 
               // 2) Remove the Pilot Ack button immediately so it doesn't reappear

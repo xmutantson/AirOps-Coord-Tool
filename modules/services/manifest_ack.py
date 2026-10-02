@@ -11,7 +11,7 @@ import json
 MATERIAL_FIELDS = (
     "id", "direction", "pilot_name", "pax_count", "tail_number",
     "airfield_takeoff", "airfield_landing", "travel_time", "cargo_type",
-    "cargo_weight", "remarks", "manifest_id",
+    "cargo_weight", "remarks", "manifest_id", "snapshot_ledger_ids",
 )
 
 
@@ -56,25 +56,18 @@ def has_unapplied_cargo(connection, draft):
     mid = queue_manifest_id(connection, draft)
     if not mid:
         return False
-    cutline = connection.execute(
-        "SELECT MAX(timestamp) FROM flight_cargo WHERE queued_id=?",
-        (draft["id"],),
-    ).fetchone()[0]
-    if connection.execute(
-        "SELECT 1 FROM inventory_entries WHERE session_id=? AND pending=1 LIMIT 1",
-        (mid,),
-    ).fetchone():
-        return True
-    # A saved empty manifest can retain balanced historical ledger entries.
-    # Only a nonzero committed delta would change the cargo at dispatch.
-    return connection.execute(
-        "SELECT 1 FROM inventory_entries WHERE session_id=? AND pending=0 "
-        "AND (? IS NULL OR timestamp>?) "
-        "GROUP BY category_id, sanitized_name, weight_per_unit, COALESCE(origin,'') "
-        "HAVING SUM(CASE direction WHEN 'out' THEN quantity ELSE -quantity END)<>0 "
-        "OR SUM(CASE direction WHEN 'out' THEN total_weight ELSE -total_weight END)<>0 "
-        "LIMIT 1", (mid, cutline, cutline),
-    ).fetchone() is not None
+    from modules.services.inventory import applied_ledger_ids
+    applied = applied_ledger_ids(connection, draft['id'], mid)
+    rows = connection.execute("""SELECT id,pending,category_id,LOWER(sanitized_name),weight_per_unit,
+        COALESCE(origin,''),direction,quantity FROM inventory_entries WHERE session_id=?""", (mid,)).fetchall()
+    totals = {}
+    for rid,pending,cid,name,weight,origin,direction,qty in rows:
+        if pending:
+            return True
+        if rid not in applied:
+            key = (cid,name,weight,origin)
+            totals[key] = totals.get(key,0) + qty * (1 if direction == 'out' else -1)
+    return any(totals.values())
 
 
 def acknowledgement_is_current(connection, draft):
