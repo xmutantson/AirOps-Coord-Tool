@@ -261,3 +261,36 @@ between the core transaction and those ancillary actions can leave an action
 missing; retries do not replay it. A transactional notification outbox, browser
 refresh/draft recovery, real PDF rendering, full application integration, and
 field crash/power-loss testing remain outside this offline repair.
+
+
+## Arrival form recovery follow-up
+
+Independent verification accepted the server identity repair at `4a4173d` but
+observed that a rejected POST promise or interrupted JSON body left `rbSubmitting`
+and the submit buttons locked. The main form now catches uncertain responses and
+restores the guard, buttons, and disabled time controls in `finally`.
+
+Before the first POST, the form retains the destination URL, submit action, and
+`FormData` snapshot. A retry resends that same snapshot, preserving the arrival
+request ID and every submitted value. It skips mutable-field validation, clock
+recalculation, and manifest recommit. Subsequent field edits do not change an
+uncertain request; the operator message explains that retry sends the original
+details. The snapshot is cleared only after a confirmed result/reset or redirect.
+The arrival identity rotates on successful reset, as before. Non-OK or unreadable
+responses retain the snapshot; this recovery does not silently treat edited fields
+as a new physical arrival.
+
+`tests/arrival_form_retry.cjs` executes the actual handler with inert DOM and
+transport adapters. Ten Node cases cover POST loss, JSON parsing interruption,
+HTTP rejection, non-JSON/null results, repeated failures, exact-payload retry after
+field/action edits, fresh identity for the next successful event, queue/reset,
+redirect, and preflight cleanup. A Python unittest wrapper includes this check in
+the repository suite when Node is installed. No browser or network is started.
+
+The unchanged independent loss harness additionally asserts that the injected
+exception escapes the handler. Recovery now handles it, so that old assertion
+fails before the harness reaches its lock checks. The repository tests instead
+require the handler to resolve, unlock, retain the original payload/identity, and
+successfully retry; no independent file or assertion was edited. Full browser,
+CSRF, reload/draft recovery, and external task delivery remain outside this narrow
+repair. Server allocation logic and export producers are unchanged.

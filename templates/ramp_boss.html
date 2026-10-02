@@ -1647,6 +1647,7 @@
         if (queueBtn && btn !== queueBtn) queueBtn.disabled = true;
       } catch(_){}
     }
+    let rbRetryRequest = null;
     function unlockButtons(){
       rbSubmitting = false;
       [(document.getElementById('rb-ack-send') || document.getElementById('sendBtn')), queueBtn].forEach(b=>{
@@ -1700,7 +1701,7 @@
       /* ── Hard-gate: cannot SEND outbound without Destination ─────────── */
       const dirNow  = document.querySelector('input[name="direction"]:checked')?.value || 'outbound';
       const clicked = e.submitter || sendBtn || queueBtn;
-      if (clicked?.value === 'send' && dirNow === 'outbound') {
+      if (!rbRetryRequest && clicked?.value === 'send' && dirNow === 'outbound') {
         const destVal = String(destField.value || '').trim();
         if (!destVal) {
           showToast('Destination is required to SEND.', 'error');
@@ -1712,251 +1713,257 @@
       /* lock UI after our early gate so we don't flash the spinner */
       // NOTE: 'clicked' is already defined above
       lockButtons(clicked);
-      // basic required‐field check
-      if (!validateRampBoss()){ unlockButtons(); return; }
+      try {
+        if (!rbRetryRequest) {
+          // basic required‐field check
+          if (!validateRampBoss()){ unlockButtons(); return; }
 
-      /* compute where this form will POST _before_ we touch it anywhere else */
-      const targetURL =
-            e.submitter?.getAttribute('formaction') || form.action;
+          /* compute where this form will POST _before_ we touch it anywhere else */
+          const targetURL =
+                e.submitter?.getAttribute('formaction') || form.action;
 
-      // ── Warn if airport not in our DB (Dest for outbound, Origin for inbound) ──
-      const currentDir   = document.querySelector('input[name="direction"]:checked').value;
-      const airportField = (currentDir === 'outbound') ? destField : originField;
-      const airportVal   = (airportField.value || '').trim().toUpperCase();
-      if (airportVal) {
-        try {
-          const apiResp = await fetch(
-            `/api/airport_exists/${encodeURIComponent(airportVal)}`,
-            { headers: xhrHeaders() }
-          );
-          if (apiResp.ok) {
-            const { exists } = await apiResp.json();
-            if (!exists &&
-                !confirm(`"${airportVal}" is not a known airport code. Continue anyway?`)) {
-              airportField.focus();
-              unlockButtons(); return;
+          // ── Warn if airport not in our DB (Dest for outbound, Origin for inbound) ──
+          const currentDir   = document.querySelector('input[name="direction"]:checked').value;
+          const airportField = (currentDir === 'outbound') ? destField : originField;
+          const airportVal   = (airportField.value || '').trim().toUpperCase();
+          if (airportVal) {
+            try {
+              const apiResp = await fetch(
+                `/api/airport_exists/${encodeURIComponent(airportVal)}`,
+                { headers: xhrHeaders() }
+              );
+              if (apiResp.ok) {
+                const { exists } = await apiResp.json();
+                if (!exists &&
+                    !confirm(`"${airportVal}" is not a known airport code. Continue anyway?`)) {
+                  airportField.focus();
+                  unlockButtons(); return;
+                }
+              }
+            } catch (err) {
+              console.warn('Airport lookup failed', err); /* proceed on network error */
             }
           }
-        } catch (err) {
-          console.warn('Airport lookup failed', err); /* proceed on network error */
+
+          // now proceed with the existing departure‐time check + POST
+
+          const t = depField.value.trim();
+          if (t.length < 3 || t.length > 4 || isNaN(t)) {
+            depField.classList.add('error');
+            showToast('Time must be 3–4 digits', 'error');
+            unlockButtons();
+            return;
+          }
+          depField.classList.remove('error');
+
+          /* ── Time-field / ETA handling ─────────────────────────────────────── */
+          const dir     = document.querySelector('input[name="direction"]:checked').value;
+          const isQueue = (e.submitter?.value === 'queue');
+
+          if (dir === 'outbound') {
+            /* stamp *current* browser time for take-off, *right now* */
+            depField.value = nowHHMM();
+
+            // Freeze code stamp (MMDDYY+HHMM) if not set yet; mirror HHMM to backend
+            if (typeof mmddyyLocal === 'function' && typeof nowHHMM === 'function' && typeof FLIGHT_CODE_RE !== 'undefined') {
+              if (fcStamp && !fcStamp.value){
+                fcStamp.value = `${mmddyyLocal()}${depField.value}`;
+              }
+              if (takeoffTime) takeoffTime.value = depField.value;
+            }
+
+            /* ── when we're inside EDIT-DRAFT mode and targeting
+             *    /send_queued_flight/<id>, also send it as `takeoff_time`
+             *    so the backend sees local-time immediately              ── */
+            if (targetURL.includes('/send_queued_flight')) {
+              let tf = form.querySelector('input[name="takeoff_time"]');
+              if (!tf) {
+                tf = document.createElement('input');
+                tf.type  = 'hidden';
+                tf.name  = 'takeoff_time';
+                form.appendChild(tf);
+              }
+              tf.value = depField.value;
+            }
+
+            /* normalise HH/MM for maths & validation */
+            travelHInp.value = travelHInp.value.padStart(2,'0');
+            travelMInp.value = travelMInp.value.padStart(2,'0');
+
+            if (isQueue) {                      /* Add to Queue -> send travel_time */
+            /* ensure hidden <input name="travel_time"> exists *and* is current */
+            const tt = `${travelHInp.value}${travelMInp.value}`;
+            let hid = form.querySelector('input[name="travel_time"]');
+            if (!hid){
+              hid = Object.assign(document.createElement('input'),{
+                type:'hidden', name:'travel_time'
+              });
+              form.appendChild(hid);
+            }
+            hid.value = tt;
+            } else {                                  /* Send Now -> compute ETA   */
+              const etaVal = addHHMM(depField.value,
+                                     `${travelHInp.value}${travelMInp.value}`);
+              let etaField = form.querySelector('input[name="eta"]');
+              if (!etaField) {
+                etaField = document.createElement('input');
+                etaField.type = 'hidden';
+                etaField.name = 'eta';
+                form.appendChild(etaField);
+              }
+              etaField.value = etaVal;
+              /* strip any travel_time hidden field so backend never sees it */
+              form.querySelectorAll('input[name="travel_time"]').forEach(el => el.remove());
+            }
+
+            /* hide visible HH/MM boxes from WTForms */
+            travelHInp.disabled = true;
+            travelMInp.disabled = true;
+
+          } else {                                          /* inbound – Log Arrival */
+            let etaField = form.querySelector('input[name="eta"]');
+            if (!etaField) {
+              etaField = document.createElement('input');
+              etaField.type = 'hidden';
+              etaField.name = 'eta';
+              form.appendChild(etaField);
+            }
+            etaField.value = nowHHMM();
+
+            travelHInp.disabled = true;
+            travelMInp.disabled = true;
+          }
+
+          // 2)  finish the manifest (pending -> 0)
+          try { await commitManifest(); } catch(_){ unlockButtons(); return; }
+
+          rbRetryRequest = {
+            targetURL, body: new FormData(form), isQueue: e.submitter?.value === 'queue'
+          };
         }
-      }
+        const submitted = rbRetryRequest;
+        const resp = await fetch(submitted.targetURL, {
+          method: 'POST', headers: xhrHeaders(), body: submitted.body
+        });
+        if (!resp.ok) throw new Error('Save response was not accepted');
+        let j = null;
+        if (resp.headers.get('content-type')?.includes('json')) j = await resp.json();
+        if (!j || typeof j !== 'object') throw new Error('Save result was not confirmed');
 
-      // now proceed with the existing departure‐time check + POST
+        /* ── If back-end told us where to go, honour it and bail ───────────── */
+        if (j?.redirect){
+            rbRetryRequest = null;
+            window.__RB_INTENTIONAL_NAV = true;  /* don't trip the unsaved-manifest guard */
+            window.location = j.redirect;
+            return;
+        }
 
-      const t = depField.value.trim();
-      if (t.length < 3 || t.length > 4 || isNaN(t)) {
-        depField.classList.add('error');
-        showToast('Time must be 3–4 digits', 'error');
+        /* legacy / non-JSON branch below */
+        let f = j;   /* keep old var-name for existing table logic */
+
+        /* ── QUEUE branch: simple toast + hard reset ─────────────────── */
+        if (submitted.isQueue && !isEditDraft){
+            // If backend returned an id/flight_id, light up labels right away.
+            const fidQ = (j && (j.flight_id || j.id)) ? (j.flight_id || j.id) : null;
+            if (fidQ){ enablePrintLabelsButton({ queuedId: fidQ }); showLabelsToast({ queuedId: fidQ }); }
+            showToast('Flight added to queue','success');
+            // WebEOC activity log popup
+            if (j && j.webeoc && typeof showWebeocModal === 'function'){ showWebeocModal(j.webeoc); }
+            // Preserve direction toggle across reset
+            const prevDir = dirRadios.find(r => r.checked)?.value || 'outbound';
+            form.reset();
+            if (arrivalRequestId) arrivalRequestId.value = newArrivalRequestId();
+            const dirToRestore = dirRadios.find(r => r.value === prevDir);
+            if (dirToRestore) dirToRestore.checked = true;
+            applyDirUI();
+            travelHInp.value = travelMInp.value = '';
+            // Clear running total
+            totalCargo = 0;
+            cwHistory.innerHTML    = '';
+            cwTotalEl.textContent  = 'Total: 0 lbs';
+            cwMinus.disabled       = true;
+            // Clear advanced cargo chips
+            advLines.innerHTML     = '';
+            manifestId.value       = '';
+            rbRetryRequest = null;
+            unlockButtons();
+            return; /* skip the outbound "success row" build */
+        }
+
+        const allBlank = ['tail_number','airfield_takeoff','airfield_landing',
+                          'takeoff_time','eta','cargo_type','cargo_weight','remarks']
+                         .every(k => !f[k] || f[k] === 'TBD');
+        const rowClass = allBlank
+          ? 'red-border'
+          : (f.action === 'updated' ? 'blue-border' : 'green-border');
+
+        feedbackBox.innerHTML = `
+          <table class="full-bleed">
+            <thead>
+              <tr>
+                <th>#</th><th>Code</th><th>Dir</th><th>Tail #</th><th>Pilot</th><th>PAX #</th>
+                <th>Origin</th><th>${f.direction==='outbound'?'Dep':'Arr'} HHMM</th>
+                <th>Dest</th><th>ETA</th><th>Cargo Type</th><th>Cargo Wt</th><th>Remarks</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="${rowClass}">
+                <td>${f.id}</td>
+                <td>${f.flight_code || 'TBD'}</td>
+                <td>${f.direction}</td>
+                <td>${f.tail_number}</td>
+                <td>${f.pilot_name||'TBD'}</td>
+                <td>${f.pax_count||'TBD'}</td>
+                <td>${f.airfield_takeoff||'TBD'}</td>
+                <td>${f.takeoff_time||''}</td>
+                <td>${f.airfield_landing||'TBD'}</td>
+                <td>${f.eta||'TBD'}</td>
+                <td>${f.cargo_type||'TBD'}</td>
+                <td>${f.cargo_weight||'TBD'}</td>
+                <td>${f.remarks||''}</td>
+              </tr>
+            </tbody>
+          </table>
+        `;
+
+        showToast('Flight sent','success');
+        // WebEOC activity log popup
+        if (f && f.webeoc && typeof showWebeocModal === 'function'){ showWebeocModal(f.webeoc); }
+
+        // Enable persistent Print Labels button (no toast - users don't need it)
+        try {
+          const fid = (f && (f.flight_id || f.id)) || (j && (j.flight_id || j.id));
+          if (fid){ enablePrintLabelsButton(fid); }
+        } catch(_){}
+
+        // auto-clear success after 5s so it doesn't stick around
+        setTimeout(() => { feedbackBox.innerHTML = ''; }, 5000);
+
+        // Preserve direction toggle across reset
+        const prevDir = dirRadios.find(r => r.checked)?.value || 'outbound';
+        form.reset();
+        if (arrivalRequestId) arrivalRequestId.value = newArrivalRequestId();
+        const dirToRestore = dirRadios.find(r => r.value === prevDir);
+        if (dirToRestore) dirToRestore.checked = true;
+        applyDirUI();
+
+        // reset running total
+        totalCargo = 0;
+        cwHistory.innerHTML = '';
+        cwTotalEl.textContent = 'Total: 0 lbs';
+        cwMinus.disabled = true;
+
+        // chips/manifest cleared – ready for a fresh flight
+        advLines.innerHTML = '';
+        manifestId.value   = '';
+        rbRetryRequest = null;
+      } catch (err) {
+        showToast('Save not confirmed. Retry to resend the original details and request ID; later edits are not included. Do not reload.', 'error');
+      } finally {
+        travelHInp.disabled = false;
+        travelMInp.disabled = false;
         unlockButtons();
-        return;
       }
-      depField.classList.remove('error');
-
-      /* ── Time-field / ETA handling ─────────────────────────────────────── */
-      const dir     = document.querySelector('input[name="direction"]:checked').value;
-      const isQueue = (e.submitter?.value === 'queue');
-
-      if (dir === 'outbound') {
-        /* stamp *current* browser time for take-off, *right now* */
-        depField.value = nowHHMM();
-
-        // Freeze code stamp (MMDDYY+HHMM) if not set yet; mirror HHMM to backend
-        if (typeof mmddyyLocal === 'function' && typeof nowHHMM === 'function' && typeof FLIGHT_CODE_RE !== 'undefined') {
-          if (fcStamp && !fcStamp.value){
-            fcStamp.value = `${mmddyyLocal()}${depField.value}`;
-          }
-          if (takeoffTime) takeoffTime.value = depField.value;
-        }
-
-        /* ── when we're inside EDIT-DRAFT mode and targeting
-         *    /send_queued_flight/<id>, also send it as `takeoff_time`
-         *    so the backend sees local-time immediately              ── */
-        if (targetURL.includes('/send_queued_flight')) {
-          let tf = form.querySelector('input[name="takeoff_time"]');
-          if (!tf) {
-            tf = document.createElement('input');
-            tf.type  = 'hidden';
-            tf.name  = 'takeoff_time';
-            form.appendChild(tf);
-          }
-          tf.value = depField.value;
-        }
-
-        /* normalise HH/MM for maths & validation */
-        travelHInp.value = travelHInp.value.padStart(2,'0');
-        travelMInp.value = travelMInp.value.padStart(2,'0');
-
-        if (isQueue) {                      /* Add to Queue -> send travel_time */
-        /* ensure hidden <input name="travel_time"> exists *and* is current */
-        const tt = `${travelHInp.value}${travelMInp.value}`;
-        let hid = form.querySelector('input[name="travel_time"]');
-        if (!hid){
-          hid = Object.assign(document.createElement('input'),{
-            type:'hidden', name:'travel_time'
-          });
-          form.appendChild(hid);
-        }
-        hid.value = tt;
-        } else {                                  /* Send Now -> compute ETA   */
-          const etaVal = addHHMM(depField.value,
-                                 `${travelHInp.value}${travelMInp.value}`);
-          let etaField = form.querySelector('input[name="eta"]');
-          if (!etaField) {
-            etaField = document.createElement('input');
-            etaField.type = 'hidden';
-            etaField.name = 'eta';
-            form.appendChild(etaField);
-          }
-          etaField.value = etaVal;
-          /* strip any travel_time hidden field so backend never sees it */
-          form.querySelectorAll('input[name="travel_time"]').forEach(el => el.remove());
-        }
-
-        /* hide visible HH/MM boxes from WTForms */
-        travelHInp.disabled = true;
-        travelMInp.disabled = true;
-
-      } else {                                          /* inbound – Log Arrival */
-        let etaField = form.querySelector('input[name="eta"]');
-        if (!etaField) {
-          etaField = document.createElement('input');
-          etaField.type = 'hidden';
-          etaField.name = 'eta';
-          form.appendChild(etaField);
-        }
-        etaField.value = nowHHMM();
-
-        travelHInp.disabled = true;
-        travelMInp.disabled = true;
-      }
-
-      // 2)  finish the manifest (pending -> 0)
-      try { await commitManifest(); } catch(_){ unlockButtons(); return; }
-
-
-      // 3)  post the flight (destination URL depends on which button)
-
-      const resp = await fetch(targetURL, {
-        method:  'POST',
-        headers: xhrHeaders(),
-        body:    new FormData(form)
-      });
-      // ── always re-enable, even if server replied 400/500 ─────────────
-      travelHInp.disabled = false;
-      travelMInp.disabled = false;
-      if (!resp.ok){ showToast('Save failed', 'error'); unlockButtons(); return; }
-      /* endpoints now return JSON for XHR; fall back gracefully */
-      let j=null;
-      if (resp.headers.get('content-type')?.includes('json')){
-          j = await resp.json();
-      }
-
-      /* ── If back-end told us where to go, honour it and bail ───────────── */
-      if (j?.redirect){
-          window.__RB_INTENTIONAL_NAV = true;  /* don't trip the unsaved-manifest guard */
-          window.location = j.redirect;
-          return;
-      }
-
-      /* legacy / non-JSON branch below */
-      let f = j;   /* keep old var-name for existing table logic */
-
-      /* ── QUEUE branch: simple toast + hard reset ─────────────────── */
-      if (e.submitter?.value === 'queue' && !isEditDraft){
-          // If backend returned an id/flight_id, light up labels right away.
-          const fidQ = (j && (j.flight_id || j.id)) ? (j.flight_id || j.id) : null;
-          if (fidQ){ enablePrintLabelsButton({ queuedId: fidQ }); showLabelsToast({ queuedId: fidQ }); }
-          showToast('Flight added to queue','success');
-          // WebEOC activity log popup
-          if (j && j.webeoc && typeof showWebeocModal === 'function'){ showWebeocModal(j.webeoc); }
-          // Preserve direction toggle across reset
-          const prevDir = dirRadios.find(r => r.checked)?.value || 'outbound';
-          form.reset();
-          if (arrivalRequestId) arrivalRequestId.value = newArrivalRequestId();
-          const dirToRestore = dirRadios.find(r => r.value === prevDir);
-          if (dirToRestore) dirToRestore.checked = true;
-          applyDirUI();
-          travelHInp.value = travelMInp.value = '';
-          // Clear running total
-          totalCargo = 0;
-          cwHistory.innerHTML    = '';
-          cwTotalEl.textContent  = 'Total: 0 lbs';
-          cwMinus.disabled       = true;
-          // Clear advanced cargo chips
-          advLines.innerHTML     = '';
-          manifestId.value       = '';
-          unlockButtons();
-          return; /* skip the outbound "success row" build */
-      }
-
-      const allBlank = ['tail_number','airfield_takeoff','airfield_landing',
-                        'takeoff_time','eta','cargo_type','cargo_weight','remarks']
-                       .every(k => !f[k] || f[k] === 'TBD');
-      const rowClass = allBlank
-        ? 'red-border'
-        : (f.action === 'updated' ? 'blue-border' : 'green-border');
-
-      feedbackBox.innerHTML = `
-        <table class="full-bleed">
-          <thead>
-            <tr>
-              <th>#</th><th>Code</th><th>Dir</th><th>Tail #</th><th>Pilot</th><th>PAX #</th>
-              <th>Origin</th><th>${f.direction==='outbound'?'Dep':'Arr'} HHMM</th>
-              <th>Dest</th><th>ETA</th><th>Cargo Type</th><th>Cargo Wt</th><th>Remarks</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr class="${rowClass}">
-              <td>${f.id}</td>
-              <td>${f.flight_code || 'TBD'}</td>
-              <td>${f.direction}</td>
-              <td>${f.tail_number}</td>
-              <td>${f.pilot_name||'TBD'}</td>
-              <td>${f.pax_count||'TBD'}</td>
-              <td>${f.airfield_takeoff||'TBD'}</td>
-              <td>${f.takeoff_time||''}</td>
-              <td>${f.airfield_landing||'TBD'}</td>
-              <td>${f.eta||'TBD'}</td>
-              <td>${f.cargo_type||'TBD'}</td>
-              <td>${f.cargo_weight||'TBD'}</td>
-              <td>${f.remarks||''}</td>
-            </tr>
-          </tbody>
-        </table>
-      `;
-
-      showToast('Flight sent','success');
-      // WebEOC activity log popup
-      if (f && f.webeoc && typeof showWebeocModal === 'function'){ showWebeocModal(f.webeoc); }
-
-      // Enable persistent Print Labels button (no toast - users don't need it)
-      try {
-        const fid = (f && (f.flight_id || f.id)) || (j && (j.flight_id || j.id));
-        if (fid){ enablePrintLabelsButton(fid); }
-      } catch(_){}
-
-      // auto-clear success after 5s so it doesn't stick around
-      setTimeout(() => { feedbackBox.innerHTML = ''; }, 5000);
-
-      // Preserve direction toggle across reset
-      const prevDir = dirRadios.find(r => r.checked)?.value || 'outbound';
-      form.reset();
-      if (arrivalRequestId) arrivalRequestId.value = newArrivalRequestId();
-      const dirToRestore = dirRadios.find(r => r.value === prevDir);
-      if (dirToRestore) dirToRestore.checked = true;
-      applyDirUI();
-
-      // reset running total
-      totalCargo = 0;
-      cwHistory.innerHTML = '';
-      cwTotalEl.textContent = 'Total: 0 lbs';
-      cwMinus.disabled = true;
-
-      // chips/manifest cleared – ready for a fresh flight
-      advLines.innerHTML = '';
-      manifestId.value   = '';
-      unlockButtons();
     });
 
 
